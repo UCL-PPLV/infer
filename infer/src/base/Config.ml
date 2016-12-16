@@ -18,13 +18,13 @@ module F = Format
 
 
 type analyzer = Capture | Compile | Infer | Eradicate | Checkers | Tracing
-              | Crashcontext | Linters | Quandary | Threadsafety
+              | Crashcontext | Linters | Quandary | Threadsafety | Permsafety
 
 let string_to_analyzer =
   [("capture", Capture); ("compile", Compile);
    ("infer", Infer); ("eradicate", Eradicate); ("checkers", Checkers);
    ("tracing", Tracing); ("crashcontext", Crashcontext); ("linters", Linters);
-   ("quandary", Quandary); ("threadsafety", Threadsafety)]
+   ("quandary", Quandary); ("threadsafety", Threadsafety) ; ("permsafety", Permsafety) ]
 
 let clang_frontend_action_symbols = [
   ("lint", `Lint);
@@ -442,11 +442,11 @@ and analyzer =
     (* NOTE: if compilation fails here, it means you have added a new analyzer without updating the
        documentation of this option *)
     | Capture | Compile | Infer | Eradicate | Checkers | Tracing | Crashcontext | Linters
-    | Quandary | Threadsafety -> () in
+    | Quandary | Threadsafety | Permsafety -> () in
   CLOpt.mk_symbol_opt ~deprecated:["analyzer"] ~long:"analyzer" ~short:"a"
     ~exes:CLOpt.[Toplevel]
     "Specify which analyzer to run (only one at a time is supported):\n\
-     - infer, eradicate, checkers, quandary, threadsafety: run the specified analysis\n\
+     - infer, eradicate, checkers, quandary, threadsafety, permsafety: run the specified analysis\n\
      - capture: run capture phase only (no analysis)\n\
      - compile: run compilation command without interfering (not supported by all frontends)\n\
      - crashcontext, tracing: experimental (see --crashcontext and --tracing)\n\
@@ -542,7 +542,7 @@ and check_duplicate_symbols =
     ~exes:CLOpt.[Analyze]
     "Check if a symbol with the same name is defined in more than one file."
 
-and checkers, crashcontext, eradicate, quandary, threadsafety =
+and checkers, crashcontext, eradicate, quandary, threadsafety, permsafety =
   let checkers =
     CLOpt.mk_bool ~deprecated:["checkers"] ~long:"checkers"
       "Activate the checkers instead of the full analysis"
@@ -567,7 +567,12 @@ and checkers, crashcontext, eradicate, quandary, threadsafety =
       "Activate the thread safety analysis"
       [checkers] []
   in
-  (checkers, crashcontext, eradicate, quandary, threadsafety)
+  let permsafety =
+    CLOpt.mk_bool_group ~deprecated:["permsafety"] ~long:"permsafety"
+      "Activate the permissions safety analysis"
+      [checkers] []
+  in
+  (checkers, crashcontext, eradicate, quandary, threadsafety, permsafety)
 
 and checkers_repeated_calls =
   CLOpt.mk_bool ~long:"checkers-repeated-calls"
@@ -1342,6 +1347,7 @@ let post_parsing_initialization () =
   | Some Eradicate -> checkers := true; eradicate := true
   | Some Quandary -> checkers := true; quandary := true
   | Some Threadsafety -> checkers := true; threadsafety := true
+  | Some Permsafety -> checkers := true; permsafety := true
   | Some Tracing -> tracing := true
   | Some (Capture | Compile | Infer | Linters) | None -> ()
 
@@ -1498,6 +1504,7 @@ and test = !test
 and test_filtering = !test_filtering
 and testing_mode = !testing_mode
 and threadsafety = !threadsafety
+and permsafety = !permsafety
 and trace_error = !trace_error
 and trace_ondemand = !trace_ondemand
 and trace_join = !trace_join
@@ -1525,7 +1532,7 @@ and analysis_blacklist_files_containing analyzer =
 and analysis_suppress_errors analyzer =
   IList.assoc (=) analyzer analysis_suppress_errors_options
 
-let checkers_enabled = not (eradicate || crashcontext || quandary || threadsafety)
+let checkers_enabled = not (eradicate || crashcontext || quandary || threadsafety || permsafety)
 
 let clang_frontend_do_capture, clang_frontend_do_lint =
   match !clang_frontend_action with

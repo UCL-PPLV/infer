@@ -315,7 +315,8 @@ let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc =>
       | Infer
       | Linters
       | Quandary
-      | Threadsafety => false
+      | Threadsafety
+      | Permsafety => false
       };
     if analyzer_is_whitelisted {
       true

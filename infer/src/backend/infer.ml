@@ -279,7 +279,7 @@ let analyze = function
         Config.print_usage_exit ()
       );
       (match Config.analyzer with
-       | Infer | Eradicate | Checkers | Tracing | Crashcontext | Quandary | Threadsafety ->
+       | Infer | Eradicate | Checkers | Tracing | Crashcontext | Quandary | Threadsafety | Permsafety ->
            execute_analyze () ;
            report ()
        | Linters ->
