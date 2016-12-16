@@ -41,7 +41,6 @@ let location_from_an lcxt an =
   | CTL.Stmt st -> location_from_stmt lcxt st
   | CTL.Decl d -> location_from_decl lcxt d
 
-
 let decl_name an =
   match an with
   | CTL.Decl dec ->
@@ -49,6 +48,34 @@ let decl_name an =
        | Some (_, n) -> n.Clang_ast_t.ni_name
        | None -> "")
   | _ -> ""
+
+let tag_name_of_node an =
+  match an with
+  | CTL.Stmt stmt -> Clang_ast_proj.get_stmt_kind_string stmt
+  | CTL.Decl decl -> Clang_ast_proj.get_decl_kind_string decl
+
+let decl_ref_or_selector_name an =
+  match CTL.next_state_via_transition an (Some CTL.PointerToDecl) with
+  | Some (CTL.Decl ObjCMethodDecl _ as decl_an) ->
+      "The selector " ^ (decl_name decl_an)
+  | Some (CTL.Decl _ as decl_an) ->
+      "The reference " ^ (decl_name decl_an)
+  | _ -> failwith("decl_ref_or_selector_name must be called with a DeclRefExpr \
+                   or an ObjCMessageExpr, but got " ^ (tag_name_of_node an))
+
+let iphoneos_target_sdk_version _ =
+  match Config.iphoneos_target_sdk_version with
+  | Some f -> f
+  | None -> "0"
+
+let available_ios_sdk an =
+  match CTL.next_state_via_transition an (Some CTL.PointerToDecl) with
+  | Some CTL.Decl decl ->
+      (match Predicates.get_available_attr_ios_sdk decl with
+       | Some version -> version
+       | None -> "")
+  | _ -> failwith("available_ios_sdk must be called with a DeclRefExpr \
+                   or an ObjCMessageExpr, but got " ^ (tag_name_of_node an))
 
 let ivar_name an =
   let open Clang_ast_t in
@@ -119,8 +146,9 @@ let ctl_ns_notification_warning lctx an =
   let condition = InNode (["ObjCImplementationDecl"; "ObjCProtocolDecl"],
                           Not (Implies (eventually_addObserver, eventually_removeObserver))) in
   let issue_desc = {
-    CIssue.name = Localise.to_string Localise.registered_observer_being_deallocated;
+    CIssue.name = "REGISTERED_OBSERVER_BEING_DEALLOCATED";
     severity = Exceptions.Kwarning;
+    mode = CIssue.On;
     description =
       "Object self is registered in a notification center but not being removed before deallocation";
     suggestion =
@@ -153,8 +181,9 @@ let ctl_bad_pointer_comparison_warning lctx an =
   let condition = InNode (["IfStmt"; "ForStmt"; "WhileStmt"; "ConditionalOperator"], etx) in
   let issue_desc =
     { CIssue.
-      name = Localise.to_string Localise.bad_pointer_comparison;
+      name = "BAD_POINTER_COMPARISON";
       severity = Exceptions.Kwarning;
+      mode = CIssue.On;
       description = "Implicitly checking whether NSNumber pointer is nil";
       suggestion =
         Some ("Did you mean to compare against the unboxed value instead? " ^
@@ -177,8 +206,9 @@ let ctl_strong_delegate_warning lctx an =
                                                      And (name_does_not_contains_queue,
                                                           is_strong_property))) in
   let issue_desc = {
-    CIssue.name = Localise.to_string Localise.strong_delegate_warning;
+    CIssue.name = "STRONG_DELEGATE_WARNING";
     severity = Exceptions.Kwarning;
+    mode = CIssue.On;
     description =
       "Property or ivar %decl_name% declared strong";
     suggestion = Some "In general delegates should be declared weak or assign";
@@ -199,9 +229,9 @@ let ctl_global_var_init_with_calls_warning lctx an =
   let condition =
     InNode (["VarDecl"], And (ctl_is_global_var, ctl_is_initialized_with_expensive_call)) in
   let issue_desc = {
-    CIssue.name =
-      Localise.to_string Localise.global_variable_initialized_with_function_or_method_call;
+    CIssue.name = "GLOBAL_VARIABLE_INITIALIZED_WITH_FUNCTION_OR_METHOD_CALL";
     severity = Exceptions.Kwarning;
+    mode = CIssue.On;
     description =
       "Global variable %decl_name% is initialized using a function or method call";
     suggestion = Some
@@ -217,8 +247,9 @@ let ctl_assign_pointer_warning lctx an =
                          And (Atomic ("is_assign_property", []),
                               Atomic ("is_property_pointer_type", []))) in
   let issue_desc =
-    { CIssue.name = Localise.to_string Localise.assign_pointer_warning;
+    { CIssue.name = "ASSIGN_POINTER_WARNING";
       severity = Exceptions.Kwarning;
+      mode = CIssue.On;
       description =
         "Property `%decl_name%` is a pointer type marked with the `assign` attribute";
       suggestion = Some "Use a different attribute like `strong` or `weak`.";
@@ -239,8 +270,9 @@ let ctl_direct_atomic_property_access_warning lctx an =
                                     Not (Atomic ("is_objc_constructor", []))),
                                Not (Atomic ("is_objc_dealloc", [])))) in
   let issue_desc = {
-    CIssue.name = Localise.to_string Localise.direct_atomic_property_access;
+    CIssue.name = "DIRECT_ATOMIC_PROPERTY_ACCESS";
     severity = Exceptions.Kwarning;
+    mode = CIssue.On;
     description = "Direct access to ivar %ivar_name% of an atomic property";
     suggestion =
       Some "Accessing an ivar of an atomic property makes the property nonatomic";
@@ -253,8 +285,9 @@ let ctl_captured_cxx_ref_in_objc_block_warning lctx an  =
   let open CTL in
   let condition = InNode (["BlockDecl"], Atomic ("captures_cxx_references", [])) in
   let issue_desc = {
-    CIssue.name = Localise.to_string Localise.cxx_reference_captured_in_objc_block;
+    CIssue.name = "CXX_REFERENCE_CAPTURED_IN_OBJC_BLOCK";
     severity = Exceptions.Kwarning;
+    mode = CIssue.On;
     description =
       "C++ Reference variable(s) %var_name% captured by Objective-C block";
     suggestion = Some ("C++ References are unmanaged and may be invalid " ^
@@ -263,4 +296,23 @@ let ctl_captured_cxx_ref_in_objc_block_warning lctx an  =
       | Stmt (Clang_ast_t.BlockExpr (_, _ , _, decl)) -> location_from_an lctx (Decl decl)
       | _ -> location_from_an lctx an;
   } in
+  condition, Some issue_desc
+
+(** If the declaration has avilability attributes, check that it's compatible with
+    the iphoneos_target_sdk_version *)
+let ctl_unavailable_api_in_supported_ios_sdk_error lctx an =
+  let open CTL in
+  let condition =
+    InNode(["DeclRefExpr"; "ObjCMessageExpr"],
+           EX (Some PointerToDecl, (Atomic ("decl_unavailable_in_supported_ios_sdk", [])))) in
+  let issue_desc =
+    { CIssue.name = "UNAVAILABLE_API_IN_SUPPORTED_IOS_SDK";
+      severity = Exceptions.Kerror;
+      mode = CIssue.On;
+      description =
+        "%decl_ref_or_selector_name% is not available in the required iOS SDK version \
+         %iphoneos_target_sdk_version% (only available from version %available_ios_sdk%)";
+      suggestion = Some "This could cause a crash.";
+      loc = location_from_an lctx an
+    } in
   condition, Some issue_desc

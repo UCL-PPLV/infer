@@ -16,12 +16,12 @@ endif
 BUILD_SYSTEMS_TESTS = \
   assembly ck_analytics ck_imports clang_multiple_files clang_translation clang_unknown_ext \
   delete_results_dir fail_on_issue gradle j1 javac linters make project_root_rel reactive \
-  utf8_in_procname utf8_in_pwd waf
+  utf8_in_procname utf8_in_pwd waf run_hidden_linters
 ifneq ($(ANT),no)
 BUILD_SYSTEMS_TESTS += ant
 endif
 ifneq ($(BUCK),no)
-BUILD_SYSTEMS_TESTS += buck
+BUILD_SYSTEMS_TESTS += buck genrule
 endif
 ifneq ($(CMAKE),no)
 BUILD_SYSTEMS_TESTS += clang_compilation_db cmake
@@ -43,7 +43,7 @@ DIRECT_TESTS += \
   java_crashcontext java_harness
 endif
 ifneq ($(XCODE_SELECT),no)
-DIRECT_TESTS += objc_frontend objc_errors objc_linters objcpp_frontend objcpp_linters
+DIRECT_TESTS += objc_frontend objc_errors objc_linters objc_ioslinters objcpp_frontend objcpp_linters
 endif
 
 .PHONY: all

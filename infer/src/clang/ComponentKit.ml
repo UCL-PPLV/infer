@@ -116,8 +116,9 @@ let mutable_local_vars_advice context an =
                       && not decl_info.di_is_implicit in
       if condition then
         CTL.True, Some {
-          CIssue.name = Localise.to_string Localise.mutable_local_variable_in_component_file;
+          CIssue.name = "MUTABLE_LOCAL_VARIABLE_IN_COMPONENT_FILE";
           severity = Exceptions.Kadvice;
+          mode = CIssue.On;
           description = "Local variable '" ^ named_decl_info.ni_name
                         ^ "' should be const to avoid reassignment";
           suggestion = Some "Add a const (after the asterisk for pointer types).";
@@ -143,8 +144,9 @@ let component_factory_function_advice context an =
         is_ck_context context an && is_component_if objc_interface in
       if condition then
         CTL.True, Some {
-          CIssue.name = Localise.to_string Localise.component_factory_function;
+          CIssue.name = "COMPONENT_FACTORY_FUNCTION";
           severity = Exceptions.Kadvice;
+          mode = CIssue.On;
           description = "Break out composite components";
           suggestion = Some (
               "Prefer subclassing CKCompositeComponent to static helper functions \
@@ -184,8 +186,9 @@ let component_with_unconventional_superclass_advice context an =
             && not has_conventional_superclass in
           if condition then
             CTL.True, Some {
-              CIssue.name = Localise.to_string Localise.component_with_unconventional_superclass;
+              CIssue.name = "COMPONENT_WITH_UNCONVENTIONAL_SUPERCLASS";
               severity = Exceptions.Kadvice;
+              mode = CIssue.On;
               description = "Never Subclass Components";
               suggestion = Some (
                   "Instead, create a new subclass of CKCompositeComponent."
@@ -235,8 +238,9 @@ let component_with_multiple_factory_methods_advice context an =
         let factory_methods = IList.filter (is_available_factory_method if_decl) decls in
         if (IList.length factory_methods) > 1 then
           CTL.True, Some {
-            CIssue.name = Localise.to_string Localise.component_with_multiple_factory_methods;
+            CIssue.name = "COMPONENT_WITH_MULTIPLE_FACTORY_METHODS";
             severity = Exceptions.Kadvice;
+            mode = CIssue.On;
             description = "Avoid Overrides";
             suggestion =
               Some "Instead, always expose all parameters in a single \
@@ -289,8 +293,9 @@ let rec _component_initializer_with_side_effects_advice
          | Some "dispatch_async"
          | Some "dispatch_sync" ->
              CTL.True, Some {
-               CIssue.name = Localise.to_string Localise.component_initializer_with_side_effects;
+               CIssue.name = "COMPONENT_INITIALIZER_WITH_SIDE_EFFECTS";
                severity = Exceptions.Kadvice;
+               mode = CIssue.On;
                description = "No Side-effects";
                suggestion = Some "Your +new method should not modify any \
                                   global variables or global state.";
@@ -322,8 +327,9 @@ let component_file_line_count_info (context: CLintersContext.context) dec =
         context.translation_unit_context.CFrontend_config.source_file in
       let line_count = SourceFile.line_count source_file in
       IList.map (fun i -> {
-            CIssue.name = Localise.to_string Localise.component_file_line_count;
+            CIssue.name = "COMPONENT_FILE_LINE_COUNT";
             severity = Exceptions.Kinfo;
+            mode = CIssue.Off;
             description = "Line count analytics";
             suggestion = None;
             loc = {
@@ -367,8 +373,9 @@ let component_file_cyclomatic_complexity_info (context: CLintersContext.context)
   match cyclo_loc_opt an with
   | Some loc ->
       CTL.True, Some {
-        CIssue.name = Localise.to_string Localise.component_file_cyclomatic_complexity;
+        CIssue.name = "COMPONENT_FILE_CYCLOMATIC_COMPLEXITY";
         severity = Exceptions.Kinfo;
+        mode = CIssue.Off;
         description = "Cyclomatic Complexity Incremental Marker";
         suggestion = None;
         loc = loc

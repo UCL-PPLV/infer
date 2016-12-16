@@ -11,7 +11,7 @@ open! IStd
 
 open CFrontend_utils
 
-(* List of checkers on properties *)
+(* List of checkers on decls *)
 let decl_checkers_list = [CFrontend_checkers.ctl_strong_delegate_warning;
                           CFrontend_checkers.ctl_assign_pointer_warning;
                           CFrontend_checkers.ctl_ns_notification_warning;
@@ -22,12 +22,13 @@ let decl_checkers_list = [CFrontend_checkers.ctl_strong_delegate_warning;
                           ComponentKit.component_file_cyclomatic_complexity_info;
                           ComponentKit.component_with_multiple_factory_methods_advice;]
 
-(* List of checkers on ivar access *)
+(* List of checkers on stmts *)
 let stmt_checkers_list =  [CFrontend_checkers.ctl_direct_atomic_property_access_warning;
                            CFrontend_checkers.ctl_captured_cxx_ref_in_objc_block_warning;
                            CFrontend_checkers.ctl_bad_pointer_comparison_warning;
                            ComponentKit.component_file_cyclomatic_complexity_info;
-                           ComponentKit.component_initializer_with_side_effects_advice;]
+                           ComponentKit.component_initializer_with_side_effects_advice;
+                           CFrontend_checkers.ctl_unavailable_api_in_supported_ios_sdk_error;]
 
 (* List of checkers on translation unit that potentially output multiple issues *)
 let translation_unit_checkers_list = [ComponentKit.component_file_line_count_info;]
@@ -37,6 +38,11 @@ let evaluate_place_holder ph an =
   | "%ivar_name%" -> CFrontend_checkers.ivar_name an
   | "%decl_name%" -> CFrontend_checkers.decl_name an
   | "%var_name%" ->  CFrontend_checkers.var_name an
+  | "%decl_ref_or_selector_name%" ->
+      CFrontend_checkers.decl_ref_or_selector_name an
+  | "%iphoneos_target_sdk_version%" ->
+      CFrontend_checkers.iphoneos_target_sdk_version an
+  | "%available_ios_sdk%" -> CFrontend_checkers.available_ios_sdk an
   | _ -> (Logging.err "ERROR: helper function %s is unknown. Stop.\n" ph;
           assert false)
 
@@ -110,8 +116,6 @@ let expand_checkers checkers =
   let expanded_checkers = IList.map expand_one_checker checkers in
   expanded_checkers
 
-
-
 let get_err_log translation_unit_context method_decl_opt =
   let procname = match method_decl_opt with
     | Some method_decl -> General_utils.procname_of_decl translation_unit_context method_decl
@@ -139,14 +143,15 @@ let invoke_set_of_checkers_an an context =
     | CTL.Stmt st -> stmt_checkers_list, Ast_utils.generate_key_stmt st in
   IList.iter (fun checker ->
       let condition, issue_desc_opt = checker context an in
-      match  CTL.eval_formula condition an context, issue_desc_opt with
-      | true, Some issue_desc ->
-
-          let desc' = expand_message_string issue_desc.CIssue.description an in
-          let issue_desc' = {issue_desc with CIssue.description = desc'} in
-          log_frontend_issue context.CLintersContext.translation_unit_context
-            context.CLintersContext.current_method key issue_desc'
-      | _, _ -> ()) checkers
+      match issue_desc_opt with
+      | Some issue_desc ->
+          if CIssue.should_run_check issue_desc.CIssue.mode &&
+             CTL.eval_formula condition an context then
+            let desc' = expand_message_string issue_desc.CIssue.description an in
+            let issue_desc' = {issue_desc with CIssue.description = desc'} in
+            log_frontend_issue context.CLintersContext.translation_unit_context
+              context.CLintersContext.current_method key issue_desc'
+      | None -> ()) checkers
 
 
 let run_frontend_checkers_on_an (context: CLintersContext.context) an =
@@ -164,7 +169,8 @@ let run_translation_unit_checker (context: CLintersContext.context) dec =
   IList.iter (fun checker ->
       let issue_desc_list = checker context dec in
       IList.iter (fun issue_desc ->
-          let key = Ast_utils.generate_key_decl dec in
-          log_frontend_issue context.CLintersContext.translation_unit_context
-            context.CLintersContext.current_method key issue_desc
+          if (CIssue.should_run_check issue_desc.CIssue.mode) then
+            let key = Ast_utils.generate_key_decl dec in
+            log_frontend_issue context.CLintersContext.translation_unit_context
+              context.CLintersContext.current_method key issue_desc
         ) issue_desc_list) translation_unit_checkers_list
