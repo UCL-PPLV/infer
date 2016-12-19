@@ -203,8 +203,13 @@ let whitelisted_cpp_methods = [
   ["std"; "forward"];
   ["std"; "min"];
   ["std"; "max"];
-  ["std"; "__less"];
   ["google"; "CheckNotNull"];
+]
+
+let whitelisted_cpp_classes = [
+  ["std"; "__less"];
+  ["std"; "__wrap_iter"]; (* libc++ internal name of vector iterator *)
+  ["std"; "__normal_iterator"]; (* libstdc++ internal name of vector iterator *)
 ]
 
 
