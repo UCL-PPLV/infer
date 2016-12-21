@@ -40,6 +40,7 @@ let active_procedure_checkers () =
         PrintfArgs.callback_printf_args, checkers_enabled;
         AnnotationReachability.Interprocedural.check_and_report, checkers_enabled;
         ThreadSafety.method_analysis, false;
+        Perms.method_analysis, Config.permsafety
       ] in
     (* make sure SimpleChecker.ml is not dead code *)
     if false then (let module SC = SimpleChecker.Make in ());
@@ -60,7 +61,7 @@ let active_procedure_checkers () =
 let active_cluster_checkers () =
   [(Checkers.callback_check_cluster_access, false, Some Config.Java);
    (ThreadSafety.file_analysis, Config.threadsafety, Some Config.Java);
-   (Perms.file_analysis, Config.threadsafety, Some Config.Java)   
+   (Perms.file_analysis, Config.threadsafety, Some Config.Java)
   ]
 
 let register () =
