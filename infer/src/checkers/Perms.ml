@@ -17,7 +17,7 @@ module ExpSet =
   PrettyPrintable.MakePPSet
     (struct
       include Exp
-      let pp_element = Exp.pp
+      let pp_element = pp
     end)
 
 module IdentSet =
@@ -27,13 +27,17 @@ module IdentSet =
       let pp_element = pp Pp.text
     end)
 
+(* Holds an actual value, the set of fields of the class of "this".
+   Meant to be used as an argument to the analyzer functor. *)
 module type ClassFields =
 sig
   val fields : FieldSet.t
 end
 
+(* get a new fresh logical var id *)
 let fresh_ident () = Ident.create_fresh Ident.knormal
 
+(* make a new map from a set of fields into fresh logical var ids *)
 let mk_fmap fields =
   FieldSet.fold
     (fun f fm -> FieldMap.add f (fresh_ident ()) fm)
@@ -42,14 +46,25 @@ let mk_fmap fields =
 
 type perms_t = Ident.t FieldMap.t
 
+(* abstract state used in analyzer and transfer functions functors *)
 type astate = {
+  (* permission vars for the precondition -- never changes during analysis of a method *)
   pre: perms_t;
+
+  (* permission vars for the current abstract state *)
   curr: perms_t;
+
+  (* permission vars for the class invariant -- never changes during analysis of a method *)
   inv: perms_t;
+
+  (* var ids that hold a reference to "this" object at this point *)
   this_refs: IdentSet.t;
+
+  (* constraints abduced *)
   constraints: ExpSet.t
 }
 
+(* Make an abstract domain, given the fields of the current class *)
 module MakeDomain(CF : ClassFields) = struct
   type nonrec astate = astate
 
@@ -68,6 +83,10 @@ module MakeDomain(CF : ClassFields) = struct
 
   let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
 
+(* join unions the constraints.  When the permission variable for a field
+   differs in the two abstract states, then a new variable is introduced plus
+   constraints that force this variable to be bound by the minimum of the two
+   joined permissions. *)
   let join a1 a2 =
     assert (FieldMap.equal Ident.equal a1.pre a2.pre) ;
     assert (FieldMap.equal Ident.equal a1.inv a2.inv) ;
@@ -92,7 +111,7 @@ module MakeDomain(CF : ClassFields) = struct
     join prev next
 
   let (<=) ~lhs:_ ~rhs:_ =
-    false (*fails miserably for loops *)
+    false (* silly <=, FIXME for loops *)
 
   let pp fmt { pre; inv; curr; this_refs; constraints } =
     F.fprintf fmt "{ pre=%a; inv=%a; curr=%a; this_refs=%a; constraints=%a }"
@@ -103,16 +122,19 @@ module MakeDomain(CF : ClassFields) = struct
       ExpSet.pp constraints
 end
 
+(* Make a transfer functions module given the fields of a class *)
 module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
   module CFG = CFG
   module Domain = MakeDomain(CF)
   type extras = ProcData.no_extras
 
+  (* stolen from ThreadSafety *)
   type lock_model =
     | Lock
     | Unlock
     | NoEffect
 
+  (* stolen from ThreadSafety *)
   let get_lock_model = function
     | Procname.Java java_pname ->
       begin
@@ -140,6 +162,19 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
     | _ ->
       NoEffect
 
+  (* decide if a lock statement is about "this" *)
+  let lock_effect_on_this pn args astate =
+    (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) IdentSet.pp astate.this_refs; *)
+    let this_arg =
+      IList.length args = 1 &&
+      match fst (IList.hd args) with
+      | Exp.Var ident ->
+      (* L.out "ident=%a this_refs=%a@." (Ident.pp Pp.text) ident IdentSet.pp astate.this_refs; *)
+        IdentSet.mem ident astate.this_refs
+      | _ -> false in
+    if this_arg then get_lock_model pn else NoEffect
+
+  (* add or remove permissions from invariant *)
   let hale mk_constr a =
     FieldMap.fold
       (fun f lvar acc ->
@@ -165,8 +200,9 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
     let fld_var = FieldMap.find fieldname astate.curr in
     { astate with constraints = ExpSet.add (mk_gt_zero fld_var) astate.constraints }
 
+  (* actual transfer function *)
   let exec_instr astate _ _ cmd =
-    L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
+    (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
     match cmd with
     | Sil.Store (Exp.Lfield(Exp.Var v, fieldname, _), _, _, _)
       when IdentSet.mem v astate.this_refs && FieldSet.mem fieldname CF.fields ->
@@ -190,15 +226,12 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
       astate *)
-    | Sil.Call (_, Const (Cfun pn), _, _, _) ->
+    | Sil.Call (_, Const (Cfun pn), args, _, _) ->
       begin
-        match get_lock_model pn with
-        | Lock ->
-          inhale astate
-        | Unlock ->
-          exhale astate
-        | NoEffect ->
-          astate
+        match lock_effect_on_this pn args astate with
+        | Lock ->     inhale astate
+        | Unlock ->   exhale astate
+        | NoEffect -> astate
       end
     | _ -> astate
 end
@@ -209,6 +242,7 @@ module MakeAnalyzer(CF : ClassFields) =
     (Scheduler.ReversePostorder)
     (MakeTransferFunctions(CF))
 
+(* retrieve the fields of a given class *)
 let get_fields tenv pname =
   match pname with
   | Procname.Java java_pname ->
