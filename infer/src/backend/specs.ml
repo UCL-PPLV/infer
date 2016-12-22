@@ -322,6 +322,7 @@ type payload =
     quandary : QuandarySummary.t option;
     siof : SiofDomain.astate option;
     threadsafety : ThreadSafetyDomain.summary option;
+    permsafety : PermsDomain.summary option;
   }
 
 type summary =
@@ -764,6 +765,7 @@ let empty_payload =
     quandary = None;
     siof = None;
     threadsafety = None;
+    permsafety = None;
   }
 
 (** [init_summary (depend_list, nodes,

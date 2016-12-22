@@ -134,6 +134,7 @@ type payload =
     quandary : QuandarySummary.t option;
     siof : SiofDomain.astate option;
     threadsafety : ThreadSafetyDomain.summary option;
+    permsafety : PermsDomain.summary option;    
   }
 
 (** Procedure summary *)
