@@ -3,6 +3,9 @@ open! IStd
 module F = Format
 module L = Logging
 
+(* get a new fresh logical var id *)
+let fresh_ident () = Ident.create_fresh Ident.knormal
+
 module Field = struct
   type t = Ident.fieldname
   let compare = Ident.compare_fieldname
@@ -10,15 +13,19 @@ module Field = struct
   let pp_element = pp_key
 end
 
-module FieldMap = PrettyPrintable.MakePPMap(Field)
 module FieldSet = PrettyPrintable.MakePPSet(Field)
 
-module ExpSet =
-  PrettyPrintable.MakePPSet
-    (struct
-      include Exp
-      let pp_element = pp
-    end)
+module FieldMap = struct
+  include PrettyPrintable.MakePPMap(Field)
+
+  (* make a new map from a set of fields into fresh logical var ids *)
+  let mk fields =
+    FieldSet.fold
+      (fun f fm -> add f (fresh_ident ()) fm)
+      fields
+      empty
+end
+
 
 module IdentSet =
   PrettyPrintable.MakePPSet
@@ -27,22 +34,37 @@ module IdentSet =
       let pp_element = pp Pp.text
     end)
 
+module ExpSet = struct
+  include PrettyPrintable.MakePPSet
+      (struct
+        include Exp
+        let pp_element = pp
+      end)
+
+  let vars c =
+    let rec _vars = function
+      | Exp.Var v ->
+        IdentSet.singleton v
+      | Exp.BinOp(_, t1, t2) ->
+        IdentSet.union (_vars t1) (_vars t2)
+      | _ -> IdentSet.empty in
+    fold
+      (fun exp a -> IdentSet.union (_vars exp) a)
+      c
+      IdentSet.empty
+
+  let map f s = fold (fun c a -> add (f c) a) s empty
+
+end
+
+
+
 (* Holds an actual value, the set of fields of the class of "this".
    Meant to be used as an argument to the analyzer functor. *)
 module type ClassFields =
 sig
   val fields : FieldSet.t
 end
-
-(* get a new fresh logical var id *)
-let fresh_ident () = Ident.create_fresh Ident.knormal
-
-(* make a new map from a set of fields into fresh logical var ids *)
-let mk_fmap fields =
-  FieldSet.fold
-    (fun f fm -> FieldMap.add f (fresh_ident ()) fm)
-    fields
-    FieldMap.empty
 
 type perms_t = Ident.t FieldMap.t
 
@@ -72,12 +94,6 @@ type summary =
     sum_constraints: ExpSet.t;
   }
 
-let mk_summary { pre; inv; constraints } =
-  {
-    sum_pre = pre;
-    sum_inv = inv;
-    sum_constraints = constraints;
-  }
 
 (* Make an abstract domain, given the fields of the current class *)
 module MakeDomain(CF : ClassFields) = struct
@@ -93,8 +109,8 @@ module MakeDomain(CF : ClassFields) = struct
     }
 
   let initial =
-    let m = mk_fmap CF.fields in
-    { empty with pre = m; curr = m; inv = mk_fmap CF.fields }
+    let m = FieldMap.mk CF.fields in
+    { empty with pre = m; curr = m; inv = FieldMap.mk CF.fields }
 
   let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
 
