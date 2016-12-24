@@ -2,7 +2,9 @@ open! IStd
 
 open PermsDomain
 
-module IdentMap = Ident.IdentMap
+let mk_add p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Var r))
+let mk_lb p = Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
+let mk_ub p = Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
 
 module Summary = struct
   include Summary.Make (struct
@@ -38,6 +40,71 @@ module Summary = struct
       sum_constraints = constraints;
     }
 
+  let par_compose s1 s2 =
+    assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_pre) ;
+    assert (FieldMap.cardinal s1.sum_inv = FieldMap.cardinal s2.sum_inv) ;
+    assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_inv) ;
+    let new_pre = FieldMap.map (fun _ -> Ident.mk ()) s1.sum_pre in
+    let mk_theta m =
+      FieldMap.fold (fun _ v a -> IdentMap.add v (Ident.mk ()) a) m IdentMap.empty in
+    let extend_with_inv m1 m2 a =
+      FieldMap.fold
+        (fun f v (a1,a2) ->
+           let newv = Ident.mk () in
+           let a1' = IdentMap.add v newv a1 in
+           let a2' = IdentMap.add (FieldMap.find f m2) newv a2 in
+           (a1',a2'))
+        m1
+        a in
+    (* add constraints of the form x = x1 + x2, where x1/x2 are permissions *)
+    (* in the pre, for the premise of the frame rule *)
+    let add_splittings pre1 pre2 exps =
+      FieldMap.fold
+        (fun f v a ->
+           let v1 = FieldMap.find f pre1 in
+           let v2 = FieldMap.find f pre2 in
+           ExpSet.add (mk_add v v1 v2) a
+        )
+        new_pre
+        exps in
+    (* create substitutions to distinct fresh variables for pre1 and pre2 *)
+    let theta1, theta2 = mk_theta s1.sum_pre, mk_theta s2.sum_pre in
+    (* extend substitutions with *shared* new fresh variables for inv1 and inv2 *)
+    (* this means that for the same field f, theta1[inv1[f]]==theta2[sum_inv2[f]] *)
+    let theta1, theta2 = extend_with_inv s1.sum_inv s2.sum_inv (theta1, theta2) in
+    (* get all variables used in constraints *)
+    let c1vars, c2vars = ExpSet.vars s1.sum_constraints, ExpSet.vars s1.sum_constraints in
+    (* compute all those that are not in theta[pre U inv] *)
+    let exist1 = IdentSet.filter (fun v -> not (IdentMap.mem v theta1)) c1vars in
+    let exist2 = IdentSet.filter (fun v -> not (IdentMap.mem v theta2)) c2vars in
+    (* extend substitutions with distinct fresh variables for the above vars *)
+    let add_fresh v a = IdentMap.add v (Ident.mk ()) a in
+    let theta1 = IdentSet.fold add_fresh exist1 theta1 in
+    let theta2 = IdentSet.fold add_fresh exist2 theta2 in
+    (* perform substitutions on constraints *)
+    let c1 = ExpSet.subst theta1 s1.sum_constraints in
+    let c2 = ExpSet.subst theta2 s2.sum_constraints in
+    let pre1 = FieldMap.map (Ident.subst theta1) s1.sum_pre in
+    let pre2 = FieldMap.map (Ident.subst theta2) s2.sum_pre in
+    let consts = add_splittings pre1 pre2 (ExpSet.union c1 c2) in
+    let consts =
+      IdentSet.fold
+        (fun v a -> ExpSet.add (mk_lb v) (ExpSet.add (mk_ub v) a))
+        (ExpSet.vars consts)
+        consts in
+    {
+      sum_pre = new_pre;
+      (* resulting inv is the image of either substitution *)
+      sum_inv = FieldMap.map (Ident.subst theta1) s1.sum_inv;
+      (* add splitting constraints to the unioned result *)
+      sum_constraints = consts
+    }
+
+  let pp fmt { sum_pre; sum_inv; sum_constraints } =
+    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_constraints=%a }"
+      (FieldMap.pp ~pp_value:(Ident.pp Pp.text)) sum_pre
+      (FieldMap.pp ~pp_value:(Ident.pp Pp.text)) sum_inv
+      ExpSet.pp sum_constraints
 end
 
 
@@ -97,7 +164,7 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
   let hale mk_constr a =
     FieldMap.fold
       (fun f lvar acc ->
-         let v = fresh_ident () in
+         let v = Ident.mk () in
          let cn = mk_constr v lvar (FieldMap.find f a.inv) in
          { acc with curr = FieldMap.add f v acc.curr } |> Domain.add_constr cn
       )
@@ -106,7 +173,6 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
 
   let mk_eq_one p = Exp.eq (Exp.Var p) (Exp.one)
   let mk_gt_zero p = Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero)
-  let mk_add p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Var r))
   let mk_minus p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r))
 
   let exhale = hale mk_minus
@@ -201,46 +267,6 @@ let compute_and_store_post callback =
 let method_analysis callback =
   ignore (compute_and_store_post callback)
 
-
-let merge s1o s2o =
-  let subst_ident theta v =
-    if IdentMap.mem v theta then IdentMap.find v theta else v in
-  let rec subst theta t =
-    match t with
-    | Exp.Var v -> Exp.Var (subst_ident theta v)
-    | Exp.BinOp(op, t1, t2) -> Exp.BinOp(op, subst theta t1, subst theta t2)
-    | _ -> t in
-  match s1o, s2o with
-  | None, _ | _, None -> None
-  | Some s1, Some s2 ->
-  assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_pre) ;
-  assert (FieldMap.cardinal s1.sum_inv = FieldMap.cardinal s2.sum_inv) ;
-  assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_inv) ;
-  let seed m1 m2 a =
-    FieldMap.fold
-      (fun f v (a1,a2) ->
-         let newv = fresh_ident () in
-         let a1' = IdentMap.add v newv a1 in
-         let a2' = IdentMap.add (FieldMap.find f m2) newv a2 in
-         (a1',a2'))
-      m1
-      a in
-  let theta1, theta2 = seed s1.sum_pre s2.sum_pre (IdentMap.empty, IdentMap.empty) in
-  let theta1, theta2 = seed s1.sum_inv s2.sum_inv (theta1, theta2) in
-  let c1vars, c2vars = ExpSet.vars s1.sum_constraints, ExpSet.vars s1.sum_constraints in
-  let exist1 = IdentSet.filter (fun v -> not (IdentMap.mem v theta1)) c1vars in
-  let exist2 = IdentSet.filter (fun v -> not (IdentMap.mem v theta2)) c2vars in
-  let add_fresh v a = IdentMap.add v (fresh_ident ()) a in
-  let theta1 = IdentSet.fold add_fresh exist1 theta1 in
-  let theta2 = IdentSet.fold add_fresh exist2 theta2 in
-  let c1 = ExpSet.map (subst theta1) s1.sum_constraints in
-  let c2 = ExpSet.map (subst theta2) s2.sum_constraints in
-  Some {
-    sum_pre = FieldMap.map (subst_ident theta1) s1.sum_pre;
-    sum_inv = FieldMap.map (subst_ident theta1) s1.sum_inv;
-    sum_constraints = ExpSet.union c1 c2
-  }
-
 let all_pairs =
   let pair a l = IList.map (fun b -> (a,b)) l in
   let rec aux = function
@@ -279,21 +305,21 @@ let file_analysis _ _ get_proc_desc file_env =
       )
       ClassMap.empty
       file_env in
-  let process_case fmt (_,_,s) =
-    match s with
-    | None -> ()
-    | Some sum -> F.fprintf fmt "%a@." Summary.to_z3 sum in
+  let process_case (((_,_,p1,_),s1),((_,_,p2,_),s2)) = match s1,s2 with
+    | None, _ | _, None -> assert false
+    | Some sum1, Some sum2 ->
+      L.out "Analysing case (%a,%a)@." Procname.pp p1 Procname.pp p2 ;
+      L.out "Summary for %a = %a@." Procname.pp p1 Summary.pp sum1 ;
+      L.out "Summary for %a = %a@." Procname.pp p2 Summary.pp sum2 ;
+      let sum = Summary.par_compose sum1 sum2 in
+      L.out "Summary to convert: %a@." Summary.pp sum ;
+      let in_ch,out_ch = Unix.open_process "z3 -in" in
+      let fmt = F.formatter_of_out_channel out_ch in
+      F.fprintf fmt "%a@." Summary.to_z3 sum ;
+      Out_channel.close out_ch ;
+      IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
+      ignore (Unix.close_process (in_ch, out_ch)) in
   let analyse_class _ procs =
     let summaries = IList.map (fun p -> (p, summarise p)) procs in
-    let pairs = all_pairs summaries in
-    let merged =
-      IList.map (fun ((p1,s1),(p2,s2)) -> (p1,p2,merge s1 s2)) pairs in
-    let in_ch,out_ch = Unix.open_process "z3 -in" in
-    let fmt = F.formatter_of_out_channel out_ch in
-    IList.iter (process_case fmt) merged ;
-    F.pp_print_flush fmt () ;
-    Out_channel.close out_ch ;
-    let lines = read_process_lines in_ch in
-    IList.iter (fun l -> L.out "Z3: %s@." l) lines ;
-    ignore (Unix.close_process (in_ch, out_ch)) in
+    IList.iter process_case (all_pairs summaries) in
   ClassMap.iter analyse_class classmap

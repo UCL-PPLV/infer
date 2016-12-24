@@ -3,8 +3,17 @@ open! IStd
 module F = Format
 module L = Logging
 
-(* get a new fresh logical var id *)
-let fresh_ident () = Ident.create_fresh Ident.knormal
+module IdentMap = Ident.IdentMap
+
+module Ident = struct
+  include Ident
+
+  let subst theta v =
+    if IdentMap.mem v theta then IdentMap.find v theta else v
+
+  (* get a new fresh logical var id *)
+  let mk () = create_fresh Ident.knormal
+end
 
 module Field = struct
   type t = Ident.fieldname
@@ -21,7 +30,7 @@ module FieldMap = struct
   (* make a new map from a set of fields into fresh logical var ids *)
   let mk fields =
     FieldSet.fold
-      (fun f fm -> add f (fresh_ident ()) fm)
+      (fun f fm -> add f (Ident.mk ()) fm)
       fields
       empty
 end
@@ -33,6 +42,12 @@ module IdentSet =
       include Ident
       let pp_element = pp Pp.text
     end)
+
+let rec exp_subst theta t =
+  match t with
+  | Exp.Var v -> Exp.Var (Ident.subst theta v)
+  | Exp.BinOp(op, t1, t2) -> Exp.BinOp(op, exp_subst theta t1, exp_subst theta t2)
+  | _ -> t
 
 module ExpSet = struct
   include PrettyPrintable.MakePPSet
@@ -54,6 +69,8 @@ module ExpSet = struct
       IdentSet.empty
 
   let map f s = fold (fun c a -> add (f c) a) s empty
+
+  let subst theta c = map (exp_subst theta) c
 
 end
 
@@ -127,7 +144,7 @@ module MakeDomain(CF : ClassFields) = struct
       (fun f acc ->
          if Ident.equal (FieldMap.find f a1.curr) (FieldMap.find f a2.curr) then
            { acc with curr = FieldMap.add f (FieldMap.find f a1.curr) acc.curr } else
-           let v = fresh_ident () in
+           let v = Ident.mk () in
            let acc' = add_constr (mk_constr f v a1) acc |> add_constr (mk_constr f v a2) in
            { acc' with curr = FieldMap.add f v acc.curr }
       )
