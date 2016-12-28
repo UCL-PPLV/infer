@@ -7,6 +7,11 @@
 
 ROOT_DIR = $(TESTS_DIR)/../..
 
+# The relative path from infer/tests/ to the directory containing the current Makefile. This is
+# computed in a hacky way and might not always be a relative path, so only use this for cosmetic
+# reasons.
+TEST_REL_DIR = $(patsubst $(abspath $(TESTS_DIR))/%,%,$(abspath $(CURDIR)))
+
 include $(ROOT_DIR)/Makefile.config
 
 default: compile
@@ -25,9 +30,10 @@ print: issues.exp.test$(TEST_SUFFIX)
 
 .PHONY: test
 test: issues.exp.test$(TEST_SUFFIX)
-	diff -u issues.exp issues.exp.test$(TEST_SUFFIX)
+	@cd $(TESTS_DIR) && \
+	diff -u $(TEST_REL_DIR)/issues.exp $(TEST_REL_DIR)/issues.exp.test$(TEST_SUFFIX)
 
 .PHONY: clean
 clean:
-	$(REMOVE_DIR) codetoanalyze issues.exp.test$(TEST_SUFFIX) infer-out$(TEST_SUFFIX) \
+	$(REMOVE_DIR) codetoanalyze com issues.exp.test$(TEST_SUFFIX) infer-out$(TEST_SUFFIX) \
 	  $(OBJECTS) $(CLEAN_EXTRA)

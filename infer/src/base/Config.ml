@@ -26,6 +26,9 @@ let string_to_analyzer =
    ("tracing", Tracing); ("crashcontext", Crashcontext); ("linters", Linters);
    ("quandary", Quandary); ("threadsafety", Threadsafety) ; ("permsafety", Permsafety) ]
 
+let string_of_analyzer a =
+  IList.find (fun (_, a') -> a = a') string_to_analyzer |> fst
+
 let clang_frontend_action_symbols = [
   ("lint", `Lint);
   ("capture", `Capture);
@@ -212,6 +215,12 @@ let whitelisted_cpp_classes = [
   ["std"; "__normal_iterator"]; (* libstdc++ internal name of vector iterator *)
 ]
 
+type dynamic_dispatch_policy = [
+  | `None
+  | `Interface
+  | `Sound
+  | `Lazy
+]
 
 (** Compile time configuration values *)
 
@@ -736,12 +745,12 @@ and dotty_cfg_libs =
     "Print the cfg of the code coming from the libraries"
 
 and dynamic_dispatch =
-  CLOpt.mk_symbol ~long:"dynamic-dispatch" ~default:`None
+  CLOpt.mk_symbol_opt ~long:"dynamic-dispatch"
     "Specify treatment of dynamic dispatch in Java code: 'none' treats dynamic dispatch as a call \
      to unknown code, 'lazy' follows the JVM semantics and creates procedure descriptions during \
      symbolic execution using the type information found in the abstract state; 'sound' is \
      significantly more computationally expensive"
-    ~symbols:[("none", `None); ("lazy", `Lazy); ("sound", `Sound)]
+    ~symbols:[("none", `None); ("interface", `Interface); ("sound", `Sound); ("lazy", `Lazy)]
 
 and enable_checks =
   CLOpt.mk_string_list ~deprecated:["enable_checks"] ~long:"enable-checks" ~meta:"error name"
@@ -986,6 +995,10 @@ and pmd_xml =
 and precondition_stats =
   CLOpt.mk_bool ~deprecated:["precondition_stats"] ~long:"precondition-stats"
     "Print stats about preconditions to standard output"
+
+and print_logs =
+  CLOpt.mk_bool ~long:"print-logs" ~exes:CLOpt.[Toplevel]
+    "Also log messages to stdout and stderr"
 
 and print_builtins =
   CLOpt.mk_bool ~deprecated:["print_builtins"] ~long:"print-builtins"
@@ -1328,6 +1341,8 @@ let post_parsing_initialization () =
   );
   if !version <> `None then exit 0;
 
+  if !developer_mode then Printexc.record_backtrace true ;
+
   F.set_margin !margin ;
 
   let set_minor_heap_size nMb = (* increase the minor heap size to speed up gc *)
@@ -1478,6 +1493,7 @@ and patterns_skip_translation = match patterns_skip_translation with (k,r) -> (k
 and patterns_modeled_expensive = match patterns_modeled_expensive with (k,r) -> (k,!r)
 and pmd_xml = !pmd_xml
 and precondition_stats = !precondition_stats
+and print_logs = !print_logs
 and print_builtins = !print_builtins
 and print_traces_in_tests = !print_traces_in_tests
 and print_types = !print_types
@@ -1562,7 +1578,14 @@ let clang_frontend_action_string =
     ((if clang_frontend_do_capture then ["translating"] else [])
      @ (if clang_frontend_do_lint then ["linting"] else []))
 
-let dynamic_dispatch = if analyzer = Tracing then `Lazy else !dynamic_dispatch
+let dynamic_dispatch =
+  let default_mode =
+    match analyzer with
+    | Infer
+    | Tracing -> `Lazy
+    | Quandary -> `Sound
+    | _ -> `None in
+  Option.value ~default:default_mode !dynamic_dispatch
 
 let specs_library =
   match infer_cache with

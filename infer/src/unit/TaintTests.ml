@@ -12,52 +12,29 @@ open! IStd
 module F = Format
 
 module MockTrace = Trace.Make(struct
-    module MockTraceElem = struct
-      type t = CallSite.t
+    module MockTraceElem = CallSite
+    module Source = Source.Make(struct
+        include MockTraceElem
 
-      module Kind = struct
-        type t = unit
-        let compare _ _ = assert false
-        let pp _ _ = assert false
-      end
+        let unknown = CallSite.dummy
 
-      let call_site t = t
-      let kind _ = ()
-      let make _ site = site
-      let compare = CallSite.compare
-      let pp = CallSite.pp
+        let get pname =
+          if String.is_prefix ~prefix:"SOURCE" (Procname.to_string pname)
+          then Some (CallSite.make pname Location.dummy)
+          else None
 
-      let with_callsite t _ = t
+        let get_tainted_formals _ =
+          []
+      end)
 
-      module Set = PrettyPrintable.MakePPSet(struct
-          type nonrec t = t
-          let compare = compare
-          let pp_element = pp
-        end)
+    module Sink = Sink.Make(struct
+        include MockTraceElem
 
-    end
-
-    module Source = struct
-      include MockTraceElem
-
-      let get site =
-        if String.is_prefix ~prefix:"SOURCE" (Procname.to_string (CallSite.pname site))
-        then Some site
-        else None
-
-      let is_footprint _ = false
-      let make_footprint _ = assert false
-      let get_footprint_access_path _ = assert false
-    end
-
-    module Sink = struct
-      include MockTraceElem
-
-      let get site _ =
-        if String.is_prefix ~prefix:"SINK" (Procname.to_string (CallSite.pname site))
-        then [Sink.make_sink_param site 0 ~report_reachable:false]
-        else []
-    end
+        let get pname _ =
+          if String.is_prefix ~prefix:"SINK" (Procname.to_string pname)
+          then [CallSite.make pname Location.dummy, 0, false]
+          else []
+      end)
 
     let should_report _ _ = false
   end)

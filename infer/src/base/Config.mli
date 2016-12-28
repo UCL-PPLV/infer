@@ -21,6 +21,7 @@ type analyzer = Capture | Compile | Infer | Eradicate | Checkers | Tracing
 (** Association list of analyzers and their names *)
 val string_to_analyzer : (string * analyzer) list
 
+val string_of_analyzer : analyzer -> string
 
 type language = Clang | Java [@@deriving compare]
 
@@ -34,6 +35,12 @@ val ml_bucket_symbols :
 
 type os_type = Unix | Win32 | Cygwin
 
+type dynamic_dispatch_policy = [
+  | `None
+  | `Interface
+  | `Sound
+  | `Lazy
+]
 
 (** Constant configuration values *)
 
@@ -169,7 +176,7 @@ val dependency_mode : bool
 val developer_mode : bool
 val disable_checks : string list
 val dotty_cfg_libs : bool
-val dynamic_dispatch : [ `None | `Lazy | `Sound ]
+val dynamic_dispatch : [ `None | `Interface | `Sound | `Lazy ]
 val enable_checks : string list
 val eradicate : bool
 val eradicate_condition_redundant : bool
@@ -221,6 +228,7 @@ val only_footprint : bool
 val out_file_cmdline : string
 val pmd_xml : bool
 val precondition_stats : bool
+val print_logs : bool
 val print_builtins : bool
 val print_traces_in_tests : bool
 val print_types : bool

@@ -93,8 +93,8 @@ let print_stdout_legend () => {
 };
 
 let main makefile => {
-  RegisterCheckers.register ();
   BuiltinDefn.init ();
+  RegisterCheckers.register ();
   switch Config.modified_targets {
   | Some file => MergeCapture.modified_file file
   | None => ()
@@ -102,6 +102,7 @@ let main makefile => {
   switch Config.cluster_cmdline {
   | Some fname => process_cluster_cmdline fname
   | None =>
+    print_stdout_legend ();
     if Config.allow_specs_cleanup {
       DB.Results_dir.clean_specs_dir ()
     };

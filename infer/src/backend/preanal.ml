@@ -11,11 +11,12 @@
 open! IStd
 
 (** mutate the cfg/cg to add dynamic dispatch handling *)
-let add_dispatch_calls pdesc cg tenv ~handle_dynamic_dispatch =
+let add_dispatch_calls pdesc cg tenv =
+  let sound_dynamic_dispatch = (Config.dynamic_dispatch = `Sound) in
   let node_add_dispatch_calls caller_pname node =
     let call_flags_is_dispatch call_flags =
       (* if sound dispatch is turned off, only consider dispatch for interface calls *)
-      (handle_dynamic_dispatch && call_flags.CallFlags.cf_virtual) ||
+      (sound_dynamic_dispatch && call_flags.CallFlags.cf_virtual) ||
       call_flags.CallFlags.cf_interface in
     let instr_is_dispatch_call = function
       | Sil.Call (_, _, _, _, call_flags) -> call_flags_is_dispatch call_flags
@@ -39,7 +40,7 @@ let add_dispatch_calls pdesc cg tenv ~handle_dynamic_dispatch =
           (match sorted_overrides with
            | ((_, target_pname) :: _) as all_targets ->
                let targets_to_add =
-                 if handle_dynamic_dispatch then
+                 if sound_dynamic_dispatch then
                    IList.map snd all_targets
                  else
                    (* if sound dispatch is turned off, consider only the first target. we do this
@@ -58,8 +59,7 @@ let add_dispatch_calls pdesc cg tenv ~handle_dynamic_dispatch =
       IList.map replace_dispatch_calls instrs
       |> Procdesc.Node.replace_instrs node in
   let pname = Procdesc.get_proc_name pdesc in
-  if Procname.is_java pname then
-    Procdesc.iter_nodes (node_add_dispatch_calls pname) pdesc
+  Procdesc.iter_nodes (node_add_dispatch_calls pname) pdesc
 
 (** add instructions to perform abstraction *)
 let add_abstraction_instructions pdesc =
@@ -302,19 +302,19 @@ let do_copy_propagation pdesc tenv =
 
 let do_liveness pdesc tenv =
   let liveness_proc_cfg = BackwardCfg.from_pdesc pdesc in
-  LivenessAnalysis.exec_cfg liveness_proc_cfg (ProcData.make_default pdesc tenv)
+  let liveness_inv_map =
+    LivenessAnalysis.exec_cfg liveness_proc_cfg (ProcData.make_default pdesc tenv) in
+  if Config.copy_propagation then do_copy_propagation pdesc tenv;
+  add_nullify_instrs pdesc tenv liveness_inv_map;
+  Procdesc.signal_did_preanalysis pdesc
 
-let doit ?(handle_dynamic_dispatch= (Config.dynamic_dispatch = `Sound)) pdesc cg tenv =
-  if not (Procdesc.did_preanalysis pdesc)
-  then
-    begin
-      Procdesc.signal_did_preanalysis pdesc;
-      if Config.copy_propagation then do_copy_propagation pdesc tenv;
-      let liveness_inv_map = do_liveness pdesc tenv in
-      if Config.dynamic_dispatch <> `Lazy && Config.copy_propagation
-      then remove_dead_frontend_stores pdesc liveness_inv_map;
-      add_nullify_instrs pdesc tenv liveness_inv_map;
-      if Config.dynamic_dispatch <> `Lazy
-      then add_dispatch_calls ~handle_dynamic_dispatch pdesc cg tenv;
-      add_abstraction_instructions pdesc;
-    end
+let do_abstraction pdesc =
+  add_abstraction_instructions pdesc;
+  Procdesc.signal_did_preanalysis pdesc
+
+let do_dynamic_dispatch pdesc cg tenv =
+  let pname = Procdesc.get_proc_name pdesc in
+  if Procname.is_java pname &&
+     (Config.dynamic_dispatch = `Interface || Config.dynamic_dispatch = `Sound)
+  then add_dispatch_calls pdesc cg tenv;
+  Procdesc.signal_did_preanalysis pdesc
