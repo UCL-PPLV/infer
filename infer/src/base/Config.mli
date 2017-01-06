@@ -67,7 +67,6 @@ val default_in_zip_results_dir : string
 val dotty_output : string
 val etc_dir : string
 val fail_on_issue_exit_code : int
-val filter_buckets : bool
 val frontend_stats_dir_name : string
 val global_tenv_filename : string
 val idempotent_getters : bool
@@ -204,10 +203,12 @@ val generated_classes : string option
 val headers : bool
 val icfg_dotty_outfile : string option
 val infer_cache : string option
+val init_work_dir : string
 val iphoneos_target_sdk_version : string option
 val is_originator : bool
 val iterations : int
 val java_jar_compiler : string option
+val javac_classes_out : string
 val javac_verbose_out : string
 val jobs : int
 val join_cond : int

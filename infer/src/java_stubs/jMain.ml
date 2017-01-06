@@ -7,14 +7,4 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
 
-open! IStd
-
-(** mapping of ids to raw access paths. useful for id-normalizing access paths *)
-
-module IdMap = Var.Map
-
-type astate = AccessPath.raw IdMap.t
-
-include (module type of IdMap)
-
-include AbstractDomain.WithBottom with type astate := astate
+let main _ = ()
