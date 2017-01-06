@@ -109,9 +109,9 @@ end
 
 
 (* Make a transfer functions module given the fields of a class *)
-module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
+module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module CFG = CFG
-  module Domain = MakeDomain(CF)
+  module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
   (* stolen from ThreadSafety *)
@@ -166,7 +166,7 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
       (fun f lvar acc ->
          let v = Ident.mk () in
          let cn = mk_constr v lvar (FieldMap.find f a.inv) in
-         { acc with curr = FieldMap.add f v acc.curr } |> Domain.add_constr cn
+         { acc with curr = FieldMap.add f v acc.curr } |> add_constr cn
       )
       a.curr
       { a with curr = FieldMap.empty }
@@ -190,16 +190,16 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
     (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
     match cmd with
     | Sil.Store (Exp.Lfield(Exp.Var v, fieldname, _), _, _, _)
-      when IdentSet.mem v astate.this_refs && FieldSet.mem fieldname CF.fields ->
+      when IdentSet.mem v astate.this_refs ->
       do_store fieldname astate
     | Sil.Store (Exp.Lfield(l, fieldname, _), _, _, _)
-      when Exp.is_this l && FieldSet.mem fieldname CF.fields ->
+      when Exp.is_this l ->
       do_store fieldname astate
     | Sil.Load (_, Exp.Lfield(Exp.Var v, fieldname, _), _, _)
-      when IdentSet.mem v astate.this_refs && FieldSet.mem fieldname CF.fields ->
+      when IdentSet.mem v astate.this_refs ->
       do_load fieldname astate
     | Sil.Load (_, Exp.Lfield(l, fieldname, _), _, _)
-      when Exp.is_this l && FieldSet.mem fieldname CF.fields ->
+      when Exp.is_this l ->
       do_load fieldname astate
     | Sil.Load (v,l,_,_) when Exp.is_this l ->
       { astate with this_refs = IdentSet.add v astate.this_refs }
@@ -221,11 +221,11 @@ module MakeTransferFunctions (CF : ClassFields)(CFG : ProcCfg.S) = struct
     | _ -> astate
 end
 
-module MakeAnalyzer(CF : ClassFields) =
+module Analyzer =
   AbstractInterpreter.Make
     (ProcCfg.Normal)
     (Scheduler.ReversePostorder)
-    (MakeTransferFunctions(CF))
+    (MakeTransferFunctions)
 
 let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
@@ -243,20 +243,14 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 (* compute the summary of a method *)
 let compute_and_store_post callback =
   let compute_post pdesc =
-    let (module CF) =
-      (module struct
-        let fields = get_fields callback.Callbacks.proc_name pdesc
-      end : ClassFields) in
-    let (module Analyzer) =
-      (module MakeAnalyzer(CF) :
-         AbstractInterpreter.S
-         with type TransferFunctions.extras = ProcData.no_extras
-          and type TransferFunctions.Domain.astate = astate) in
+    let fields = get_fields callback.Callbacks.proc_name pdesc in
+    let initial =
+      let m = FieldMap.mk fields in
+      { Domain.empty with pre = m; curr = m; inv = FieldMap.mk fields } in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
-    match Analyzer.compute_post pdata with
+    match Analyzer.compute_post ~initial pdata with
     | None -> None
-    | Some a ->
-      L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
+    | Some a -> L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
       Some (Summary.mk a) in
   Interprocedural.compute_and_store_post
     ~compute_post:compute_post

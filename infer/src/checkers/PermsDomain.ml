@@ -3,8 +3,10 @@ open! IStd
 module F = Format
 module L = Logging
 
+(* ordered map with identifier keys (permission variables) *)
 module IdentMap = Ident.IdentMap
 
+(* permission variables as identifiers *)
 module Ident = struct
   include Ident
 
@@ -15,6 +17,7 @@ module Ident = struct
   let mk () = create_fresh Ident.knormal
 end
 
+(* class fields *)
 module Field = struct
   type t = Ident.fieldname
   let compare = Ident.compare_fieldname
@@ -22,8 +25,10 @@ module Field = struct
   let pp_element = pp_key
 end
 
+(* ordered set of fields *)
 module FieldSet = PrettyPrintable.MakePPSet(Field)
 
+(* ordered map with field keys *)
 module FieldMap = struct
   include PrettyPrintable.MakePPMap(Field)
 
@@ -35,7 +40,7 @@ module FieldMap = struct
       empty
 end
 
-
+(* ordered set of identifiers *)
 module IdentSet =
   PrettyPrintable.MakePPSet
     (struct
@@ -43,12 +48,15 @@ module IdentSet =
       let pp_element = pp Pp.text
     end)
 
+(* substitution over permission constraints
+   NB: we only cater for operators introduced by this analyser *)
 let rec exp_subst theta t =
   match t with
   | Exp.Var v -> Exp.Var (Ident.subst theta v)
   | Exp.BinOp(op, t1, t2) -> Exp.BinOp(op, exp_subst theta t1, exp_subst theta t2)
   | _ -> t
 
+(* ordered set of permission constraints *)
 module ExpSet = struct
   include PrettyPrintable.MakePPSet
       (struct
@@ -56,6 +64,7 @@ module ExpSet = struct
         let pp_element = pp
       end)
 
+  (* variables of a constraint set *)
   let vars c =
     let rec _vars = function
       | Exp.Var v ->
@@ -68,26 +77,19 @@ module ExpSet = struct
       c
       IdentSet.empty
 
+  (* apply a function on every constraint in the set *)
   let map f s = fold (fun c a -> add (f c) a) s empty
 
+  (* variable substitution over a constraint set *)
   let subst theta c = map (exp_subst theta) c
 
 end
 
-
-
-(* Holds an actual value, the set of fields of the class of "this".
-   Meant to be used as an argument to the analyzer functor. *)
-module type ClassFields =
-sig
-  val fields : FieldSet.t
-end
-
 type perms_t = Ident.t FieldMap.t
 
-(* abstract state used in analyzer and transfer functions functors *)
+(* abstract state used in analyzer and transfer functions *)
 type astate = {
-  (* permission vars for the precondition -- never changes during analysis of a method *)
+  (* permission vars for the precondition; never changes during analysis of a method *)
   pre: perms_t;
 
   (* permission vars for the current abstract state *)
@@ -103,6 +105,8 @@ type astate = {
   constraints: ExpSet.t
 }
 
+let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
+
 (* summary type, omit transient parts of astate *)
 type summary =
   {
@@ -113,7 +117,7 @@ type summary =
 
 
 (* Make an abstract domain, given the fields of the current class *)
-module MakeDomain(CF : ClassFields) = struct
+module Domain = struct
   type nonrec astate = astate
 
   let empty =
@@ -125,11 +129,9 @@ module MakeDomain(CF : ClassFields) = struct
       constraints = ExpSet.empty
     }
 
-  let initial =
+  (* let initial =
     let m = FieldMap.mk CF.fields in
-    { empty with pre = m; curr = m; inv = FieldMap.mk CF.fields }
-
-  let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
+    { empty with pre = m; curr = m; inv = FieldMap.mk CF.fields } *)
 
   (* join unions the constraints.  When the permission variable for a field
      differs in the two abstract states, then a new variable is introduced plus
@@ -140,15 +142,15 @@ module MakeDomain(CF : ClassFields) = struct
     assert (FieldMap.equal Ident.equal a1.inv a2.inv) ;
     let mk_le p q = Exp.BinOp (Binop.Le, (Exp.Var p), (Exp.Var q)) in
     let mk_constr f v a = mk_le v (FieldMap.find f a.curr) in
-    FieldSet.fold
-      (fun f acc ->
+    FieldMap.fold
+      (fun f _ acc ->
          if Ident.equal (FieldMap.find f a1.curr) (FieldMap.find f a2.curr) then
            { acc with curr = FieldMap.add f (FieldMap.find f a1.curr) acc.curr } else
            let v = Ident.mk () in
            let acc' = add_constr (mk_constr f v a1) acc |> add_constr (mk_constr f v a2) in
            { acc' with curr = FieldMap.add f v acc.curr }
       )
-      CF.fields
+      a1.pre
       { a1 with
         curr = FieldMap.empty;
         this_refs = IdentSet.inter a1.this_refs a2.this_refs;
