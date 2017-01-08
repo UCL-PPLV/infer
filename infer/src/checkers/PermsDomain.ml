@@ -102,7 +102,7 @@ type astate = {
   this_refs: IdentSet.t;
 
   (* constraints abduced *)
-  constraints: ExpSet.t
+  constraints: ExpSet.t;
 }
 
 let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
@@ -112,11 +112,10 @@ type summary =
   {
     sum_pre: perms_t;
     sum_inv: perms_t;
-    sum_constraints: ExpSet.t;
+    sum_constraints: ExpSet.t
   }
 
-
-(* Make an abstract domain, given the fields of the current class *)
+(* Abstract domain *)
 module Domain = struct
   type nonrec astate = astate
 
@@ -126,12 +125,8 @@ module Domain = struct
       curr = FieldMap.empty;
       inv = FieldMap.empty;
       this_refs = IdentSet.empty;
-      constraints = ExpSet.empty
+      constraints = ExpSet.empty;
     }
-
-  (* let initial =
-    let m = FieldMap.mk CF.fields in
-    { empty with pre = m; curr = m; inv = FieldMap.mk CF.fields } *)
 
   (* join unions the constraints.  When the permission variable for a field
      differs in the two abstract states, then a new variable is introduced plus

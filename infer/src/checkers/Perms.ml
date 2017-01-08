@@ -6,6 +6,10 @@ let mk_add p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Va
 let mk_lb p = Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
 let mk_ub p = Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
 
+let get_class = function
+  | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
+  | _ -> assert false
+
 module Summary = struct
   include Summary.Make (struct
     type summary = PermsDomain.summary
@@ -37,7 +41,7 @@ module Summary = struct
     {
       sum_pre = pre;
       sum_inv = inv;
-      sum_constraints = constraints;
+      sum_constraints = constraints
     }
 
   let par_compose s1 s2 =
@@ -97,7 +101,7 @@ module Summary = struct
       (* resulting inv is the image of either substitution *)
       sum_inv = FieldMap.map (Ident.subst theta1) s1.sum_inv;
       (* add splitting constraints to the unioned result *)
-      sum_constraints = consts
+      sum_constraints = consts;
     }
 
   let pp fmt { sum_pre; sum_inv; sum_constraints } =
@@ -186,20 +190,15 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     { astate with constraints = ExpSet.add (mk_gt_zero fld_var) astate.constraints }
 
   (* actual transfer function *)
-  let exec_instr astate _ _ cmd =
+  let exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
+    let classname = get_class (Procdesc.get_proc_name pdesc) in
     (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
     match cmd with
-    | Sil.Store (Exp.Lfield(Exp.Var v, fieldname, _), _, _, _)
-      when IdentSet.mem v astate.this_refs ->
+    | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, _)
+      when PatternMatch.is_subtype tenv tname classname ->
       do_store fieldname astate
-    | Sil.Store (Exp.Lfield(l, fieldname, _), _, _, _)
-      when Exp.is_this l ->
-      do_store fieldname astate
-    | Sil.Load (_, Exp.Lfield(Exp.Var v, fieldname, _), _, _)
-      when IdentSet.mem v astate.this_refs ->
-      do_load fieldname astate
-    | Sil.Load (_, Exp.Lfield(l, fieldname, _), _, _)
-      when Exp.is_this l ->
+    | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _)
+      when PatternMatch.is_subtype tenv tname classname ->
       do_load fieldname astate
     | Sil.Load (v,l,_,_) when Exp.is_this l ->
       { astate with this_refs = IdentSet.add v astate.this_refs }
@@ -207,6 +206,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       { astate with this_refs = IdentSet.add v astate.this_refs }
     | Sil.Load (v,_,_,_) ->
       { astate with this_refs = IdentSet.remove v astate.this_refs }
+    | Sil.Remove_temps (idents, _) ->
+      { astate with
+        this_refs =
+          IList.fold_left
+            (fun a v -> IdentSet.remove v a)
+            astate.this_refs
+            idents
+      }
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
@@ -227,21 +234,16 @@ module Analyzer =
     (Scheduler.ReversePostorder)
     (MakeTransferFunctions)
 
-let get_class = function
-  | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
-  | _ -> assert false
-
-(* retrieve the fields of a given class *)
-let get_fields pname pdesc =
-  match Tenv.lookup pdesc.ProcData.tenv (get_class pname) with
-  | None -> assert false
-  | Some { StructTyp.fields } ->
-    FieldSet.of_list (IList.map (fun (fld, _, _) -> fld) fields)
-
 module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 
 (* compute the summary of a method *)
 let compute_and_store_post callback =
+  (* retrieve the fields of a given class *)
+  let get_fields pname pdesc =
+    match Tenv.lookup pdesc.ProcData.tenv (get_class pname) with
+    | None -> assert false
+    | Some { StructTyp.fields } ->
+      FieldSet.of_list (IList.map (fun (fld, _, _) -> fld) fields) in
   let compute_post pdesc =
     let fields = get_fields callback.Callbacks.proc_name pdesc in
     let initial =
@@ -253,7 +255,7 @@ let compute_and_store_post callback =
     | Some a -> L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
       Some (Summary.mk a) in
   Interprocedural.compute_and_store_post
-    ~compute_post:compute_post
+    ~compute_post
     ~make_extras:ProcData.make_empty_extras
     callback
 
