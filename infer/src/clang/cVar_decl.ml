@@ -12,8 +12,6 @@ open! IStd
 (** Process variable declarations by saving them as local or global variables.  *)
 (** Computes the local variables of a function or method to be added to the procdesc *)
 
-open CFrontend_utils
-
 module L = Logging
 
 let is_custom_var_pointer pointer =
@@ -29,11 +27,11 @@ let sil_var_of_decl context var_decl procname =
         not (is_custom_var_pointer decl_info.Clang_ast_t.di_pointer) in
       let var_decl_details = Some
           (decl_info, qual_type, var_decl_info, shoud_be_mangled) in
-      General_utils.mk_sil_var trans_unit_ctx name_info var_decl_details procname outer_procname
+      CGeneral_utils.mk_sil_var trans_unit_ctx name_info var_decl_details procname outer_procname
   | ParmVarDecl (decl_info, name_info, qual_type, var_decl_info) ->
       let var_decl_details = Some
           (decl_info, qual_type, var_decl_info, false) in
-      General_utils.mk_sil_var trans_unit_ctx name_info var_decl_details procname outer_procname
+      CGeneral_utils.mk_sil_var trans_unit_ctx name_info var_decl_details procname outer_procname
   | _ -> assert false
 
 let sil_var_of_decl_ref context decl_ref procname =
@@ -46,11 +44,11 @@ let sil_var_of_decl_ref context decl_ref procname =
   | `ImplicitParam ->
       let outer_procname = CContext.get_outer_procname context in
       let trans_unit_ctx = context.CContext.translation_unit_context in
-      General_utils.mk_sil_var trans_unit_ctx name None procname outer_procname
+      CGeneral_utils.mk_sil_var trans_unit_ctx name None procname outer_procname
   | _ ->
       if is_custom_var_pointer pointer then
         Pvar.mk (Mangled.from_string name.Clang_ast_t.ni_name) procname
-      else match Ast_utils.get_decl decl_ref.Clang_ast_t.dr_decl_pointer with
+      else match CAst_utils.get_decl decl_ref.Clang_ast_t.dr_decl_pointer with
         | Some var_decl -> sil_var_of_decl context var_decl procname
         | None -> assert false
 
@@ -62,27 +60,31 @@ let add_var_to_locals procdesc var_decl sil_typ pvar =
         Procdesc.append_locals procdesc [(Pvar.get_name pvar, sil_typ)]
   | _ -> assert false
 
-let rec compute_autorelease_pool_vars context stmts =
-  let procname = Procdesc.get_proc_name context.CContext.procdesc in
-  match stmts with
-  | [] -> []
-  | Clang_ast_t.DeclRefExpr (_, _, _, drei):: stmts' ->
-      (let res = compute_autorelease_pool_vars context stmts' in
-       match drei.Clang_ast_t.drti_decl_ref with
-       | Some decl_ref ->
-           (match decl_ref.Clang_ast_t.dr_type_ptr with
-            | Some type_ptr when decl_ref.Clang_ast_t.dr_kind = `Var ->
-                let typ = CType_decl.type_ptr_to_sil_type context.CContext.tenv type_ptr in
-                let pvar = sil_var_of_decl_ref context decl_ref procname in
-                if Pvar.is_local pvar then
-                  General_utils.append_no_duplicateds [(Exp.Lvar pvar, typ)] res
-                else res
-            | _ -> res)
-       | _ -> res)
-  | s :: stmts' ->
-      let sl = snd (Clang_ast_proj.get_stmt_tuple s) in
-      compute_autorelease_pool_vars context (sl @ stmts')
-
+let compute_autorelease_pool_vars context stmts =
+  let rec do_stmts map = function
+    | [] ->
+        map
+    | Clang_ast_t.DeclRefExpr (_, _, _, drei):: stmts' ->
+        let map1 = match drei.Clang_ast_t.drti_decl_ref with
+          | Some decl_ref ->
+              (match decl_ref.Clang_ast_t.dr_type_ptr with
+               | Some type_ptr when decl_ref.Clang_ast_t.dr_kind = `Var ->
+                   let typ = CType_decl.type_ptr_to_sil_type context.CContext.tenv type_ptr in
+                   let procname = Procdesc.get_proc_name context.CContext.procdesc in
+                   let pvar = sil_var_of_decl_ref context decl_ref procname in
+                   if Pvar.is_local pvar then
+                     Exp.Map.add (Exp.Lvar pvar) typ map
+                   else map
+               | _ ->
+                   map)
+          | None ->
+              map in
+        do_stmts map1 stmts'
+    | s :: stmts' ->
+        let sl = snd (Clang_ast_proj.get_stmt_tuple s) in
+        let map1 = do_stmts map sl in
+        do_stmts map1 stmts' in
+  Exp.Map.bindings (do_stmts Exp.Map.empty stmts)
 
 (* Returns a list of captured variables as sil variables. *)
 let captured_vars_from_block_info context cvl =

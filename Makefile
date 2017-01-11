@@ -52,7 +52,7 @@ all: infer
 .PHONY: src_build
 src_build:
 ifeq ($(IS_FACEBOOK_TREE),yes)
-	@$(MAKE) -C facebook
+	@$(MAKE) -C facebook setup
 endif
 	@$(MAKE) -C $(SRC_DIR) infer
 ifeq ($(BUILD_C_ANALYZERS),yes)
@@ -96,7 +96,7 @@ endif
 .PHONY: test_build
 test_build: clang_plugin
 ifeq ($(IS_FACEBOOK_TREE),yes)
-	@$(MAKE) -C facebook
+	@$(MAKE) -C facebook setup
 endif
 	@$(MAKE) -C $(SRC_DIR) test_build
 
@@ -209,9 +209,16 @@ inferScriptMode_test: test_build
 checkCopyright:
 	@$(MAKE) -C $(SRC_DIR) checkCopyright
 
+.PHONY: validate-skel
+validate-skel:
+ifeq ($(IS_FACEBOOK_TREE),yes)
+	@$(MAKE) -C facebook validate
+endif
+
+
 .PHONY: test
 test: test_build ocaml_unit_test endtoend_test inferTraceBugs_test inferScriptMode_test \
-      checkCopyright
+      checkCopyright validate-skel
 	@$(MAKE) -C $(SRC_DIR) mod_dep.dot
 ifeq (,$(findstring s,$(MAKEFLAGS)))
 	@echo "ALL TESTS PASSED"
@@ -256,6 +263,8 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 	  test -d      $(DESTDIR)$(libdir)/infer/$$i || \
 	    $(MKDIR_P) $(DESTDIR)$(libdir)/infer/$$i; \
 	done
+	test -d      $(DESTDIR)$(libdir)/infer/infer/lib/linter_rules/ || \
+	  $(MKDIR_P) $(DESTDIR)$(libdir)/infer/infer/lib/linter_rules
 endif
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	test -d      $(DESTDIR)$(libdir)/infer/infer/lib/java/ || \
@@ -302,6 +311,8 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 	@for i in $$(find infer/models/cpp/include/ -not -type d); do \
 		$(INSTALL_DATA) -C $$i $(DESTDIR)$(libdir)/infer/$$i; \
 	done
+	$(INSTALL_DATA) -C          infer/lib/linter_rules/linters.al \
+	  $(DESTDIR)$(libdir)/infer/infer/lib/linter_rules/linters.al
 	$(INSTALL_PROGRAM) -C $(INFERCLANG_BIN) $(DESTDIR)$(libdir)/infer/infer/bin/
 	(cd $(DESTDIR)$(libdir)/infer/infer/bin/ && \
 	 $(LN_S) -f InferClang InferClang++)

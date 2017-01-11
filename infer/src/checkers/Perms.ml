@@ -22,9 +22,9 @@ module Summary = struct
     end)
 
   let to_z3 fmt s =
-    let z3_ident fmt id = F.pp_print_string fmt (Ident.to_string id) in
     let rec z3_exp fmt e = match e with
-      | Exp.Var id -> z3_ident fmt id
+      | Exp.Var id ->
+        F.pp_print_string fmt (Ident.to_string id)
       | Exp.BinOp(Binop.Eq, t1, t2) ->
         F.fprintf fmt "(= %a %a)" z3_exp t1 z3_exp t2
       | Exp.BinOp(op, t1, t2) ->
@@ -33,9 +33,9 @@ module Summary = struct
         F.pp_print_string fmt (if Exp.is_zero e then "0.0" else "1.0")
       | _ -> assert false in
     let cvars = ExpSet.vars s.sum_constraints in
-      IdentSet.iter (F.fprintf fmt "(declare-const %a Real)@." (Ident.pp Pp.text)) cvars ;
-      ExpSet.iter (fun c -> F.fprintf fmt "(assert %a)@." z3_exp c) s.sum_constraints ;
-      F.fprintf fmt "(check-sat)@.(get-model)"
+    IdentSet.iter (F.fprintf fmt "(declare-const %a Real)@." (Ident.pp Pp.text)) cvars ;
+    ExpSet.iter (F.fprintf fmt "(assert %a)@." z3_exp) s.sum_constraints ;
+    F.fprintf fmt "(check-sat)@.(get-model)@."
 
   let mk { pre; inv; constraints } =
     {
@@ -65,8 +65,7 @@ module Summary = struct
     let add_splittings pre1 pre2 exps =
       FieldMap.fold
         (fun f v a ->
-           let v1 = FieldMap.find f pre1 in
-           let v2 = FieldMap.find f pre2 in
+           let v1, v2 = FieldMap.find f pre1, FieldMap.find f pre2 in
            ExpSet.add (mk_add v v1 v2) a
         )
         new_pre
@@ -118,76 +117,45 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
-  (* stolen from ThreadSafety *)
-  type lock_model =
-    | Lock
-    | Unlock
-    | NoEffect
-
-  (* stolen from ThreadSafety *)
-  let get_lock_model = function
-    | Procname.Java java_pname ->
-      begin
-        match Procname.java_get_class_name java_pname, Procname.java_get_method java_pname with
-        | "java.util.concurrent.locks.Lock", "lock" ->
-          Lock
-        | ("java.util.concurrent.locks.ReentrantLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-          ("lock" | "tryLock" | "lockInterruptibly") ->
-          Lock
-        | ("java.util.concurrent.locks.Lock"
-          |"java.util.concurrent.locks.ReentrantLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-          "unlock" ->
-          Unlock
-        | _ ->
-          NoEffect
-      end
-    | pname when Procname.equal pname BuiltinDecl.__set_locked_attribute ->
-      Lock
-    | pname when Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
-      Unlock
-    | _ ->
-      NoEffect
-
-  (* decide if a lock statement is about "this" *)
-  let lock_effect_on_this pn args astate =
-    (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) IdentSet.pp astate.this_refs; *)
-    let this_arg =
-      IList.length args = 1 &&
-      match fst (IList.hd args) with
-      | Exp.Var ident ->
-      (* L.out "ident=%a this_refs=%a@." (Ident.pp Pp.text) ident IdentSet.pp astate.this_refs; *)
-        IdentSet.mem ident astate.this_refs
-      | _ -> false in
-    if this_arg then get_lock_model pn else NoEffect
-
   (* add or remove permissions from invariant *)
   let hale mk_constr a =
     FieldMap.fold
       (fun f lvar acc ->
          let v = Ident.mk () in
          let cn = mk_constr v lvar (FieldMap.find f a.inv) in
-         { acc with curr = FieldMap.add f v acc.curr } |> add_constr cn
+         acc |> add_fld f v |> add_constr cn
       )
       a.curr
       { a with curr = FieldMap.empty }
 
-  let mk_eq_one p = Exp.eq (Exp.Var p) (Exp.one)
-  let mk_gt_zero p = Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero)
-  let mk_minus p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r))
-
-  let exhale = hale mk_minus
-  let inhale = hale mk_add
-
   let do_store fieldname astate =
+    let mk_eq_one p = Exp.eq (Exp.Var p) (Exp.one) in
     let fld_var = FieldMap.find fieldname astate.curr in
-    { astate with constraints = ExpSet.add (mk_eq_one fld_var) astate.constraints }
+    add_constr (mk_eq_one fld_var) astate
   let do_load fieldname astate =
+    let mk_gt_zero p = Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero) in
     let fld_var = FieldMap.find fieldname astate.curr in
-    { astate with constraints = ExpSet.add (mk_gt_zero fld_var) astate.constraints }
+    add_constr (mk_gt_zero fld_var) astate
+
+  (* stolen from ThreadSafety *)
+  module TSTF = ThreadSafety.TransferFunctions(CFG)
+
+  let do_sync pn args astate =
+    let mk_minus p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r)) in
+    let exhale = hale mk_minus in
+    let inhale = hale mk_add in
+    (* decide if a lock statement is about "this" *)
+    let lock_effect_on_this pn args astate =
+      (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) IdentSet.pp astate.this_refs; *)
+      let this_arg = match args with
+        | (Exp.Var ident, _)::_ -> IdentSet.mem ident astate.this_refs
+        | _ -> false in
+      if this_arg then TSTF.get_lock_model pn else TSTF.NoEffect in
+    match lock_effect_on_this pn args astate with
+    | TSTF.Lock ->     inhale astate
+    | TSTF.Unlock ->   exhale astate
+    | TSTF.NoEffect -> astate
+
 
   (* actual transfer function *)
   let exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -201,30 +169,18 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       when PatternMatch.is_subtype tenv tname classname ->
       do_load fieldname astate
     | Sil.Load (v,l,_,_) when Exp.is_this l ->
-      { astate with this_refs = IdentSet.add v astate.this_refs }
+      add_ref v astate
     | Sil.Load (v,Exp.Var v',_,_) when IdentSet.mem v' astate.this_refs ->
-      { astate with this_refs = IdentSet.add v astate.this_refs }
-    | Sil.Load (v,_,_,_) ->
-      { astate with this_refs = IdentSet.remove v astate.this_refs }
+      add_ref v astate
+    | Sil.Load (v,_,_,_) -> remove_ref v astate
     | Sil.Remove_temps (idents, _) ->
-      { astate with
-        this_refs =
-          IList.fold_left
-            (fun a v -> IdentSet.remove v a)
-            astate.this_refs
-            idents
-      }
+      IList.fold_left (fun a v -> remove_ref v a) astate idents
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
       astate *)
     | Sil.Call (_, Const (Cfun pn), args, _, _) ->
-      begin
-        match lock_effect_on_this pn args astate with
-        | Lock ->     inhale astate
-        | Unlock ->   exhale astate
-        | NoEffect -> astate
-      end
+      do_sync pn args astate
     | _ -> astate
 end
 
@@ -259,10 +215,6 @@ let compute_and_store_post callback =
     ~make_extras:ProcData.make_empty_extras
     callback
 
-(* registered method checker *)
-let method_analysis callback =
-  ignore (compute_and_store_post callback)
-
 let all_pairs =
   let pair a l = IList.map (fun b -> (a,b)) l in
   let rec aux = function
@@ -286,7 +238,6 @@ let read_process_lines in_channel =
   List.rev !lines
 
 let file_analysis _ _ get_proc_desc file_env =
-  L.out "file analysis running@." ;
   let summarise (idenv, tenv, proc_name, proc_desc) =
     let callback =
       {Callbacks.get_proc_desc; get_procs_in_file = (fun _ -> []);

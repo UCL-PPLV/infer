@@ -8,11 +8,12 @@
  *)
 
 open! IStd
-open CFrontend_utils
 open Lexing
 open Ctl_lexer
 
-let parse_ctl_file filename =
+(* Parse the file with linters definitions, and it returns a list
+   of checkers in the form of pairs (condition, issue_desc) *)
+let parse_ctl_file linters_files =
   let print_position _ lexbuf =
     let pos = lexbuf.lex_curr_p in
     Logging.err "%s:%d:%d" pos.pos_fname
@@ -25,21 +26,20 @@ let parse_ctl_file filename =
     | Ctl_parser.Error ->
         Logging.err "%a: syntax error\n" print_position lexbuf;
         exit (-1) in
-  match filename with
-  | Some fn ->
+  IList.iter (fun fn ->
+      Logging.out "Loading linters rules from %s\n" fn;
       let inx = open_in fn in
       let lexbuf = Lexing.from_channel inx in
       lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = fn };
       (match parse_with_error lexbuf with
        | Some parsed_checkers ->
            Logging.out "#### Start Expanding checkers #####\n";
-           let checkers = CFrontend_errors.expand_checkers parsed_checkers in
+           let exp_checkers = CFrontend_errors.expand_checkers parsed_checkers in
            Logging.out "#### Checkers Expanded #####\n";
-           IList.iter Ctl_parser_types.print_checker checkers
+           if Config.debug_mode then IList.iter Ctl_parser_types.print_checker exp_checkers;
+           CFrontend_errors.make_condition_issue_desc_pair exp_checkers;
        | None -> Logging.out "No linters found.\n");
-      In_channel.close inx
-  | None ->
-      Logging.out "No linters file specified. Nothing to parse.\n"
+      In_channel.close inx) linters_files
 
 
 let rec do_frontend_checks_stmt (context:CLintersContext.context) stmt =
@@ -53,7 +53,7 @@ let rec do_frontend_checks_stmt (context:CLintersContext.context) stmt =
          IList.iter (do_frontend_checks_decl context') [decl]
      | _ -> ());
     do_frontend_checks_stmt context' stmt in
-  let stmts = Ast_utils.get_stmts_from_stmt stmt in
+  let stmts = CAst_utils.get_stmts_from_stmt stmt in
   IList.iter (do_all_checks_on_stmts) stmts
 
 and do_frontend_checks_decl (context: CLintersContext.context) decl =
@@ -75,11 +75,11 @@ and do_frontend_checks_decl (context: CLintersContext.context) decl =
          let if_decl_opt =
            (match context.current_objc_impl with
             | Some ObjCImplementationDecl (_, _, _, _, impl_decl_info) ->
-                Ast_utils.get_decl_opt_with_decl_ref impl_decl_info.oidi_class_interface
+                CAst_utils.get_decl_opt_with_decl_ref impl_decl_info.oidi_class_interface
             | _ -> None) in
          let is_factory_method =
            (match if_decl_opt with
-            | Some if_decl -> Ast_utils.is_objc_factory_method if_decl decl
+            | Some if_decl -> CAst_utils.is_objc_factory_method if_decl decl
             | _ -> false) in
          let context' = {context with
                          CLintersContext.current_method = Some decl;

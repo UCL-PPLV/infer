@@ -106,6 +106,9 @@ type astate = {
 }
 
 let add_constr c a = { a with constraints = ExpSet.add c a.constraints }
+let add_ref v a = { a with this_refs = IdentSet.add v a.this_refs }
+let remove_ref v a = { a with this_refs = IdentSet.remove v a.this_refs }
+let add_fld f v a = { a with curr = FieldMap.add f v a.curr }
 
 (* summary type, omit transient parts of astate *)
 type summary =
@@ -138,14 +141,17 @@ module Domain = struct
     let mk_le p q = Exp.BinOp (Binop.Le, (Exp.Var p), (Exp.Var q)) in
     let mk_constr f v a = mk_le v (FieldMap.find f a.curr) in
     FieldMap.fold
-      (fun f _ acc ->
-         if Ident.equal (FieldMap.find f a1.curr) (FieldMap.find f a2.curr) then
-           { acc with curr = FieldMap.add f (FieldMap.find f a1.curr) acc.curr } else
+      (fun f _v acc ->
+         if Ident.equal _v (FieldMap.find f a2.curr) then
+           add_fld f _v acc
+         else
            let v = Ident.mk () in
-           let acc' = add_constr (mk_constr f v a1) acc |> add_constr (mk_constr f v a2) in
-           { acc' with curr = FieldMap.add f v acc.curr }
+           acc |>
+           add_constr (mk_constr f v a1) |>
+           add_constr (mk_constr f v a2) |>
+           add_fld f v
       )
-      a1.pre
+      a1.curr
       { a1 with
         curr = FieldMap.empty;
         this_refs = IdentSet.inter a1.this_refs a2.this_refs;
