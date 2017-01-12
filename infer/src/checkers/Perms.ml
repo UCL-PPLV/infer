@@ -1,10 +1,14 @@
 open! IStd
 
-open PermsDomain
+(* TODO
+   (increasing importance)
+   - Interprocedural
+   - track breaking of soundness assumptions
+   - include only public methods in check
+   - finish check of parallel compositions
+*)
 
-let mk_add p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Var r))
-let mk_lb p = Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
-let mk_ub p = Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
+open! PermsDomain
 
 let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
@@ -21,52 +25,58 @@ module Summary = struct
       payload.Specs.permsafety
     end)
 
-  let to_z3 fmt s =
-    let rec z3_exp fmt e = match e with
-      | Exp.Var id ->
-        F.pp_print_string fmt (Ident.to_string id)
-      | Exp.BinOp(Binop.Eq, t1, t2) ->
-        F.fprintf fmt "(= %a %a)" z3_exp t1 z3_exp t2
-      | Exp.BinOp(op, t1, t2) ->
-        F.fprintf fmt "(%s %a %a)" (Binop.str Pp.text op) z3_exp t1 z3_exp t2
-      | Exp.Const _ ->
-        F.pp_print_string fmt (if Exp.is_zero e then "0.0" else "1.0")
-      | _ -> assert false in
-    let cvars = ExpSet.vars s.sum_constraints in
-    IdentSet.iter (F.fprintf fmt "(declare-const %a Real)@." (Ident.pp Pp.text)) cvars ;
-    ExpSet.iter (F.fprintf fmt "(assert %a)@." z3_exp) s.sum_constraints ;
-    F.fprintf fmt "(check-sat)@.(get-model)@."
-
-  let mk { pre; inv; constraints } =
+  let of_state { pre; inv; constraints } =
     {
       sum_pre = pre;
       sum_inv = inv;
       sum_constraints = constraints
     }
 
+(* create a list of substitutions from all inv variables of a list of summaries
+to the same targets *)
+  let mk_inv_thetas ss =
+    let vs =
+      Field.Map.fold
+        (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
+        ((IList.hd ss).sum_inv)
+        Field.Map.empty in
+    let mk s =
+      Field.Map.fold
+        (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
+        s.sum_inv
+        Ident.Map.empty in
+    IList.map mk ss
+
+  let mk_pre_thetas thetas ss =
+    let mk_sum f =
+      let ps = IList.map (fun s -> Field.Map.find f s.sum_pre) ss in
+      let q = Ident.mk () in
+      Constr.mk_sum q ps in
+      ()
+
   let par_compose s1 s2 =
-    assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_pre) ;
-    assert (FieldMap.cardinal s1.sum_inv = FieldMap.cardinal s2.sum_inv) ;
-    assert (FieldMap.cardinal s1.sum_pre = FieldMap.cardinal s2.sum_inv) ;
-    let new_pre = FieldMap.map (fun _ -> Ident.mk ()) s1.sum_pre in
+    assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_pre) ;
+    assert (Field.Map.cardinal s1.sum_inv = Field.Map.cardinal s2.sum_inv) ;
+    assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_inv) ;
+    let new_pre = Field.Map.map (fun _ -> Ident.mk ()) s1.sum_pre in
     let mk_theta m =
-      FieldMap.fold (fun _ v a -> IdentMap.add v (Ident.mk ()) a) m IdentMap.empty in
+      Field.Map.fold (fun _ v a -> Ident.Map.add v (Ident.mk ()) a) m Ident.Map.empty in
     let extend_with_inv m1 m2 a =
-      FieldMap.fold
+      Field.Map.fold
         (fun f v (a1,a2) ->
            let newv = Ident.mk () in
-           let a1' = IdentMap.add v newv a1 in
-           let a2' = IdentMap.add (FieldMap.find f m2) newv a2 in
+           let a1' = Ident.Map.add v newv a1 in
+           let a2' = Ident.Map.add (Field.Map.find f m2) newv a2 in
            (a1',a2'))
         m1
         a in
     (* add constraints of the form x = x1 + x2, where x1/x2 are permissions *)
     (* in the pre, for the premise of the frame rule *)
     let add_splittings pre1 pre2 exps =
-      FieldMap.fold
+      Field.Map.fold
         (fun f v a ->
-           let v1, v2 = FieldMap.find f pre1, FieldMap.find f pre2 in
-           ExpSet.add (mk_add v v1 v2) a
+           let v1, v2 = Field.Map.find f pre1, Field.Map.find f pre2 in
+           Constr.Set.add (Constr.mk_add v v1 v2) a
         )
         new_pre
         exps in
@@ -76,38 +86,43 @@ module Summary = struct
     (* this means that for the same field f, theta1[inv1[f]]==theta2[sum_inv2[f]] *)
     let theta1, theta2 = extend_with_inv s1.sum_inv s2.sum_inv (theta1, theta2) in
     (* get all variables used in constraints *)
-    let c1vars, c2vars = ExpSet.vars s1.sum_constraints, ExpSet.vars s1.sum_constraints in
+    let c1vars, c2vars = Constr.Set.vars s1.sum_constraints, Constr.Set.vars s1.sum_constraints in
     (* compute all those that are not in theta[pre U inv] *)
-    let exist1 = IdentSet.filter (fun v -> not (IdentMap.mem v theta1)) c1vars in
-    let exist2 = IdentSet.filter (fun v -> not (IdentMap.mem v theta2)) c2vars in
+    let exist1 = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta1)) c1vars in
+    let exist2 = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta2)) c2vars in
     (* extend substitutions with distinct fresh variables for the above vars *)
-    let add_fresh v a = IdentMap.add v (Ident.mk ()) a in
-    let theta1 = IdentSet.fold add_fresh exist1 theta1 in
-    let theta2 = IdentSet.fold add_fresh exist2 theta2 in
+    let add_fresh v a = Ident.Map.add v (Ident.mk ()) a in
+    let theta1 = Ident.Set.fold add_fresh exist1 theta1 in
+    let theta2 = Ident.Set.fold add_fresh exist2 theta2 in
     (* perform substitutions on constraints *)
-    let c1 = ExpSet.subst theta1 s1.sum_constraints in
-    let c2 = ExpSet.subst theta2 s2.sum_constraints in
-    let pre1 = FieldMap.map (Ident.subst theta1) s1.sum_pre in
-    let pre2 = FieldMap.map (Ident.subst theta2) s2.sum_pre in
-    let consts = add_splittings pre1 pre2 (ExpSet.union c1 c2) in
+    let c1 = Constr.Set.subst theta1 s1.sum_constraints in
+    let c2 = Constr.Set.subst theta2 s2.sum_constraints in
+    let pre1 = Field.Map.map (Ident.subst theta1) s1.sum_pre in
+    let pre2 = Field.Map.map (Ident.subst theta2) s2.sum_pre in
+    let consts = add_splittings pre1 pre2 (Constr.Set.union c1 c2) in
     let consts =
-      IdentSet.fold
-        (fun v a -> ExpSet.add (mk_lb v) (ExpSet.add (mk_ub v) a))
-        (ExpSet.vars consts)
+      Ident.Set.fold
+        (fun v a -> Constr.Set.add (Constr.mk_lb v) (Constr.Set.add (Constr.mk_ub v) a))
+        (Constr.Set.vars consts)
         consts in
     {
       sum_pre = new_pre;
       (* resulting inv is the image of either substitution *)
-      sum_inv = FieldMap.map (Ident.subst theta1) s1.sum_inv;
+      sum_inv = Field.Map.map (Ident.subst theta1) s1.sum_inv;
       (* add splitting constraints to the unioned result *)
       sum_constraints = consts;
     }
 
   let pp fmt { sum_pre; sum_inv; sum_constraints } =
     F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_constraints=%a }"
-      (FieldMap.pp ~pp_value:(Ident.pp Pp.text)) sum_pre
-      (FieldMap.pp ~pp_value:(Ident.pp Pp.text)) sum_inv
-      ExpSet.pp sum_constraints
+      (Field.Map.pp ~pp_value:Ident.pp) sum_pre
+      (Field.Map.pp ~pp_value:Ident.pp) sum_inv
+      Constr.Set.pp sum_constraints
+
+  let to_z3 fmt s =
+    Ident.Set.to_z3 fmt (Constr.Set.vars s.sum_constraints) ;
+    Constr.Set.to_z3 fmt s.sum_constraints ;
+    F.fprintf fmt "(check-sat)@.(get-model)@."
 end
 
 
@@ -117,45 +132,42 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
-  (* add or remove permissions from invariant *)
-  let hale mk_constr a =
-    FieldMap.fold
-      (fun f lvar acc ->
-         let v = Ident.mk () in
-         let cn = mk_constr v lvar (FieldMap.find f a.inv) in
-         acc |> add_fld f v |> add_constr cn
-      )
-      a.curr
-      { a with curr = FieldMap.empty }
-
+  let do_mem mk_constr fieldname astate =
+    let fld_var = Field.Map.find fieldname astate.curr in
+    State.add_constr (mk_constr fld_var) astate
   let do_store fieldname astate =
-    let mk_eq_one p = Exp.eq (Exp.Var p) (Exp.one) in
-    let fld_var = FieldMap.find fieldname astate.curr in
-    add_constr (mk_eq_one fld_var) astate
+    do_mem Constr.mk_eq_one fieldname astate
   let do_load fieldname astate =
-    let mk_gt_zero p = Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero) in
-    let fld_var = FieldMap.find fieldname astate.curr in
-    add_constr (mk_gt_zero fld_var) astate
+    do_mem Constr.mk_gt_zero fieldname astate
 
   (* stolen from ThreadSafety *)
   module TSTF = ThreadSafety.TransferFunctions(CFG)
 
+  (* add or remove permissions from invariant *)
+  let hale mk_constr a =
+    Field.Map.fold
+      (fun f lvar acc ->
+         let v = Ident.mk () in
+         let cn = mk_constr v lvar (Field.Map.find f a.inv) in
+         acc |> State.add_fld f v |> State.add_constr cn
+      )
+      a.curr
+      { a with curr = Field.Map.empty }
+
   let do_sync pn args astate =
-    let mk_minus p q r = Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r)) in
-    let exhale = hale mk_minus in
-    let inhale = hale mk_add in
+    let exhale = hale Constr.mk_minus in
+    let inhale = hale Constr.mk_add in
     (* decide if a lock statement is about "this" *)
     let lock_effect_on_this pn args astate =
-      (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) IdentSet.pp astate.this_refs; *)
+      (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) Ident.Set.pp astate.this_refs; *)
       let this_arg = match args with
-        | (Exp.Var ident, _)::_ -> IdentSet.mem ident astate.this_refs
+        | (Exp.Var ident, _)::_ -> Ident.Set.mem ident astate.this_refs
         | _ -> false in
       if this_arg then TSTF.get_lock_model pn else TSTF.NoEffect in
     match lock_effect_on_this pn args astate with
     | TSTF.Lock ->     inhale astate
     | TSTF.Unlock ->   exhale astate
     | TSTF.NoEffect -> astate
-
 
   (* actual transfer function *)
   let exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -169,12 +181,13 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       when PatternMatch.is_subtype tenv tname classname ->
       do_load fieldname astate
     | Sil.Load (v,l,_,_) when Exp.is_this l ->
-      add_ref v astate
-    | Sil.Load (v,Exp.Var v',_,_) when IdentSet.mem v' astate.this_refs ->
-      add_ref v astate
-    | Sil.Load (v,_,_,_) -> remove_ref v astate
+      State.add_ref v astate
+    | Sil.Load (v,Exp.Var v',_,_) when Ident.Set.mem v' astate.this_refs ->
+      State.add_ref v astate
+    | Sil.Load (v,_,_,_) ->
+      State.remove_ref v astate
     | Sil.Remove_temps (idents, _) ->
-      IList.fold_left (fun a v -> remove_ref v a) astate idents
+      IList.fold_left (fun a v -> State.remove_ref v a) astate idents
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
@@ -199,17 +212,17 @@ let compute_and_store_post callback =
     match Tenv.lookup pdesc.ProcData.tenv (get_class pname) with
     | None -> assert false
     | Some { StructTyp.fields } ->
-      FieldSet.of_list (IList.map (fun (fld, _, _) -> fld) fields) in
+      Field.Set.of_list (IList.map (fun (fld, _, _) -> fld) fields) in
   let compute_post pdesc =
     let fields = get_fields callback.Callbacks.proc_name pdesc in
     let initial =
-      let m = FieldMap.mk fields in
-      { Domain.empty with pre = m; curr = m; inv = FieldMap.mk fields } in
+      let m = Field.Map.mk fields in
+      { State.empty with pre = m; curr = m; inv = Field.Map.mk fields } in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
     match Analyzer.compute_post ~initial pdata with
     | None -> None
     | Some a -> L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
-      Some (Summary.mk a) in
+      Some (Summary.of_state a) in
   Interprocedural.compute_and_store_post
     ~compute_post
     ~make_extras:ProcData.make_empty_extras
