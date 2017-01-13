@@ -332,7 +332,7 @@ let file_analysis _ _ get_proc_desc file_env =
         sums' in
     let constraints =
       Ident.Set.fold
-        (fun v a -> Constr.Set.add (Constr.mk_lb v) (Constr.Set.add (Constr.mk_ub v) a))
+        (fun v a -> a |> Constr.Set.add (Constr.mk_lb v) |> Constr.Set.add (Constr.mk_ub v))
         (Constr.Set.vars constraints)
         constraints in
     constraints in
@@ -346,6 +346,10 @@ let file_analysis _ _ get_proc_desc file_env =
     IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
     ignore (Unix.close_process (in_ch, out_ch)) in
   let analyse_class _ procs =
+    let procs =
+      IList.filter
+        (fun (_,tenv,_,pdesc) -> ThreadSafety.should_analyze_proc pdesc tenv)
+        procs in
     let summaries = IList.map summarise procs in
     let combinations = all_pairs summaries in
     let cases = IList.map process_case combinations in
