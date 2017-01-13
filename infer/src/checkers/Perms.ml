@@ -3,7 +3,8 @@ open! IStd
 (* TODO
    (increasing importance)
    - Interprocedural
-   - track breaking of soundness assumptions
+   - track breaking of soundness assumptions eg reentrancy
+   - static fields?
    - include only public methods in check
    - finish check of parallel compositions
 *)
@@ -13,6 +14,14 @@ open! PermsDomain
 let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
   | _ -> assert false
+
+module ClassMap =
+  PrettyPrintable.MakePPMap
+    (struct
+      include Typename
+      let pp_key = pp
+    end)
+
 
 module Summary = struct
   include Summary.Make (struct
@@ -32,29 +41,14 @@ module Summary = struct
       sum_constraints = constraints
     }
 
-(* create a list of substitutions from all inv variables of a list of summaries
-to the same targets *)
-  let mk_inv_thetas ss =
-    let vs =
-      Field.Map.fold
-        (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
-        ((IList.hd ss).sum_inv)
-        Field.Map.empty in
-    let mk s =
-      Field.Map.fold
-        (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
-        s.sum_inv
-        Ident.Map.empty in
-    IList.map mk ss
+  let subst theta { sum_pre; sum_inv; sum_constraints } =
+    {
+      sum_pre = Field.Map.map (Ident.subst theta) sum_pre;
+      sum_inv = Field.Map.map (Ident.subst theta) sum_inv;
+      sum_constraints = Constr.Set.map (Constr.subst theta) sum_constraints
+    }
 
-  let mk_pre_thetas thetas ss =
-    let mk_sum f =
-      let ps = IList.map (fun s -> Field.Map.find f s.sum_pre) ss in
-      let q = Ident.mk () in
-      Constr.mk_sum q ps in
-      ()
-
-  let par_compose s1 s2 =
+  (* let par_compose s1 s2 =
     assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_pre) ;
     assert (Field.Map.cardinal s1.sum_inv = Field.Map.cardinal s2.sum_inv) ;
     assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_inv) ;
@@ -111,7 +105,7 @@ to the same targets *)
       sum_inv = Field.Map.map (Ident.subst theta1) s1.sum_inv;
       (* add splitting constraints to the unioned result *)
       sum_constraints = consts;
-    }
+    } *)
 
   let pp fmt { sum_pre; sum_inv; sum_constraints } =
     F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_constraints=%a }"
@@ -119,10 +113,6 @@ to the same targets *)
       (Field.Map.pp ~pp_value:Ident.pp) sum_inv
       Constr.Set.pp sum_constraints
 
-  let to_z3 fmt s =
-    Ident.Set.to_z3 fmt (Constr.Set.vars s.sum_constraints) ;
-    Constr.Set.to_z3 fmt s.sum_constraints ;
-    F.fprintf fmt "(check-sat)@.(get-model)@."
 end
 
 
@@ -133,6 +123,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   type extras = ProcData.no_extras
 
   let do_mem mk_constr fieldname astate =
+    if not (Field.Map.mem fieldname astate.curr) then
+      L.out "%a not present in %a@." Field.pp fieldname State.pp astate;
     let fld_var = Field.Map.find fieldname astate.curr in
     State.add_constr (mk_constr fld_var) astate
   let do_store fieldname astate =
@@ -208,13 +200,13 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 (* compute the summary of a method *)
 let compute_and_store_post callback =
   (* retrieve the fields of a given class *)
-  let get_fields pname pdesc =
-    match Tenv.lookup pdesc.ProcData.tenv (get_class pname) with
+  let get_fields pdesc =
+    match Tenv.lookup pdesc.ProcData.tenv (get_class callback.Callbacks.proc_name) with
     | None -> assert false
     | Some { StructTyp.fields } ->
       Field.Set.of_list (IList.map (fun (fld, _, _) -> fld) fields) in
   let compute_post pdesc =
-    let fields = get_fields callback.Callbacks.proc_name pdesc in
+    let fields = get_fields pdesc in
     let initial =
       let m = Field.Map.mk fields in
       { State.empty with pre = m; curr = m; inv = Field.Map.mk fields } in
@@ -228,15 +220,15 @@ let compute_and_store_post callback =
     ~make_extras:ProcData.make_empty_extras
     callback
 
+(* compute all pairs (as lists) but disregarding order within the pair *)
 let all_pairs =
-  let pair a l = IList.map (fun b -> (a,b)) l in
   let rec aux = function
     | [] -> []
-    | (x::xs) as all -> (pair x all) @ (aux xs) in
+    | (x::xs) as all ->
+      let with_x = IList.map (fun y -> [x;y]) all in
+      with_x @ (aux xs) in
   aux
 
-module ClassMap =
-  Caml.Map.Make(struct type t = Typename.t let compare = Typename.compare end)
 
 let read_process_lines in_channel =
   let lines = ref [] in
@@ -250,12 +242,70 @@ let read_process_lines in_channel =
   end;
   List.rev !lines
 
+(* create a list of substitutions from all inv variables of a list of lists of summaries
+   to the same targets *)
+let mk_inv_thetas ss =
+  let vs =
+    Field.Map.fold
+      (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
+      ((IList.hd (IList.hd ss)).sum_inv)
+      Field.Map.empty in
+  let mk s =
+    Field.Map.fold
+      (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
+      s.sum_inv
+      Ident.Map.empty in
+  IList.map (IList.map mk) ss
+
+let extend_with_pres thetas ss =
+  let extend_with_pre theta sum =
+    Field.Map.fold
+      (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
+      sum.sum_pre
+      theta in
+  IList.map2 (IList.map2 extend_with_pre) thetas ss
+
+let extend_with_exists thetas ss =
+  let extend_with_exist theta sum =
+    let vars = Constr.Set.vars sum.sum_constraints in
+    let evars = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta)) vars in
+    Ident.Set.fold (fun v acc -> Ident.Map.add v (Ident.mk ()) acc) evars theta in
+  IList.map2 (IList.map2 extend_with_exist) thetas ss
+
+let apply_substs thetas ss =
+  IList.map2 (IList.map2 Summary.subst) thetas ss
+
+let add_splits_and_flatten sums =
+  let aux sums =
+    let s = IList.hd sums in
+    let new_pre = Field.Map.map (fun _ -> Ident.mk ()) s.sum_pre in
+    let constrs =
+      IList.fold_left
+        (fun acc s' -> Constr.Set.union s'.sum_constraints acc)
+        Constr.Set.empty
+        sums in
+    let constrs =
+      Field.Map.fold
+        (fun f v acc ->
+           let vs = IList.map (fun s' -> Field.Map.find f s'.sum_pre) sums in
+           let c = Constr.mk_sum v vs in
+           Constr.Set.add c acc
+        )
+        new_pre
+        constrs in
+    {
+      sum_inv = s.sum_inv;
+      sum_pre = new_pre;
+      sum_constraints = constrs
+    } in
+  IList.map aux sums
+
 let file_analysis _ _ get_proc_desc file_env =
-  let summarise (idenv, tenv, proc_name, proc_desc) =
+  let summarise ((idenv, tenv, proc_name, proc_desc) as p) =
     let callback =
       {Callbacks.get_proc_desc; get_procs_in_file = (fun _ -> []);
        idenv; tenv; proc_name; proc_desc} in
-    compute_and_store_post callback in
+    (p, compute_and_store_post callback) in
   let classmap =
     IList.fold_left
       (fun a ((_,_,pname,_) as p) ->
@@ -265,21 +315,39 @@ let file_analysis _ _ get_proc_desc file_env =
       )
       ClassMap.empty
       file_env in
-  let process_case (((_,_,p1,_),s1),((_,_,p2,_),s2)) = match s1,s2 with
-    | None, _ | _, None -> assert false
-    | Some sum1, Some sum2 ->
-      L.out "Analysing case (%a,%a)@." Procname.pp p1 Procname.pp p2 ;
-      L.out "Summary for %a = %a@." Procname.pp p1 Summary.pp sum1 ;
-      L.out "Summary for %a = %a@." Procname.pp p2 Summary.pp sum2 ;
-      let sum = Summary.par_compose sum1 sum2 in
-      L.out "Summary to convert: %a@." Summary.pp sum ;
-      let in_ch,out_ch = Unix.open_process "z3 -in" in
-      let fmt = F.formatter_of_out_channel out_ch in
-      F.fprintf fmt "%a@." Summary.to_z3 sum ;
-      Out_channel.close out_ch ;
-      IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
-      ignore (Unix.close_process (in_ch, out_ch)) in
+  let process_case = function
+    | [ ((_,_,p1,_), Some sum1); ((_,_,p2,_), Some sum2)] -> ([p1; p2], [sum1; sum2])
+    | _ -> assert false in
+  let merge cases =
+    let (_, summaries) = IList.split cases in
+    let thetas = mk_inv_thetas summaries in
+    let thetas = extend_with_pres thetas summaries in
+    let thetas = extend_with_exists thetas summaries in
+    let sums = apply_substs thetas summaries in
+    let sums' = add_splits_and_flatten sums in
+    let constraints =
+      IList.fold_left
+        (fun acc s -> Constr.Set.union s.sum_constraints acc)
+        Constr.Set.empty
+        sums' in
+    let constraints =
+      Ident.Set.fold
+        (fun v a -> Constr.Set.add (Constr.mk_lb v) (Constr.Set.add (Constr.mk_ub v) a))
+        (Constr.Set.vars constraints)
+        constraints in
+    constraints in
+  let run_check merged =
+    let in_ch,out_ch = Unix.open_process "z3 -in" in
+    let fmt = F.formatter_of_out_channel out_ch in
+    L.out "Passing to Z3:@.%a@." Constr.Set.pp merged ;
+    F.fprintf fmt "%a@." Constr.Set.to_z3 merged ;
+    Out_channel.close out_ch ;
+    IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
+    ignore (Unix.close_process (in_ch, out_ch)) in
   let analyse_class _ procs =
-    let summaries = IList.map (fun p -> (p, summarise p)) procs in
-    IList.iter process_case (all_pairs summaries) in
+    let summaries = IList.map summarise procs in
+    let combinations = all_pairs summaries in
+    let cases = IList.map process_case combinations in
+    let merged = merge cases in
+    run_check merged in
   ClassMap.iter analyse_class classmap

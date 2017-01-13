@@ -41,6 +41,8 @@ module Field = struct
     let pp_element = pp_key
   end
 
+  let pp = F.pp_element
+
   module Set = PrettyPrintable.MakePPSet(F)
 
   module Map = struct
@@ -121,6 +123,7 @@ module Constr = struct
       map (subst theta) c
 
     let to_z3 fmt c =
+      Ident.Set.to_z3 fmt (vars c) ;
       iter (F.fprintf fmt "(assert %a)@." to_z3) c
   end
 end
