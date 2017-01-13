@@ -153,7 +153,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     let lock_effect_on_this pn args astate =
       (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) Ident.Set.pp astate.this_refs; *)
       let this_arg = match args with
-        | (Exp.Var ident, _)::_ -> Ident.Set.mem ident astate.this_refs
+        | (l, _)::_ -> ExpSet.mem l astate.this_refs
         | _ -> false in
       if this_arg then TSTF.get_lock_model pn else TSTF.NoEffect in
     match lock_effect_on_this pn args astate with
@@ -164,22 +164,22 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   (* actual transfer function *)
   let exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
     let classname = get_class (Procdesc.get_proc_name pdesc) in
-    (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
+    L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, _)
-      when PatternMatch.is_subtype tenv tname classname ->
+      when PatternMatch.is_subtype tenv classname tname ->
       do_store fieldname astate
+    | Sil.Store (l', _, l, _) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
+      State.add_ref l' astate
     | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _)
-      when PatternMatch.is_subtype tenv tname classname ->
+      when PatternMatch.is_subtype tenv classname tname ->
       do_load fieldname astate
-    | Sil.Load (v,l,_,_) when Exp.is_this l ->
-      State.add_ref v astate
-    | Sil.Load (v,Exp.Var v',_,_) when Ident.Set.mem v' astate.this_refs ->
-      State.add_ref v astate
+    | Sil.Load (v,l,_,_) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
+      State.add_ref (Exp.Var v) astate
     | Sil.Load (v,_,_,_) ->
-      State.remove_ref v astate
+      State.remove_ref (Exp.Var v) astate
     | Sil.Remove_temps (idents, _) ->
-      IList.fold_left (fun a v -> State.remove_ref v a) astate idents
+      IList.fold_left (fun a v -> State.remove_ref (Exp.Var v) a) astate idents
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
@@ -341,6 +341,7 @@ let file_analysis _ _ get_proc_desc file_env =
     let fmt = F.formatter_of_out_channel out_ch in
     L.out "Passing to Z3:@.%a@." Constr.Set.pp merged ;
     F.fprintf fmt "%a@." Constr.Set.to_z3 merged ;
+    F.fprintf fmt "(check-sat)@.(get-model)@." ;
     Out_channel.close out_ch ;
     IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
     ignore (Unix.close_process (in_ch, out_ch)) in

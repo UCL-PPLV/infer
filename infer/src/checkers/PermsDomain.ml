@@ -128,7 +128,13 @@ module Constr = struct
   end
 end
 
-
+module ExpSet = struct
+  include PrettyPrintable.MakePPSet
+      (struct
+        include Exp
+        let pp_element = pp
+      end)
+end
 
 type perms_t = Ident.t Field.Map.t
 
@@ -144,7 +150,7 @@ type astate = {
   inv: perms_t;
 
   (* var ids that hold a reference to "this" object at this point *)
-  this_refs: Ident.Set.t;
+  this_refs: ExpSet.t;
 
   (* constraints abduced *)
   constraints: Constr.Set.t;
@@ -158,16 +164,16 @@ module State = struct
       pre = Field.Map.empty;
       curr = Field.Map.empty;
       inv = Field.Map.empty;
-      this_refs = Ident.Set.empty;
+      this_refs = ExpSet.empty;
       constraints = Constr.Set.empty;
     }
 
   let add_constr c a =
     { a with constraints = Constr.Set.add c a.constraints }
   let add_ref v a =
-    { a with this_refs = Ident.Set.add v a.this_refs }
+    { a with this_refs = ExpSet.add v a.this_refs }
   let remove_ref v a =
-    { a with this_refs = Ident.Set.remove v a.this_refs }
+    { a with this_refs = ExpSet.remove v a.this_refs }
   let add_fld f v a =
     { a with curr = Field.Map.add f v a.curr }
 
@@ -176,7 +182,7 @@ module State = struct
       (Field.Map.pp ~pp_value:Ident.pp) pre
       (Field.Map.pp ~pp_value:Ident.pp) inv
       (Field.Map.pp ~pp_value:Ident.pp) curr
-      Ident.Set.pp this_refs
+      ExpSet.pp this_refs
       Constr.Set.pp constraints
 end
 
@@ -216,7 +222,7 @@ module Domain = struct
       a1.curr
       { a1 with
         curr = Field.Map.empty;
-        this_refs = Ident.Set.inter a1.this_refs a2.this_refs;
+        this_refs = ExpSet.inter a1.this_refs a2.this_refs;
         (* FIXME following assumes disjointness of all vars except pre and inv *)
         constraints = Constr.Set.union a1.constraints a2.constraints;
       }
