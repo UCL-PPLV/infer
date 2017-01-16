@@ -26,7 +26,7 @@ module Ident = struct
 
   (* get a new fresh logical var id *)
   let mk () =
-    create_fresh Ident.knormal
+    create_fresh Ident.kprimed
 
   let subst theta v =
     if Map.mem v theta then Map.find v theta else v

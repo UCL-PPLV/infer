@@ -6,7 +6,6 @@ open! IStd
    - track breaking of soundness assumptions eg reentrancy
    - static fields?
    - include only public methods in check
-   - map values obtained by Z3 back to permissions
    - debug check of parallel compositions
 *)
 
@@ -48,65 +47,6 @@ module Summary = struct
       sum_inv = Field.Map.map (Ident.subst theta) sum_inv;
       sum_constraints = Constr.Set.map (Constr.subst theta) sum_constraints
     }
-
-  (* let par_compose s1 s2 =
-    assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_pre) ;
-    assert (Field.Map.cardinal s1.sum_inv = Field.Map.cardinal s2.sum_inv) ;
-    assert (Field.Map.cardinal s1.sum_pre = Field.Map.cardinal s2.sum_inv) ;
-    let new_pre = Field.Map.map (fun _ -> Ident.mk ()) s1.sum_pre in
-    let mk_theta m =
-      Field.Map.fold (fun _ v a -> Ident.Map.add v (Ident.mk ()) a) m Ident.Map.empty in
-    let extend_with_inv m1 m2 a =
-      Field.Map.fold
-        (fun f v (a1,a2) ->
-           let newv = Ident.mk () in
-           let a1' = Ident.Map.add v newv a1 in
-           let a2' = Ident.Map.add (Field.Map.find f m2) newv a2 in
-           (a1',a2'))
-        m1
-        a in
-    (* add constraints of the form x = x1 + x2, where x1/x2 are permissions *)
-    (* in the pre, for the premise of the frame rule *)
-    let add_splittings pre1 pre2 exps =
-      Field.Map.fold
-        (fun f v a ->
-           let v1, v2 = Field.Map.find f pre1, Field.Map.find f pre2 in
-           Constr.Set.add (Constr.mk_add v v1 v2) a
-        )
-        new_pre
-        exps in
-    (* create substitutions to distinct fresh variables for pre1 and pre2 *)
-    let theta1, theta2 = mk_theta s1.sum_pre, mk_theta s2.sum_pre in
-    (* extend substitutions with *shared* new fresh variables for inv1 and inv2 *)
-    (* this means that for the same field f, theta1[inv1[f]]==theta2[sum_inv2[f]] *)
-    let theta1, theta2 = extend_with_inv s1.sum_inv s2.sum_inv (theta1, theta2) in
-    (* get all variables used in constraints *)
-    let c1vars, c2vars = Constr.Set.vars s1.sum_constraints, Constr.Set.vars s1.sum_constraints in
-    (* compute all those that are not in theta[pre U inv] *)
-    let exist1 = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta1)) c1vars in
-    let exist2 = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta2)) c2vars in
-    (* extend substitutions with distinct fresh variables for the above vars *)
-    let add_fresh v a = Ident.Map.add v (Ident.mk ()) a in
-    let theta1 = Ident.Set.fold add_fresh exist1 theta1 in
-    let theta2 = Ident.Set.fold add_fresh exist2 theta2 in
-    (* perform substitutions on constraints *)
-    let c1 = Constr.Set.subst theta1 s1.sum_constraints in
-    let c2 = Constr.Set.subst theta2 s2.sum_constraints in
-    let pre1 = Field.Map.map (Ident.subst theta1) s1.sum_pre in
-    let pre2 = Field.Map.map (Ident.subst theta2) s2.sum_pre in
-    let consts = add_splittings pre1 pre2 (Constr.Set.union c1 c2) in
-    let consts =
-      Ident.Set.fold
-        (fun v a -> Constr.Set.add (Constr.mk_lb v) (Constr.Set.add (Constr.mk_ub v) a))
-        (Constr.Set.vars consts)
-        consts in
-    {
-      sum_pre = new_pre;
-      (* resulting inv is the image of either substitution *)
-      sum_inv = Field.Map.map (Ident.subst theta1) s1.sum_inv;
-      (* add splitting constraints to the unioned result *)
-      sum_constraints = consts;
-    } *)
 
   let pp fmt { sum_pre; sum_inv; sum_constraints } =
     F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_constraints=%a }"
@@ -200,6 +140,7 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 
 (* compute the summary of a method *)
 let compute_and_store_post callback =
+  L.out "Analyzing method %a@." Procname.pp callback.Callbacks.proc_name ;
   (* retrieve the fields of a given class *)
   let get_fields pdesc =
     match Tenv.lookup pdesc.ProcData.tenv (get_class callback.Callbacks.proc_name) with
@@ -242,6 +183,16 @@ let read_process_lines in_channel =
       ()
   end;
   List.rev !lines
+
+let parsevalues varmap =
+  let rec aux acc = function
+    | [] | [_] -> acc
+    | l1::l2::ls ->
+      let varstr = Scanf.sscanf l1 "  (define-fun %s () Real" (fun v -> v) in
+      let var = String.Map.find_exn varmap varstr in
+      let value = Scanf.sscanf l2 " %f" (fun v -> v) in
+      aux (Ident.Map.add var value acc) ls in
+  aux Ident.Map.empty
 
 (* create a list of substitutions from all inv variables of a list of lists of summaries
    to the same targets *)
@@ -333,25 +284,64 @@ let file_analysis _ _ get_proc_desc file_env =
         (fun acc s -> Constr.Set.union s.sum_constraints acc)
         Constr.Set.empty
         sums' in
+    (* be less redundant, if v>0 or v=1 is in, don't add v>=0 *)
+    let add_lb v a =
+      if Constr.Set.mem (Constr.mk_gt_zero v) a || Constr.Set.mem (Constr.mk_eq_one v) a
+      then
+        a
+      else
+        Constr.Set.add (Constr.mk_lb v) a in
+    (* be less redundant, if v=1 is in, don't add v<=1 *)
+    let add_ub v a =
+      if Constr.Set.mem (Constr.mk_eq_one v) a
+      then
+        a
+      else
+        Constr.Set.add (Constr.mk_ub v) a in
     let constraints =
       Ident.Set.fold
-        (fun v a -> a |> Constr.Set.add (Constr.mk_lb v) |> Constr.Set.add (Constr.mk_ub v))
+        (fun v a -> add_lb v a |> add_ub v)
         (Constr.Set.vars constraints)
         constraints in
     constraints in
   let run_check merged =
+    let map_of_vars vars =
+      let l = Ident.Set.fold (fun v a -> (Ident.to_string v, v)::a) vars [] in
+      let m = String.Map.of_alist_exn l in
+      m in
+    let varmap = map_of_vars (Constr.Set.vars merged) in
     let in_ch,out_ch = Unix.open_process "z3 -in" in
     let fmt = F.formatter_of_out_channel out_ch in
     L.out "Passing to Z3:@.%a@." Constr.Set.pp merged ;
+    (* ask for a satisfying model if sat *)
+    F.fprintf fmt "(set-option :dump-models true)@." ;
+    (* request decimals, not fractions, may append "?" if imprecise *)
+    F.fprintf fmt "(set-option :pp.decimal true)@." ;
     F.fprintf fmt "%a@." Constr.Set.to_z3 merged ;
-    F.fprintf fmt "(check-sat)@.(get-model)@." ;
+    F.fprintf fmt "(check-sat)@." ;
+    (* need to close out_ch before reading z3's output, for reasons *)
     Out_channel.close out_ch ;
-    IList.iter (L.out "Z3 says: %s@.") (read_process_lines in_ch) ;
-    ignore (Unix.close_process (in_ch, out_ch)) in
+    let z3_output = read_process_lines in_ch in
+    (* kill z3 *)
+    ignore (Unix.close_process (in_ch, out_ch)) ;
+    let status, z3_output = IList.hd z3_output, IList.tl z3_output in
+    if String.equal status "sat"
+    then
+      begin
+        (* drop first "(model" line and parse values *)
+        let z3_output = IList.tl z3_output in
+        let model = parsevalues varmap z3_output in
+        L.out "Z3 model: %a@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
+      end
+    else
+      L.out "Z3 says: unsat@." in
   let analyse_class _ procs =
     let procs =
       IList.filter
-        (fun (_,tenv,_,pdesc) -> ThreadSafety.should_analyze_proc pdesc tenv)
+        (fun ((_,tenv,_,pdesc) as p) ->
+          ThreadSafety.should_analyze_proc pdesc tenv
+          &&
+          ThreadSafety.should_report_on_proc p)
         procs in
     let summaries = IList.map summarise procs in
     let combinations = all_pairs summaries in
