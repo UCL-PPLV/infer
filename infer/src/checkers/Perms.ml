@@ -6,7 +6,8 @@ open! IStd
    - track breaking of soundness assumptions eg reentrancy
    - static fields?
    - include only public methods in check
-   - finish check of parallel compositions
+   - map values obtained by Z3 back to permissions
+   - debug check of parallel compositions
 *)
 
 open! PermsDomain
@@ -288,7 +289,9 @@ let add_splits_and_flatten sums =
       Field.Map.fold
         (fun f v acc ->
            let vs = IList.map (fun s' -> Field.Map.find f s'.sum_pre) sums in
-           let c = Constr.mk_sum v vs in
+           (* add all pre variables plus the resource invariant *)
+           let i = Field.Map.find f s.sum_inv in
+           let c = Constr.mk_sum v (i::vs) in
            Constr.Set.add c acc
         )
         new_pre
