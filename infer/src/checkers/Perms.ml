@@ -172,28 +172,6 @@ let all_pairs =
   aux
 
 
-let read_process_lines in_channel =
-  let lines = ref [] in
-  begin
-    try
-      while true do
-        lines := input_line in_channel :: !lines
-      done;
-    with End_of_file ->
-      ()
-  end;
-  List.rev !lines
-
-let parsevalues varmap =
-  let rec aux acc = function
-    | [] | [_] -> acc
-    | l1::l2::ls ->
-      let varstr = Scanf.sscanf l1 "  (define-fun %s () Real" (fun v -> v) in
-      let var = String.Map.find_exn varmap varstr in
-      let value = Scanf.sscanf l2 " %f" (fun v -> v) in
-      aux (Ident.Map.add var value acc) ls in
-  aux Ident.Map.empty
-
 (* create a list of substitutions from all inv variables of a list of lists of summaries
    to the same targets *)
 let mk_inv_thetas ss =
@@ -255,25 +233,29 @@ let add_splits_and_flatten sums =
   IList.map aux sums
 
 let file_analysis _ _ get_proc_desc file_env =
+  (* outsource checks for ctrs/public etc to ThreadSafety *)
+  let should_analyze ((_,tenv,_,pdesc) as p) =
+    ThreadSafety.should_analyze_proc pdesc tenv && ThreadSafety.should_report_on_proc p
+  in
+
+  (* run actual analysis, remembering proc info *)
   let summarise ((idenv, tenv, proc_name, proc_desc) as p) =
     let callback =
       {Callbacks.get_proc_desc; get_procs_in_file = (fun _ -> []);
        idenv; tenv; proc_name; proc_desc} in
-    (p, compute_and_store_post callback) in
-  let classmap =
-    IList.fold_left
-      (fun a ((_,_,pname,_) as p) ->
-         let c = get_class pname in
-         let procs = try ClassMap.find c a with Not_found -> [] in
-         ClassMap.add c (p::procs) a
-      )
-      ClassMap.empty
-      file_env in
+    (p, compute_and_store_post callback)
+  in
+
+  (* combine list of summaries of methods called in parallel,
+     currently expects a pair of summaries as we only consider two threads --
+    this is meant to be generalised in the future to n threads *)
   let process_case = function
     | [ ((_,_,p1,_), Some sum1); ((_,_,p2,_), Some sum2)] -> ([p1; p2], [sum1; sum2])
-    | _ -> assert false in
-  let merge cases =
-    let (_, summaries) = IList.split cases in
+    | _ -> assert false
+  in
+  
+  (* take a list of (proc info, summary) pairs *)
+  let merge (_, summaries) =
     let thetas = mk_inv_thetas summaries in
     let thetas = extend_with_pres thetas summaries in
     let thetas = extend_with_exists thetas summaries in
@@ -284,32 +266,25 @@ let file_analysis _ _ get_proc_desc file_env =
         (fun acc s -> Constr.Set.union s.sum_constraints acc)
         Constr.Set.empty
         sums' in
-    (* be less redundant, if v>0 or v=1 is in, don't add v>=0 *)
-    let add_lb v a =
-      if Constr.Set.mem (Constr.mk_gt_zero v) a || Constr.Set.mem (Constr.mk_eq_one v) a
-      then
-        a
-      else
-        Constr.Set.add (Constr.mk_lb v) a in
-    (* be less redundant, if v=1 is in, don't add v<=1 *)
-    let add_ub v a =
-      if Constr.Set.mem (Constr.mk_eq_one v) a
-      then
-        a
-      else
-        Constr.Set.add (Constr.mk_ub v) a in
-    let constraints =
-      Ident.Set.fold
-        (fun v a -> add_lb v a |> add_ub v)
-        (Constr.Set.vars constraints)
-        constraints in
-    constraints in
-  let run_check merged =
-    let map_of_vars vars =
-      let l = Ident.Set.fold (fun v a -> (Ident.to_string v, v)::a) vars [] in
-      let m = String.Map.of_alist_exn l in
-      m in
-    let varmap = map_of_vars (Constr.Set.vars merged) in
+    Ident.Set.fold
+      (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
+      (Constr.Set.vars constraints)
+      constraints
+  in
+
+  (* run z3 on a set of constraints
+     and return the output as a list of strings/lines *)
+  let run_z3 merged =
+    let read_process_lines in_channel =
+      let rec aux acc =
+        let inp = try Some (input_line in_channel) with End_of_file -> None in
+        match inp with
+        | None -> acc
+        | Some l -> aux (l::acc)
+      in
+      IList.rev (aux [])
+    in
+
     let in_ch,out_ch = Unix.open_process "z3 -in" in
     let fmt = F.formatter_of_out_channel out_ch in
     L.out "Passing to Z3:@.%a@." Constr.Set.pp merged ;
@@ -321,31 +296,55 @@ let file_analysis _ _ get_proc_desc file_env =
     F.fprintf fmt "(check-sat)@." ;
     (* need to close out_ch before reading z3's output, for reasons *)
     Out_channel.close out_ch ;
-    let z3_output = read_process_lines in_ch in
+    let output = read_process_lines in_ch in
     (* kill z3 *)
     ignore (Unix.close_process (in_ch, out_ch)) ;
-    let status, z3_output = IList.hd z3_output, IList.tl z3_output in
-    if String.equal status "sat"
-    then
+    output
+  in
+
+  let run_check merged =
+    (* parse a z3 model (without the enclosing braces and model statement) *)
+    let parse_z3_model varmap =
+      let rec aux acc = function
+        | [] | [_] -> acc
+        | l1::l2::ls ->
+          let varstr = Scanf.sscanf l1 "  (define-fun %s () Real" (fun v -> v) in
+          let var = String.Map.find_exn varmap varstr in
+          let value = Scanf.sscanf l2 " %f" (fun v -> v) in
+          aux (Ident.Map.add var value acc) ls in
+      aux Ident.Map.empty
+    in
+
+    match run_z3 merged with
+    | "unsat" :: _ ->
+      L.out "Z3 says: unsat@."
+    | "sat" :: _ :: output -> (* drop first "(model" line as _ *)
       begin
-        (* drop first "(model" line and parse values *)
-        let z3_output = IList.tl z3_output in
-        let model = parsevalues varmap z3_output in
+        let varmap = Ident.Set.mk_string_map (Constr.Set.vars merged) in
+        let model = parse_z3_model varmap output in
         L.out "Z3 model: %a@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
       end
-    else
-      L.out "Z3 says: unsat@." in
+    | _ -> assert false
+  in
+
+  let classmap =
+    IList.fold_left
+      (fun a ((_,_,pname,_) as p) ->
+         let c = get_class pname in
+         let procs = try ClassMap.find c a with Not_found -> [] in
+         ClassMap.add c (p::procs) a
+      )
+      ClassMap.empty
+      file_env
+  in
+
   let analyse_class _ procs =
-    let procs =
-      IList.filter
-        (fun ((_,tenv,_,pdesc) as p) ->
-          ThreadSafety.should_analyze_proc pdesc tenv
-          &&
-          ThreadSafety.should_report_on_proc p)
-        procs in
-    let summaries = IList.map summarise procs in
-    let combinations = all_pairs summaries in
-    let cases = IList.map process_case combinations in
-    let merged = merge cases in
-    run_check merged in
+    IList.filter should_analyze procs |>
+    IList.map summarise |>
+    all_pairs |>
+    IList.map process_case |>
+    IList.split |>
+    merge |>
+    run_check
+  in
   ClassMap.iter analyse_class classmap

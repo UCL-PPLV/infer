@@ -20,6 +20,13 @@ module Ident = struct
     include PrettyPrintable.MakePPSet(I)
     let to_z3 fmt s =
       iter (F.fprintf fmt "(declare-const %a Real)@." to_z3) s
+
+    (* make a map from the names of variables in the set to the variables *)
+    let mk_string_map vars =
+      let l = fold (fun v a -> (I.to_string v, v)::a) vars [] in
+      let m = String.Map.of_alist_exn l in
+      m
+
   end
 
   module Map = PrettyPrintable.MakePPMap(I)
