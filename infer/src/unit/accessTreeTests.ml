@@ -441,11 +441,11 @@ let tests =
         (ap, trace) :: acc in
       let ap_traces = Domain.fold collect_ap_traces tree [] in
       let has_ap_trace_pair ap_in trace_in =
-        IList.exists
-          (fun (ap, trace) -> AccessPath.equal ap ap_in && MockTraceDomain.equal trace trace_in)
+        List.exists
+          ~f:(fun (ap, trace) -> AccessPath.equal ap ap_in && MockTraceDomain.equal trace trace_in)
           ap_traces in
 
-      assert_bool "Should have six ap/trace pairs" (IList.length ap_traces = 6);
+      assert_bool "Should have six ap/trace pairs" (Int.equal (IList.length ap_traces) 6);
       assert_bool "has x pair" (has_ap_trace_pair x x_trace);
       assert_bool "has xF pair" (has_ap_trace_pair xF xF_trace);
       assert_bool "has xFG pair" (has_ap_trace_pair xFG xFG_trace);

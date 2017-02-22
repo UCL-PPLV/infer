@@ -9,6 +9,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 (** mutate the cfg/cg to add dynamic dispatch handling *)
 let add_dispatch_calls pdesc cg tenv =
@@ -22,13 +23,13 @@ let add_dispatch_calls pdesc cg tenv =
       | Sil.Call (_, _, _, _, call_flags) -> call_flags_is_dispatch call_flags
       | _ -> false in
     let has_dispatch_call instrs =
-      IList.exists instr_is_dispatch_call instrs in
+      List.exists ~f:instr_is_dispatch_call instrs in
     let replace_dispatch_calls = function
       | Sil.Call (ret_id, (Exp.Const (Const.Cfun callee_pname) as call_exp),
                   (((_, receiver_typ) :: _) as args), loc, call_flags) as instr
         when call_flags_is_dispatch call_flags ->
           (* the frontend should not populate the list of targets *)
-          assert (call_flags.CallFlags.cf_targets = []);
+          assert (List.is_empty call_flags.CallFlags.cf_targets);
           let receiver_typ_no_ptr = match receiver_typ with
             | Typ.Tptr (typ', _) ->
                 typ'
@@ -70,7 +71,7 @@ let add_abstraction_instructions pdesc =
       | Node.Exit_node _ -> true
       | _ -> false in
     let succ_nodes = Node.get_succs node in
-    if IList.exists is_exit succ_nodes then true
+    if List.exists ~f:is_exit succ_nodes then true
     else match succ_nodes with
       | [] -> false
       | [h] -> IList.length (Node.get_preds h) > 1
@@ -92,11 +93,7 @@ let add_abstraction_instructions pdesc =
 
 module BackwardCfg = ProcCfg.OneInstrPerNode(ProcCfg.Backward(ProcCfg.Exceptional))
 
-module LivenessAnalysis =
-  AbstractInterpreter.Make
-    (BackwardCfg)
-    (Scheduler.ReversePostorder)
-    (Liveness.TransferFunctions)
+module LivenessAnalysis = AbstractInterpreter.Make (BackwardCfg) (Liveness.TransferFunctions)
 
 module VarDomain = AbstractDomain.FiniteSet(Var.Set)
 
@@ -115,7 +112,7 @@ module NullifyTransferFunctions = struct
   type extras = LivenessAnalysis.invariant_map
 
   let postprocess ((reaching_defs, _) as astate) node { ProcData.extras; } =
-    let node_id =  (CFG.underlying_id node), ProcCfg.Node_index in
+    let node_id = Procdesc.Node.get_id (CFG.underlying_node node), ProcCfg.Node_index in
     match LivenessAnalysis.extract_state node_id extras with
     (* note: because the analysis is backward, post and pre are reversed *)
     | Some { AbstractInterpreter.post = live_before; pre = live_after; } ->
@@ -124,7 +121,7 @@ module NullifyTransferFunctions = struct
         (reaching_defs', to_nullify)
     | None -> astate
 
-  let cache_node = ref (Procdesc.Node.dummy ())
+  let cache_node = ref (Procdesc.Node.dummy None)
   let cache_instr = ref Sil.skip_instr
 
   let last_instr_in_node node =
@@ -215,7 +212,7 @@ let add_nullify_instrs pdesc tenv liveness_inv_map =
   let node_add_nullify_instructions node pvars =
     let loc = Procdesc.Node.get_last_loc node in
     let nullify_instrs =
-      IList.filter is_local pvars
+      List.filter ~f:is_local pvars
       |> IList.map (fun pvar -> Sil.Nullify (pvar, loc)) in
     if nullify_instrs <> []
     then Procdesc.Node.append_instrs node (IList.rev nullify_instrs) in
@@ -253,10 +250,7 @@ let add_nullify_instrs pdesc tenv liveness_inv_map =
 module ExceptionalOneInstrPerNodeCfg = ProcCfg.OneInstrPerNode(ProcCfg.Exceptional)
 
 module CopyProp =
-  AbstractInterpreter.Make
-    (ExceptionalOneInstrPerNodeCfg)
-    (Scheduler.ReversePostorder)
-    (CopyPropagation.TransferFunctions)
+  AbstractInterpreter.Make (ExceptionalOneInstrPerNodeCfg) (CopyPropagation.TransferFunctions)
 
 let do_copy_propagation pdesc tenv =
   let proc_cfg = ExceptionalOneInstrPerNodeCfg.from_pdesc pdesc in
@@ -280,20 +274,20 @@ let do_copy_propagation pdesc tenv =
 
   (* perform copy-propagation on each instruction in [node] *)
   let rev_transform_node_instrs node =
-    IList.fold_left
-      (fun (instrs, changed) (instr, id_opt) ->
-         match id_opt with
-         | Some id ->
-             begin
-               match CopyProp.extract_pre id copy_prop_inv_map with
-               | Some pre when not (CopyPropagation.Domain.is_empty pre) ->
-                   let instr' = Sil.instr_sub_ids ~sub_id_binders:false (id_sub pre) instr in
-                   instr' :: instrs, changed || not (phys_equal instr' instr)
-               | _ ->
-                   instr :: instrs, changed
-             end
-         | None -> instr :: instrs, changed)
-      ([], false)
+    List.fold
+      ~f:(fun (instrs, changed) (instr, id_opt) ->
+          match id_opt with
+          | Some id ->
+              begin
+                match CopyProp.extract_pre id copy_prop_inv_map with
+                | Some pre when not (CopyPropagation.Domain.is_empty pre) ->
+                    let instr' = Sil.instr_sub_ids ~sub_id_binders:false (id_sub pre) instr in
+                    instr' :: instrs, changed || not (phys_equal instr' instr)
+                | _ ->
+                    instr :: instrs, changed
+              end
+          | None -> instr :: instrs, changed)
+      ~init:([], false)
       (ExceptionalOneInstrPerNodeCfg.instr_ids node) in
 
   IList.iter

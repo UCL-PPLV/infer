@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -114,9 +111,8 @@ let fld_typ lookup::lookup default::default fn (typ: Typ.t) =>
   | Tstruct name =>
     switch (lookup name) {
     | Some {fields} =>
-      try (snd3 (IList.find (fun (f, _, _) => Ident.equal_fieldname f fn) fields)) {
-      | Not_found => default
-      }
+      List.find f::(fun (f, _, _) => Ident.equal_fieldname f fn) fields |>
+      Option.value_map f::snd3 default::default
     | None => default
     }
   | _ => default
@@ -128,13 +124,8 @@ let get_field_type_and_annotation lookup::lookup fn (typ: Typ.t) =>
   | Tptr (Tstruct name) _ =>
     switch (lookup name) {
     | Some {fields, statics} =>
-      try {
-        let (_, t, a) =
-          IList.find (fun (f, _, _) => Ident.equal_fieldname f fn) (fields @ statics);
-        Some (t, a)
-      } {
-      | Not_found => None
-      }
+      List.find_map
+        f::(fun (f, t, a) => Ident.equal_fieldname f fn ? Some (t, a) : None) (fields @ statics)
     | None => None
     }
   | _ => None
@@ -147,4 +138,4 @@ let objc_ref_counter_annot = [({Annot.class_name: "ref_counter", parameters: []}
 let objc_ref_counter_field = (Ident.fieldname_hidden, Typ.Tint IInt, objc_ref_counter_annot);
 
 let is_objc_ref_counter_field (fld, _, a) =>
-  Ident.fieldname_is_hidden fld && Annot.Item.compare a objc_ref_counter_annot == 0;
+  Ident.fieldname_is_hidden fld && Annot.Item.equal a objc_ref_counter_annot;

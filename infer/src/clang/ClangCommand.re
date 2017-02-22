@@ -32,8 +32,8 @@ let plugin_name = "BiniouASTExporter";
 let infer_cxx_models = Config.cxx;
 
 let value_of_argv_option argv opt_name =>
-  IList.fold_left
-    (
+  List.fold
+    f::(
       fun (prev_arg, result) arg => {
         let result' =
           if (Option.is_some result) {
@@ -46,12 +46,12 @@ let value_of_argv_option argv opt_name =>
         (arg, result')
       }
     )
-    ("", None)
+    init::("", None)
     argv |> snd;
 
 let value_of_option {orig_argv} => value_of_argv_option orig_argv;
 
-let has_flag {orig_argv} flag => IList.exists (String.equal flag) orig_argv;
+let has_flag {orig_argv} flag => List.exists f::(String.equal flag) orig_argv;
 
 let can_attach_ast_exporter cmd =>
   has_flag cmd "-cc1" && (
@@ -89,6 +89,17 @@ let clang_cc1_cmd_sanitizer cmd => {
       "armv7"
       /* replace armv7k arch with armv7 */
     } else if (
+      String.is_suffix arg suffix::"dep.tmp"
+    ) {
+      /* compilation-database Buck integration produces path to `dep.tmp` file that doesn't exist. Create it */
+      Unix.mkdir_p (Filename.dirname arg);
+      arg
+    } else if (
+      String.equal option "-dependency-file" && Option.is_some Config.buck_compilation_database
+      /* In compilation database mode, dependency files are not assumed to exist */
+    ) {
+      "/dev/null"
+    } else if (
       String.equal option "-isystem"
     ) {
       switch Config.clang_include_to_override {
@@ -111,7 +122,7 @@ let clang_cc1_cmd_sanitizer cmd => {
     | [] =>
       /* return non-reversed list */
       IList.rev (post_args_rev @ res_rev)
-    | [flag, ...tl] when IList.mem String.equal flag flags_blacklist =>
+    | [flag, ...tl] when List.mem equal::String.equal flags_blacklist flag =>
       filter_unsupported_args_and_swap_includes (flag, res_rev) tl
     | [arg, ...tl] => {
         let res_rev' = [replace_option_arg prev arg, ...res_rev];

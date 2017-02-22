@@ -8,6 +8,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 (** Module for function to retrieve the location (file, line, etc) of instructions *)
 
@@ -23,8 +24,8 @@ let source_file_in_project source_file =
   let file_in_project = SourceFile.is_under_project_root source_file in
   let rel_source_file = SourceFile.to_string source_file in
   let file_should_be_skipped =
-    IList.exists
-      (fun path -> String.is_prefix ~prefix:path rel_source_file)
+    List.exists
+      ~f:(fun path -> String.is_prefix ~prefix:path rel_source_file)
       Config.skip_translation_headers in
   file_in_project && not (file_should_be_skipped)
 
@@ -72,10 +73,10 @@ let should_translate_lib trans_unit_ctx source_range decl_trans_context ~transla
   || should_translate trans_unit_ctx source_range decl_trans_context ~translate_when_used
 
 let is_file_blacklisted file =
-  let paths = Config.skip_clang_analysis_in_path in
+  let paths = Config.skip_analysis_in_path in
   let is_file_blacklisted =
-    IList.exists
-      (fun path -> Str.string_match (Str.regexp ("^.*/" ^ path)) file 0)
+    List.exists
+      ~f:(fun path -> Str.string_match (Str.regexp ("^.*/" ^ path)) file 0)
       paths in
   is_file_blacklisted
 

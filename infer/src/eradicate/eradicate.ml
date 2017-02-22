@@ -78,7 +78,10 @@ struct
       TypeState.add pvar (typ, ta, []) typestate in
     let get_initial_typestate () =
       let typestate_empty = TypeState.empty Extension.ext in
-      IList.fold_left add_formal typestate_empty annotated_signature.Annotations.params in
+      List.fold
+        ~f:add_formal
+        ~init:typestate_empty
+        annotated_signature.AnnotatedSignature.params in
 
     (* Check the nullable flag computed for the return value and report inconsistencies. *)
     let check_return find_canonical_duplicate exit_node final_typestate ret_ia ret_type loc : unit =
@@ -107,7 +110,7 @@ struct
 
     let do_after_dataflow find_canonical_duplicate final_typestate =
       let exit_node = Procdesc.get_exit_node curr_pdesc in
-      let ia, ret_type = annotated_signature.Annotations.ret in
+      let ia, ret_type = annotated_signature.AnnotatedSignature.ret in
       check_return find_canonical_duplicate exit_node final_typestate ia ret_type proc_loc in
 
     let module DFTypeCheck = MakeDF(struct
@@ -115,18 +118,24 @@ struct
         let equal = TypeState.equal
         let join = TypeState.join Extension.ext
         let do_node tenv node typestate =
+          NodePrinter.start_session node;
           State.set_node node;
           let typestates_succ, typestates_exn =
             TypeCheck.typecheck_node
               tenv Extension.ext calls_this checks idenv get_proc_desc curr_pname curr_pdesc
               find_canonical_duplicate annotated_signature typestate node linereader in
-          if Config.eradicate_trace then
-            IList.iter (fun typestate_succ ->
-                L.stdout
-                  "Typestate After Node %a@\n%a@."
-                  Procdesc.Node.pp node
-                  (TypeState.pp Extension.ext) typestate_succ)
-              typestates_succ;
+
+          if Config.write_html then
+            begin
+              let d_typestate ts =
+                L.d_strln (F.asprintf "%a" (TypeState.pp Extension.ext) ts) in
+              L.d_strln "before:";
+              d_typestate typestate;
+              L.d_strln "after:";
+              IList.iter d_typestate typestates_succ
+            end;
+
+          NodePrinter.finish_session node;
           typestates_succ, typestates_exn
         let proc_throws _ = DontKnow
       end) in
@@ -183,6 +192,8 @@ struct
     let module Initializers = struct
       type init = Procname.t * Procdesc.t
 
+      let equal_class_opt = [%compare.equal : string option]
+
       let final_typestates initializers_current_class =
         (* Get the private methods, from the same class, directly called by the initializers. *)
         let get_private_called (initializers : init list) : init list =
@@ -190,14 +201,14 @@ struct
           let do_proc (init_pn, init_pd) =
             let filter callee_pn callee_attributes =
               let is_private =
-                callee_attributes.ProcAttributes.access = PredSymb.Private in
+                PredSymb.equal_access callee_attributes.ProcAttributes.access PredSymb.Private in
               let same_class =
                 let get_class_opt pn = match pn with
                   | Procname.Java pn_java ->
                       Some (Procname.java_get_class_name pn_java)
                   | _ ->
                       None in
-                get_class_opt init_pn = get_class_opt callee_pn in
+                equal_class_opt (get_class_opt init_pn) (get_class_opt callee_pn) in
               is_private && same_class in
             let private_called = PatternMatch.proc_calls
                 Specs.proc_resolve_attributes init_pd filter in
@@ -224,7 +235,7 @@ struct
           let rec fixpoint initializers_old =
             let initializers_new = get_private_called initializers_old in
             let initializers_new' =
-              IList.filter (fun (pn, _) -> not (Procname.Set.mem pn !seen)) initializers_new in
+              List.filter ~f:(fun (pn, _) -> not (Procname.Set.mem pn !seen)) initializers_new in
             mark_seen initializers_new';
             if initializers_new' <> [] then fixpoint initializers_new' in
 
@@ -268,13 +279,13 @@ struct
           let is_initializer proc_attributes =
             PatternMatch.method_is_initializer tenv proc_attributes ||
             let ia, _ =
-              (Models.get_modelled_annotated_signature proc_attributes).Annotations.ret in
+              (Models.get_modelled_annotated_signature proc_attributes).AnnotatedSignature.ret in
             Annotations.ia_is_initializer ia in
           let initializers_current_class =
             pname_and_pdescs_with
               (function (pname, proc_attributes) ->
                  is_initializer proc_attributes &&
-                 get_class pname = get_class curr_pname) in
+                 equal_class_opt (get_class pname) (get_class curr_pname)) in
           final_typestates
             ((curr_pname, curr_pdesc) :: initializers_current_class)
         end
@@ -286,7 +297,7 @@ struct
             pname_and_pdescs_with
               (fun (pname, _) ->
                  Procname.is_constructor pname &&
-                 get_class pname = get_class curr_pname) in
+                 equal_class_opt (get_class pname) (get_class curr_pname)) in
           final_typestates constructors_current_class
         end
 
@@ -349,9 +360,7 @@ struct
         let loc = Procdesc.get_loc proc_desc in
         let linereader = Printer.LineReader.create () in
         if Config.eradicate_verbose then
-          L.stdout "%a@."
-            (Annotations.pp_annotated_signature proc_name)
-            annotated_signature;
+          L.stdout "%a@." (AnnotatedSignature.pp proc_name) annotated_signature;
 
         callback2
           calls_this checks callback_args annotated_signature linereader loc

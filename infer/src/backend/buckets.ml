@@ -43,7 +43,7 @@ let check_nested_loop path pos_opt =
   let f level p _ _ = match Paths.Path.curr_node p  with
     | Some node ->
         do_any_node level node;
-        if level = 0 then do_node_caller node
+        if Int.equal level 0 then do_node_caller node
     | None ->
         () in
   Paths.Path.iter_shortest_sequence f pos_opt path;
@@ -62,12 +62,12 @@ let check_access access_opt de_opt =
       let formal_names = IList.map fst formals in
       let is_formal pvar =
         let name = Pvar.get_name pvar in
-        IList.exists (Mangled.equal name) formal_names in
+        List.exists ~f:(Mangled.equal name) formal_names in
       let formal_ids = ref [] in
       let process_formal_letref = function
         | Sil.Load (id, Exp.Lvar pvar, _, _) ->
             let is_java_this =
-              !Config.curr_language = Config.Java && Pvar.is_this pvar in
+              Config.curr_language_is Config.Java && Pvar.is_this pvar in
             if not is_java_this && is_formal pvar then formal_ids := id :: !formal_ids
         | _ -> () in
       IList.iter process_formal_letref node_instrs;
@@ -90,17 +90,18 @@ let check_access access_opt de_opt =
         | Sil.Call (_, _, etl, _, _) ->
             let formal_ids = find_formal_ids node in
             let arg_is_formal_param (e, _) = match e with
-              | Exp.Var id -> IList.exists (Ident.equal id) formal_ids
+              | Exp.Var id -> List.exists ~f:(Ident.equal id) formal_ids
               | _ -> false in
-            if IList.exists arg_is_formal_param etl then formal_param_used_in_call := true;
+            if List.exists ~f:arg_is_formal_param etl then formal_param_used_in_call := true;
             true
         | Sil.Store (_, _, e, _) ->
             exp_is_null e
         | _ -> false in
-      IList.exists filter (Procdesc.Node.get_instrs node) in
+      List.exists ~f:filter (Procdesc.Node.get_instrs node) in
     let local_access_found = ref false in
     let do_node node =
-      if (Procdesc.Node.get_loc node).Location.line = line_number && has_call_or_sets_null node then
+      if Int.equal (Procdesc.Node.get_loc node).Location.line line_number &&
+         has_call_or_sets_null node then
         begin
           local_access_found := true
         end in

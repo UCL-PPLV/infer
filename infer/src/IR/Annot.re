@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -26,14 +23,18 @@ type t = {
 }
 [@@deriving compare];
 
+let volatile = {class_name: "volatile", parameters: []};
+
 
 /** Pretty print an annotation. */
-let pp fmt annotation => F.fprintf fmt "@@%s" annotation.class_name;
+let prefix = Config.curr_language_is Config.Java ? "@" : "_";
+
+let pp fmt annotation => F.fprintf fmt "%s%s" prefix annotation.class_name;
 
 let module Map = PrettyPrintable.MakePPMap {
   type nonrec t = t;
   let compare = compare;
-  let pp_key = pp;
+  let pp = pp;
 };
 
 let module Item = {
@@ -43,6 +44,7 @@ let module Item = {
   /* type nonrec t = list (t, bool) [@@deriving compare]; */
   type _t = list (t, bool) [@@deriving compare];
   type t = _t [@@deriving compare];
+  let equal = [%compare.equal : t];
 
   /** Pretty print an item annotation. */
   let pp fmt ann => {
@@ -58,7 +60,7 @@ let module Item = {
   let empty = [];
 
   /** Check if the item annodation is empty. */
-  let is_empty ia => ia == [];
+  let is_empty ia => List.is_empty ia;
 };
 
 let module Class = {

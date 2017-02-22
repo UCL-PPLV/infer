@@ -33,7 +33,7 @@ let sigma_rewrite tenv p r : Prop.normal Prop.t option =
       else
         let res_pi = r.r_new_pi p p_leftover sub in
         let res_sigma = Prop.sigma_sub sub r.r_new_sigma in
-        let p_with_res_pi = IList.fold_left (Prop.prop_atom_and tenv) p_leftover res_pi in
+        let p_with_res_pi = List.fold ~f:(Prop.prop_atom_and tenv) ~init:p_leftover res_pi in
         let p_new = Prop.prop_sigma_star p_with_res_pi res_sigma in
         Some (Prop.normalize tenv p_new)
 
@@ -65,19 +65,19 @@ let create_fresh_primeds_ls para =
 
 let create_condition_ls ids_private id_base p_leftover (inst: Sil.subst) =
   let (insts_of_private_ids, insts_of_public_ids, inst_of_base) =
-    let f id' = IList.exists (fun id'' -> Ident.equal id' id'') ids_private in
+    let f id' = List.exists ~f:(fun id'' -> Ident.equal id' id'') ids_private in
     let (inst_private, inst_public) = Sil.sub_domain_partition f inst in
     let insts_of_public_ids = Sil.sub_range inst_public in
     let inst_of_base = try Sil.sub_find (Ident.equal id_base) inst_public with Not_found -> assert false in
     let insts_of_private_ids = Sil.sub_range inst_private in
     (insts_of_private_ids, insts_of_public_ids, inst_of_base) in
-  let fav_insts_of_public_ids = IList.flatten (IList.map Sil.exp_fav_list insts_of_public_ids) in
-  let fav_insts_of_private_ids = IList.flatten (IList.map Sil.exp_fav_list insts_of_private_ids) in
+  let fav_insts_of_public_ids = List.concat (IList.map Sil.exp_fav_list insts_of_public_ids) in
+  let fav_insts_of_private_ids = List.concat (IList.map Sil.exp_fav_list insts_of_private_ids) in
   let (fav_p_leftover, _) =
     let sigma = p_leftover.Prop.sigma in
     (sigma_fav_list sigma, sigma_fav_in_pvars_list sigma) in
   let fpv_inst_of_base = Sil.exp_fpv inst_of_base in
-  let fpv_insts_of_private_ids = IList.flatten (IList.map Sil.exp_fpv insts_of_private_ids) in
+  let fpv_insts_of_private_ids = List.concat (IList.map Sil.exp_fpv insts_of_private_ids) in
   (*
   let fav_inst_of_base = Sil.exp_fav_list inst_of_base in
   L.out "@[.... application of condition ....@\n@.";
@@ -85,9 +85,9 @@ let create_condition_ls ids_private id_base p_leftover (inst: Sil.subst) =
   L.out "@[<4>  public ids : %a@\n@." pp_exp_list insts_of_public_ids;
   *)
   (* (not (IList.intersect compare fav_inst_of_base fav_in_pvars)) && *)
-  (fpv_inst_of_base = []) &&
-  (fpv_insts_of_private_ids = []) &&
-  (not (IList.exists Ident.is_normal fav_insts_of_private_ids)) &&
+  (List.is_empty fpv_inst_of_base) &&
+  (List.is_empty fpv_insts_of_private_ids) &&
+  (not (List.exists ~f:Ident.is_normal fav_insts_of_private_ids)) &&
   (not (IList.intersect Ident.compare fav_insts_of_private_ids fav_p_leftover)) &&
   (not (IList.intersect Ident.compare fav_insts_of_private_ids fav_insts_of_public_ids))
 
@@ -420,7 +420,7 @@ let typ_get_recursive_flds tenv typ_exp =
       match typ with
       | Tstruct name -> (
           match Tenv.lookup tenv name with
-          | Some { fields } -> IList.map fst3 (IList.filter (filter typ) fields)
+          | Some { fields } -> IList.map fst3 (List.filter ~f:(filter typ) fields)
           | None ->
               L.err "@.typ_get_recursive: unexpected type expr: %a@." Exp.pp typ_exp;
               [] (* ToDo: assert false *)
@@ -469,11 +469,11 @@ let discover_para_candidates tenv p =
   let edges = ref [] in
   let add_edge edg = edges := edg :: !edges in
   let get_edges_strexp rec_flds root se =
-    let is_rec_fld fld = IList.exists (Ident.equal_fieldname fld) rec_flds in
+    let is_rec_fld fld = List.exists ~f:(Ident.equal_fieldname fld) rec_flds in
     match se with
     | Sil.Eexp _ | Sil.Earray _ -> ()
     | Sil.Estruct (fsel, _) ->
-        let fsel' = IList.filter (fun (fld, _) -> is_rec_fld fld) fsel in
+        let fsel' = List.filter ~f:(fun (fld, _) -> is_rec_fld fld) fsel in
         let process (_, nextse) =
           match nextse with
           | Sil.Eexp (next, _) -> add_edge (root, next)
@@ -491,10 +491,10 @@ let discover_para_candidates tenv p =
     | [] -> IList.rev found
     | (e1, e2) :: edges_notseen ->
         let edges_others = (IList.rev edges_seen) @ edges_notseen in
-        let edges_matched = IList.filter (fun (e1', _) -> Exp.equal e2 e1') edges_others in
+        let edges_matched = List.filter ~f:(fun (e1', _) -> Exp.equal e2 e1') edges_others in
         let new_found =
           let f found_acc (_, e3) = (e1, e2, e3) :: found_acc in
-          IList.fold_left f found edges_matched in
+          List.fold ~f ~init:found edges_matched in
         let new_edges_seen = (e1, e2) :: edges_seen in
         find_all_consecutive_edges new_found new_edges_seen edges_notseen in
   let sigma = p.Prop.sigma in
@@ -505,16 +505,16 @@ let discover_para_dll_candidates tenv p =
   let edges = ref [] in
   let add_edge edg = (edges := edg :: !edges) in
   let get_edges_strexp rec_flds root se =
-    let is_rec_fld fld = IList.exists (Ident.equal_fieldname fld) rec_flds in
+    let is_rec_fld fld = List.exists ~f:(Ident.equal_fieldname fld) rec_flds in
     match se with
     | Sil.Eexp _ | Sil.Earray _ -> ()
     | Sil.Estruct (fsel, _) ->
-        let fsel' = IList.filter (fun (fld, _) -> is_rec_fld fld) fsel in
+        let fsel' = List.filter ~f:(fun (fld, _) -> is_rec_fld fld) fsel in
         let convert_to_exp acc (_, se) =
           match se with
           | Sil.Eexp (e, _) -> e:: acc
           | _ -> assert false in
-        let links = IList.rev (IList.fold_left convert_to_exp [] fsel') in
+        let links = IList.rev (List.fold ~f:convert_to_exp ~init:[] fsel') in
         let rec iter_pairs = function
           | [] -> ()
           | x:: l -> (IList.iter (fun y -> add_edge (root, x, y)) l; iter_pairs l) in
@@ -531,10 +531,10 @@ let discover_para_dll_candidates tenv p =
     | [] -> IList.rev found
     | (iF, blink, flink) :: edges_notseen ->
         let edges_others = (IList.rev edges_seen) @ edges_notseen in
-        let edges_matched = IList.filter (fun (e1', _, _) -> Exp.equal flink e1') edges_others in
+        let edges_matched = List.filter ~f:(fun (e1', _, _) -> Exp.equal flink e1') edges_others in
         let new_found =
           let f found_acc (_, _, flink2) = (iF, blink, flink, flink2) :: found_acc in
-          IList.fold_left f found edges_matched in
+          List.fold ~f ~init:found edges_matched in
         let new_edges_seen = (iF, blink, flink) :: edges_seen in
         find_all_consecutive_edges new_found new_edges_seen edges_notseen in
   let sigma = p.Prop.sigma in
@@ -544,12 +544,12 @@ let discover_para_dll_candidates tenv p =
 let discover_para tenv p =
   let candidates = discover_para_candidates tenv p in
   let already_defined para paras =
-    IList.exists (fun para' -> Match.hpara_iso tenv para para') paras in
+    List.exists ~f:(fun para' -> Match.hpara_iso tenv para para') paras in
   let f paras (root, next, out) =
     match (discover_para_roots tenv p root next next out) with
     | None -> paras
     | Some para -> if already_defined para paras then paras else para :: paras in
-  IList.fold_left f [] candidates
+  List.fold ~f ~init:[] candidates
 
 let discover_para_dll tenv p =
   (*
@@ -558,12 +558,12 @@ let discover_para_dll tenv p =
   *)
   let candidates = discover_para_dll_candidates tenv p in
   let already_defined para paras =
-    IList.exists (fun para' -> Match.hpara_dll_iso tenv para para') paras in
+    List.exists ~f:(fun para' -> Match.hpara_dll_iso tenv para para') paras in
   let f paras (iF, oB, iF', oF) =
     match (discover_para_dll_roots tenv p iF oB iF' iF' iF oF) with
     | None -> paras
     | Some para -> if already_defined para paras then paras else para :: paras in
-  IList.fold_left f [] candidates
+  List.fold ~f ~init:[] candidates
 (******************  End of Predicate Discovery  ******************)
 
 (****************** Start of the ADT abs_rules ******************)
@@ -599,7 +599,7 @@ let eqs_sub subst eqs =
 let eqs_solve ids_in eqs_in =
   let rec solve (sub: Sil.subst) (eqs: (Exp.t * Exp.t) list) : Sil.subst option =
     let do_default id e eqs_rest =
-      if not (IList.exists (fun id' -> Ident.equal id id') ids_in) then None
+      if not (List.exists ~f:(fun id' -> Ident.equal id id') ids_in) then None
       else
         let sub' = match Sil.extend_sub sub id e with
           | None -> L.out "@.@.ERROR : Buggy Implementation.@.@."; assert false
@@ -617,7 +617,7 @@ let eqs_solve ids_in eqs_in =
     | ((Exp.Var id1 as e1), (Exp.Var id2 as e2)) :: eqs_rest ->
         let n = Ident.compare id1 id2 in
         begin
-          if n = 0 then solve sub eqs_rest
+          if Int.equal n 0 then solve sub eqs_rest
           else if n > 0 then solve sub ((e2, e1):: eqs_rest)
           else do_default id1 e2 eqs_rest
         end
@@ -626,8 +626,8 @@ let eqs_solve ids_in eqs_in =
     let sub_list = Sil.sub_to_list sub in
     let sub_dom = IList.map fst sub_list in
     let filter id =
-      not (IList.exists (fun id' -> Ident.equal id id') sub_dom) in
-    IList.filter filter ids_in in
+      not (List.exists ~f:(fun id' -> Ident.equal id id') sub_dom) in
+    List.filter ~f:filter ids_in in
   match solve Sil.sub_empty eqs_in with
   | None -> None
   | Some sub -> Some (compute_ids sub, sub)
@@ -667,7 +667,7 @@ let sigma_special_cases ids sigma : (Ident.t list * Sil.hpred list) list =
       | None -> acc
       | Some (ids_res, sub) ->
           (ids_res, IList.map (Sil.hpred_sub sub) sigma_cur) :: acc in
-    IList.fold_left f [] special_cases_eqs in
+    List.fold ~f ~init:[] special_cases_eqs in
   IList.rev special_cases_rev
 
 let hpara_special_cases hpara : Sil.hpara list =
@@ -692,9 +692,9 @@ let abs_rules_apply_rsets tenv (rsets: rule_set list) (p_in: Prop.normal Prop.t)
         (true, p') in
   let rec apply_rule_set p rset =
     let (_, rules) = rset in
-    let (changed, p') = IList.fold_left apply_rule (false, p) rules in
+    let (changed, p') = List.fold ~f:apply_rule ~init:(false, p) rules in
     if changed then apply_rule_set p' rset else p' in
-  IList.fold_left apply_rule_set p_in rsets
+  List.fold ~f:apply_rule_set ~init:p_in rsets
 
 let abs_rules_apply_lists tenv (p_in: Prop.normal Prop.t) : Prop.normal Prop.t =
   let new_rsets = ref [] in
@@ -703,8 +703,8 @@ let abs_rules_apply_lists tenv (p_in: Prop.normal Prop.t) : Prop.normal Prop.t =
     let (closed_paras_sll, closed_paras_dll) =
       let paras_sll = discover_para tenv p in
       let paras_dll = discover_para_dll tenv p in
-      let closed_paras_sll = IList.flatten (IList.map hpara_special_cases paras_sll) in
-      let closed_paras_dll = IList.flatten (IList.map hpara_special_cases_dll paras_dll) in
+      let closed_paras_sll = List.concat (IList.map hpara_special_cases paras_sll) in
+      let closed_paras_dll = List.concat (IList.map hpara_special_cases_dll paras_dll) in
       begin
         (*
         if IList.length closed_paras_sll >= 1 then
@@ -728,13 +728,13 @@ let abs_rules_apply_lists tenv (p_in: Prop.normal Prop.t) : Prop.normal Prop.t =
         | (DLL para', _) -> Match.hpara_dll_iso tenv para para'
         | _ -> false in
       let filter_sll para =
-        not (IList.exists (eq_sll para) old_rsets) &&
-        not (IList.exists (eq_sll para) !new_rsets) in
+        not (List.exists ~f:(eq_sll para) old_rsets) &&
+        not (List.exists ~f:(eq_sll para) !new_rsets) in
       let filter_dll para =
-        not (IList.exists (eq_dll para) old_rsets) &&
-        not (IList.exists (eq_dll para) !new_rsets) in
-      let todo_paras_sll = IList.filter filter_sll closed_paras_sll in
-      let todo_paras_dll = IList.filter filter_dll closed_paras_dll in
+        not (List.exists ~f:(eq_dll para) old_rsets) &&
+        not (List.exists ~f:(eq_dll para) !new_rsets) in
+      let todo_paras_sll = List.filter ~f:filter_sll closed_paras_sll in
+      let todo_paras_dll = List.filter ~f:filter_dll closed_paras_dll in
       (todo_paras_sll, todo_paras_dll) in
     let f_recurse () =
       let todo_rsets_sll =
@@ -771,27 +771,27 @@ let abstract_pure_part tenv p ~(from_abstract_footprint: bool) =
             if Ident.is_primed id then Sil.fav_mem fav_sigma id
             else if Ident.is_footprint id then Sil.fav_mem fav_nonpure id
             else true) in
-      IList.filter filter pure in
+      List.filter ~f:filter pure in
     let new_pure =
-      IList.fold_left
-        (fun pi a ->
-           match a with
-           (* we only use Lt and Le because Gt and Ge are inserted in terms of Lt and Le. *)
-           | Sil.Aeq (Exp.Const (Const.Cint i), Exp.BinOp (Binop.Lt, _, _))
-           | Sil.Aeq (Exp.BinOp (Binop.Lt, _, _), Exp.Const (Const.Cint i))
-           | Sil.Aeq (Exp.Const (Const.Cint i), Exp.BinOp (Binop.Le, _, _))
-           | Sil.Aeq (Exp.BinOp (Binop.Le, _, _), Exp.Const (Const.Cint i)) when IntLit.isone i ->
-               a :: pi
-           | Sil.Aeq (Exp.Var name, e) when not (Ident.is_primed name) ->
-               (match e with
-                | Exp.Var _
-                | Exp.Const _ -> a :: pi
-                | _ -> pi)
-           | Sil.Aneq (Var _, _)
-           | Sil.Apred (_, Var _ :: _) | Anpred (_, Var _ :: _) -> a :: pi
-           | Sil.Aeq _ | Aneq _ | Apred _ | Anpred _ -> pi
-        )
-        [] pi_filtered in
+      List.fold
+        ~f:(fun pi a ->
+            match a with
+            (* we only use Lt and Le because Gt and Ge are inserted in terms of Lt and Le. *)
+            | Sil.Aeq (Exp.Const (Const.Cint i), Exp.BinOp (Binop.Lt, _, _))
+            | Sil.Aeq (Exp.BinOp (Binop.Lt, _, _), Exp.Const (Const.Cint i))
+            | Sil.Aeq (Exp.Const (Const.Cint i), Exp.BinOp (Binop.Le, _, _))
+            | Sil.Aeq (Exp.BinOp (Binop.Le, _, _), Exp.Const (Const.Cint i)) when IntLit.isone i ->
+                a :: pi
+            | Sil.Aeq (Exp.Var name, e) when not (Ident.is_primed name) ->
+                (match e with
+                 | Exp.Var _
+                 | Exp.Const _ -> a :: pi
+                 | _ -> pi)
+            | Sil.Aneq (Var _, _)
+            | Sil.Apred (_, Var _ :: _) | Anpred (_, Var _ :: _) -> a :: pi
+            | Sil.Aeq _ | Aneq _ | Apred _ | Anpred _ -> pi
+          )
+        ~init:[] pi_filtered in
     IList.rev new_pure in
 
   let new_pure = do_pure (Prop.get_pure p) in
@@ -825,7 +825,7 @@ let abstract_gc tenv p =
         Sil.fav_is_empty fav_a
         ||
         IList.intersect Ident.compare (Sil.fav_to_list fav_a) (Sil.fav_to_list fav_p_without_pi) in
-  let new_pi = IList.filter strong_filter pi in
+  let new_pi = List.filter ~f:strong_filter pi in
   let prop = Prop.normalize tenv (Prop.set p ~pi:new_pi) in
   match Prop.prop_iter_create prop with
   | None -> prop
@@ -882,11 +882,11 @@ let get_cycle root prop =
   let get_points_to e =
     match e with
     | Sil.Eexp(e', _) ->
-        (try
-           Some(IList.find (fun hpred -> match hpred with
-               | Sil.Hpointsto(e'', _, _) -> Exp.equal e'' e'
-               | _ -> false) sigma)
-         with _ -> None)
+        List.find
+          ~f:(fun hpred -> match hpred with
+              | Sil.Hpointsto (e'', _, _) -> Exp.equal e'' e'
+              | _ -> false)
+          sigma
     | _ -> None in
   let print_cycle cyc =
     (L.d_str "Cycle= ";
@@ -906,7 +906,7 @@ let get_cycle root prop =
     | (f, e):: el' ->
         if Sil.equal_strexp e e_root then
           (et_src, f, e):: path, true
-        else if IList.mem Sil.equal_strexp e visited then
+        else if List.mem ~equal:Sil.equal_strexp visited e then
           path, false
         else (
           let visited' = (fst et_src):: visited in
@@ -962,12 +962,10 @@ let get_var_retain_cycle prop_ =
       when Exp.equal e e' && Typ.is_block_type typ -> true
     | _, _ -> false in
   let find v =
-    try
-      let hp = IList.find (is_pvar v) sigma in
-      Some (Sil.hpred_get_lhs hp)
-    with Not_found -> None in
+    List.find ~f:(is_pvar v) sigma |>
+    Option.map ~f:Sil.hpred_get_lhs in
   let find_block v =
-    if (IList.exists (is_hpred_block v) sigma) then
+    if (List.exists ~f:(is_hpred_block v) sigma) then
       Some (Exp.Lvar Sil.block_pvar)
     else None in
   let sexp e = Sil.Eexp (e, Sil.Inone) in
@@ -987,8 +985,8 @@ let get_var_retain_cycle prop_ =
     | hp:: sigma' ->
         let cycle = get_cycle hp prop_ in
         L.d_strln "Filtering pvar in cycle ";
-        let cycle' = IList.flatten (IList.map find_or_block cycle) in
-        if cycle' = [] then do_sigma sigma'
+        let cycle' = List.concat (IList.map find_or_block cycle) in
+        if List.is_empty cycle' then do_sigma sigma'
         else cycle' in
   do_sigma sigma
 
@@ -1007,8 +1005,8 @@ let cycle_has_weak_or_unretained_or_assign_field tenv cycle =
         let equal_fn (fn', _, _) = Ident.equal_fieldname fn fn' in
         match Tenv.lookup tenv name with
         | Some { fields; statics } -> (
-            try trd3 (IList.find equal_fn (fields @ statics))
-            with Not_found -> []
+            List.find ~f:equal_fn (fields @ statics) |>
+            Option.value_map ~f:trd3 ~default:[]
           )
         | None -> []
       )
@@ -1016,18 +1014,20 @@ let cycle_has_weak_or_unretained_or_assign_field tenv cycle =
   let rec has_weak_or_unretained_or_assign params =
     match params with
     | [] -> false
-    | att:: _ when Config.unsafe_unret = att || Config.weak = att || Config.assign = att -> true
+    | att:: _ when String.equal Config.unsafe_unret att ||
+                   String.equal Config.weak att ||
+                   String.equal Config.assign att -> true
     | _:: params' -> has_weak_or_unretained_or_assign params' in
   let do_annotation ((a: Annot.t), _) =
-    ((a.class_name = Config.property_attributes) ||
-     (a.class_name = Config.ivar_attributes))
+    ((String.equal a.class_name Config.property_attributes) ||
+     (String.equal a.class_name Config.ivar_attributes))
     && has_weak_or_unretained_or_assign a.parameters in
   let rec do_cycle c =
     match c with
     | [] -> false
     | ((_, t), fn, _):: c' ->
         let ia = get_item_annotation t fn in
-        if (IList.exists do_annotation ia) then true
+        if (List.exists ~f:do_annotation ia) then true
         else do_cycle c' in
   do_cycle cycle
 
@@ -1081,7 +1081,7 @@ let check_junk ?original_prop pname tenv prop =
             Sil.strexp_fav_add fav se;
             Sil.fav_mem fav id
         | _ -> false in
-      hpred_is_loop || IList.exists predicate entries in
+      hpred_is_loop || List.exists ~f:predicate entries in
     let rec remove_junk_recursive sigma_done sigma_todo =
       match sigma_todo with
       | [] -> IList.rev sigma_done
@@ -1123,7 +1123,7 @@ let check_junk ?original_prop pname tenv prop =
                 match resource with
                 | PredSymb.Rmemory PredSymb.Mobjc -> should_raise_objc_leak hpred
                 | PredSymb.Rmemory PredSymb.Mnew | PredSymb.Rmemory PredSymb.Mnew_array
-                  when !Config.curr_language = Config.Clang ->
+                  when Config.curr_language_is Config.Clang ->
                     Mleak_buckets.should_raise_cpp_leak
                 | _ -> None in
               let exn_retain_cycle cycle =
@@ -1144,14 +1144,14 @@ let check_junk ?original_prop pname tenv prop =
                         Otherwise we report a retain cycle. *)
                      let cycle = get_var_retain_cycle (remove_opt original_prop) in
                      let ignore_cycle =
-                       (IList.length cycle = 0) ||
+                       (Int.equal (IList.length cycle) 0) ||
                        (cycle_has_weak_or_unretained_or_assign_field tenv cycle) in
                      ignore_cycle, exn_retain_cycle cycle
                  | Some _, Rmemory Mobjc
                  | Some _, Rmemory Mnew
-                 | Some _, Rmemory Mnew_array when !Config.curr_language = Config.Clang ->
-                     ml_bucket_opt = None, exn_leak
-                 | Some _, Rmemory _ -> !Config.curr_language = Config.Java, exn_leak
+                 | Some _, Rmemory Mnew_array when Config.curr_language_is Config.Clang ->
+                     is_none ml_bucket_opt, exn_leak
+                 | Some _, Rmemory _ -> Config.curr_language_is Config.Java, exn_leak
                  | Some _, Rignore -> true, exn_leak
                  | Some _, Rfile -> false, exn_leak
                  | Some _, Rlock -> false, exn_leak
@@ -1160,21 +1160,21 @@ let check_junk ?original_prop pname tenv prop =
                         we have a retain cycle. Objc object may not have the
                         Mobjc qualifier when added in footprint doing abduction *)
                      let cycle = get_var_retain_cycle (remove_opt original_prop) in
-                     IList.length cycle = 0, exn_retain_cycle cycle
-                 | _ -> !Config.curr_language = Config.Java, exn_leak) in
+                     Int.equal (IList.length cycle) 0, exn_retain_cycle cycle
+                 | _ -> Config.curr_language_is Config.Java, exn_leak) in
               let already_reported () =
                 let attr_opt_equal ao1 ao2 = match ao1, ao2 with
                   | None, None -> true
                   | Some a1, Some a2 -> PredSymb.equal a1 a2
                   | Some _, None
                   | None, Some _ -> false in
-                (alloc_attribute = None && !leaks_reported <> []) ||
+                (is_none alloc_attribute && !leaks_reported <> []) ||
                 (* None attribute only reported if it's the first one *)
-                IList.mem attr_opt_equal alloc_attribute !leaks_reported in
+                List.mem ~equal:attr_opt_equal !leaks_reported alloc_attribute in
               let ignore_leak =
                 !Config.allow_leak || ignore_resource || is_undefined || already_reported () in
               let report_and_continue =
-                !Config.curr_language = Config.Java || !Config.footprint in
+                Config.curr_language_is Config.Java || !Config.footprint in
               let report_leak () =
                 if not report_and_continue then raise exn
                 else
@@ -1190,7 +1190,7 @@ let check_junk ?original_prop pname tenv prop =
     remove_junk_recursive [] sigma in
   let rec remove_junk fp_part fav_root sigma = (* call remove_junk_once until sigma stops shrinking *)
     let sigma' = remove_junk_once fp_part fav_root sigma in
-    if IList.length sigma' = IList.length sigma then sigma'
+    if Int.equal (IList.length sigma') (IList.length sigma) then sigma'
     else remove_junk fp_part fav_root sigma' in
   let sigma_new = remove_junk false fav_sub_sigmafp prop.Prop.sigma in
   let sigma_fp_new = remove_junk true (Sil.fav_new ()) prop.Prop.sigma_fp in
@@ -1237,11 +1237,11 @@ let get_local_stack cur_sigma init_sigma =
     | Sil.Hpointsto (Exp.Lvar pvar, _, _) -> pvar
     | Sil.Hpointsto _ | Sil.Hlseg _ | Sil.Hdllseg _ -> assert false in
   let filter_local_stack olds = function
-    | Sil.Hpointsto (Exp.Lvar pvar, _, _) -> not (IList.exists (Pvar.equal pvar) olds)
+    | Sil.Hpointsto (Exp.Lvar pvar, _, _) -> not (List.exists ~f:(Pvar.equal pvar) olds)
     | Sil.Hpointsto _ | Sil.Hlseg _ | Sil.Hdllseg _ -> false in
-  let init_stack = IList.filter filter_stack init_sigma in
+  let init_stack = List.filter ~f:filter_stack init_sigma in
   let init_stack_pvars = IList.map get_stack_var init_stack in
-  let cur_local_stack = IList.filter (filter_local_stack init_stack_pvars) cur_sigma in
+  let cur_local_stack = List.filter ~f:(filter_local_stack init_stack_pvars) cur_sigma in
   let cur_local_stack_pvars = IList.map get_stack_var cur_local_stack in
   (cur_local_stack, cur_local_stack_pvars)
 
@@ -1257,9 +1257,9 @@ let extract_footprint_for_abs (p : 'a Prop.t) : Prop.exposed Prop.t * Pvar.t lis
 
 let remove_local_stack sigma pvars =
   let filter_non_stack = function
-    | Sil.Hpointsto (Exp.Lvar pvar, _, _) -> not (IList.exists (Pvar.equal pvar) pvars)
+    | Sil.Hpointsto (Exp.Lvar pvar, _, _) -> not (List.exists ~f:(Pvar.equal pvar) pvars)
     | Sil.Hpointsto _ | Sil.Hlseg _ | Sil.Hdllseg _ -> true in
-  IList.filter filter_non_stack sigma
+  List.filter ~f:filter_non_stack sigma
 
 (** [prop_set_fooprint p p_foot] removes a local stack from [p_foot],
     and sets proposition [p_foot] as footprint of [p]. *)

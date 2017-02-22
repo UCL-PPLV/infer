@@ -9,6 +9,13 @@
 
 package codetoanalyze.java.checkers;
 
+import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
+
+import com.google.common.annotations.VisibleForTesting;
+
+import com.facebook.infer.annotation.ThreadSafeMethod;
+
 @ThreadSafe
 public class ThreadSafeExample{
 
@@ -89,6 +96,24 @@ public class ThreadSafeExample{
     returnConstructorOk();
   }
 
+  volatile Object volatileField;
+
+  // we don't warn on unsafe writes to volatile fields
+  public void unsafeVolatileWriteOk() {
+    this.volatileField = new Object();
+  }
+
+  // don't count the method as public if it's marked VisibleForTesting
+  @VisibleForTesting
+  public void visibleForTestingNotPublicOk() {
+    this.f = 47;
+  }
+
+  // but do complain if a VisibleForTesting method is called from a public method
+  public void callVisibleForTestingBad() {
+    visibleForTestingNotPublicOk();
+  }
+
 }
 
 class ExtendsThreadSafeExample extends ThreadSafeExample{
@@ -130,4 +155,34 @@ class YesThreadSafeExtendsNotThreadSafeExample extends NotThreadSafeExtendsThrea
      subsubfield = 22;
   }
 
+}
+
+class NonThreadSafeClass {
+
+  Object field;
+
+  @ThreadSafeMethod
+  public void threadSafeMethod() {
+    this.field = new Object(); // should warn
+  }
+
+  @ThreadSafeMethod
+  public void safeMethod() {
+  }
+
+}
+
+class NonThreadSafeSubclass extends NonThreadSafeClass {
+
+  @Override
+  // overrides method annotated with @ThreadSafeMethod, should warn
+  public void safeMethod() {
+    this.field = new Object();
+  }
+
+  // won't report this now, but should in the future. if a method annotated with @ThreadSafeMethod
+  // in class C touches field f, then all other accesses to f in C must also be thread-safe
+  public void FN_touchesSameFieldAsThreadSafeMethod() {
+    this.field = new Object();
+  }
 }

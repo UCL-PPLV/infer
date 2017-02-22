@@ -1,5 +1,5 @@
 {
-  "modeled_expensive": [
+  "modeled-expensive": [
     {
       "language": "Java",
       "class": "android.app.Activity",
@@ -9,6 +9,12 @@
       "language": "Java",
       "class": "android.view.View",
       "method": "findViewById"
+    }
+  ],
+  "annotation-reachability": [
+    {
+       "sources": ["UserDefinedSource1", "UserDefinedSource2"],
+       "sink": "UserDefinedSink"
     }
   ]
 }

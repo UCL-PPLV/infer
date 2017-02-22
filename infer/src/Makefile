@@ -35,7 +35,7 @@ OCAMLBUILD_OPTIONS = \
   -tag-line "<*{clang/clang_ast_*,backend/jsonbug_*,checkers/stacktree_*}>: warn(-27-32-35-39)" \
   -tag-line "<*/{,*/}*.{ml,re}{,i}>: package(ppx_compare)" \
   -tag thread \
-  -pkgs atdgen,core,ctypes.foreign,oUnit,str,unix,xmlm,yojson,zip
+  -pkgs atdgen,core,ctypes.foreign,extlib,oUnit,str,unix,xmlm,yojson,zip
 
 ifeq ($(ENABLE_OCAML_BINANNOT),yes)
 OCAMLBUILD_OPTIONS += -cflags -bin-annot
@@ -116,12 +116,12 @@ CHECKCOPYRIGHT_MAIN = $(SCRIPT_SOURCES)/checkCopyright
 #### End of declarations ####
 
 ifeq ($(IS_FACEBOOK_TREE),yes)
-EXTRA_DEPS = facebook facebook/scripts
+EXTRA_DEPS = facebook
 else
 EXTRA_DEPS = opensource
 endif
 
-DEPENDENCIES = IR backend base checkers eradicate harness integration tp/fts quandary $(EXTRA_DEPS)
+DEPENDENCIES = IR backend base checkers eradicate harness integration tp/fts quandary bufferoverrun $(EXTRA_DEPS)
 
 # ocamlbuild command with options common to all build targets
 OCAMLBUILD_BASE = rebuild $(OCAMLBUILD_OPTIONS) -j $(NCPU) $(addprefix -I , $(DEPENDENCIES))
@@ -133,8 +133,7 @@ OCAMLBUILD_ALL = $(OCAMLBUILD_BASE) $(JAVA_OCAMLBUILD_OPTIONS)
 INFER_BASE_TARGETS = \
   $(INFER_MAIN).native \
   $(INFERANALYZE_MAIN).native \
-  $(INFERPRINT_MAIN).native \
-  $(INFERUNIT_MAIN).native
+  $(INFERPRINT_MAIN).native
 
 INFER_ALL_TARGETS = $(INFER_BASE_TARGETS) \
   $(INFERCLANG_MAIN).native \
@@ -151,7 +150,9 @@ DEPENDENCIES += java_stubs
 endif
 ifeq ($(BUILD_C_ANALYZERS),yes)
 INFER_CONFIG_TARGETS += $(INFERCLANG_MAIN).native
-DEPENDENCIES += clang
+DEPENDENCIES += clang unit/clang
+else
+DEPENDENCIES += unit/clang_stubs
 endif
 
 OCAML_BASE_SOURCES = \
@@ -159,9 +160,9 @@ OCAML_BASE_SOURCES = \
              $(DEPENDENCIES:=/[a-zA-Z]*.mll) $(DEPENDENCIES:=/[a-zA-Z]*.mly) \
              $(DEPENDENCIES:=/[a-zA-Z]*.re) $(DEPENDENCIES:=/[a-zA-Z]*.rei)) \
   $(STACKTREE_ATDGEN_STUBS) $(INFERPRINT_ATDGEN_STUBS)
-OCAML_SOURCES = $(OCAML_BASE_SOURCES)
+OCAML_CONFIG_SOURCES = $(OCAML_BASE_SOURCES)
 ifeq ($(BUILD_C_ANALYZERS),yes)
-OCAML_SOURCES += $(CLANG_ATDGEN_STUBS) $(INFER_CLANG_FCP_MIRRORED_FILES)
+OCAML_CONFIG_SOURCES += $(CLANG_ATDGEN_STUBS) $(INFER_CLANG_FCP_MIRRORED_FILES)
 endif
 OCAML_ALL_SOURCES = $(OCAML_BASE_SOURCES) $(CLANG_ATDGEN_STUBS) $(INFER_CLANG_FCP_MIRRORED_FILES)
 
@@ -172,7 +173,8 @@ all: infer
 
 # single out infer.native as the source of truth for make, knowing that in fact several targets are
 # produced by the build
-$(INFER_BUILD_DIR)/$(INFER_MAIN).native: base/Version.ml $(BUILD_DIR) $(OCAML_SOURCES)
+$(INFER_BUILD_DIR)/$(INFER_MAIN).native: base/Version.ml $(BUILD_DIR) $(OCAML_CONFIG_SOURCES) \
+                                         $(MAKEFILE_LIST)
 	$(OCAMLBUILD_CONFIG) -build-dir $(INFER_BUILD_DIR) $(INFER_CONFIG_TARGETS)
 # let make know that the target is up-to-date even if ocamlbuild cached it
 	@touch $@
@@ -184,7 +186,6 @@ $(BIN_DIR): Makefile
 $(INFER_BIN).native: $(INFER_BUILD_DIR)/$(INFER_MAIN).native $(BIN_DIR)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFERANALYZE_MAIN).native $(INFERANALYZE_BIN)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFERPRINT_MAIN).native $(INFERPRINT_BIN)
-	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFERUNIT_MAIN).native $(INFERUNIT_BIN)
 ifeq ($(BUILD_C_ANALYZERS),yes)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFERCLANG_MAIN).native $(INFERCLANG_BIN)
 endif
@@ -198,8 +199,9 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 infer: $(CLANG_BINIOU_DICT)
 endif
 
-$(INFER_BUILD_DIR)/$(INFER_MAIN).byte: base/Version.ml $(BUILD_DIR) $(OCAML_ALL_SOURCES)
-	$(OCAMLBUILD_ALL) -build-dir $(INFER_BUILD_DIR) $(INFER_ALL_TARGETS:.native=.byte)
+$(INFER_BUILD_DIR)/$(INFER_MAIN).byte: base/Version.ml $(BUILD_DIR) $(OCAML_CONFIG_SOURCES)
+	$(OCAMLBUILD_CONFIG) -build-dir $(INFER_BUILD_DIR) \
+	  $(INFER_CONFIG_TARGETS:.native=.byte) $(INFERUNIT_MAIN).byte
 	@touch $@
 
 $(INFER_BIN).byte: $(INFER_BUILD_DIR)/$(INFER_MAIN).byte $(BIN_DIR)
@@ -228,10 +230,11 @@ module: base/Version.ml $(BUILD_DIR) $(OCAML_ALL_SOURCES)
           $(MFLAGS) \
 	  $(M)
 
-$(TEST_BUILD_DIR)/$(INFER_MAIN).byte: base/Version.ml $(BUILD_DIR) $(OCAML_ALL_SOURCES) toplevel.mlpack
-	$(OCAMLBUILD_ALL) -build-dir $(TEST_BUILD_DIR) \
+$(TEST_BUILD_DIR)/$(INFER_MAIN).byte: base/Version.ml $(BUILD_DIR) $(OCAML_CONFIG_SOURCES) \
+                                      toplevel.mlpack $(MAKEFILE_LIST)
+	$(OCAMLBUILD_CONFIG) -build-dir $(TEST_BUILD_DIR) \
 	  -cflags -warn-error,$(OCAML_FATAL_WARNINGS) \
-	  $(INFER_ALL_TARGETS:.native=.byte) toplevel.cmo
+	  $(INFER_CONFIG_TARGETS:.native=.byte) $(INFERUNIT_MAIN).byte toplevel.cmo
 	@touch $@
 
 .PHONY: test_build
@@ -252,10 +255,10 @@ rei:
 %.rei : %.mli
 	refmt -assume-explicit-arity -heuristics-file unary.txt -parse ml -print re $< > $*.rei
 
-roots:=Infer InferAnalyzeExe InferClang JMain InferPrintExe StatsAggregator
+roots:=Infer InferAnalyzeExe InferClang InferPrintExe StatsAggregator
 clusters:=base clang java IR
 
-ml_src_files:=$(shell find $(DEPENDENCIES) -regex '.*\.ml\(i\)*' -not -path facebook/scripts/eradicate_stats.ml)
+ml_src_files:=$(shell find $(DEPENDENCIES) -regex '.*\.ml\(i\)*')
 re_src_files:=$(shell find $(DEPENDENCIES) -regex '.*\.re\(i\)*')
 inc_flags:=$(foreach dir,$(DEPENDENCIES),-I $(dir))
 root_flags:=$(foreach root,$(roots),-r $(root))
@@ -282,7 +285,7 @@ $(shell \
   | awk 'BEGIN { FS = "/"; OFS = "/" } ; {$$NF=toupper(substr($$NF,1,1))substr($$NF,2); print $$0}')
 endef
 
-toplevel.mlpack: base/Version.ml $(OCAML_ALL_SOURCES)
+toplevel.mlpack: base/Version.ml $(OCAML_CONFIG_SOURCES) $(MAKEFILE_LIST)
 #	We need to pack all the infer modules into another module to avoid name clashes with some
 #	of them coming from ocaml libraries (Ident for example).  To do that, we generate a .mlpack
 #	file containing namespaced modules.
@@ -294,13 +297,13 @@ toplevel.mlpack: base/Version.ml $(OCAML_ALL_SOURCES)
 	$(foreach module,\
 	  $(filter-out $(foreach root,$(roots),%/$(root)),\
 	  $(foreach source,\
-	    $(filter-out unit/% facebook/scripts/eradicate_stats.ml,$(OCAML_ALL_SOURCES)),\
+	    $(filter-out unit/%,$(OCAML_CONFIG_SOURCES)),\
 	    $(call to_ocaml_module,$(source)))),\
 	  $(shell echo $(module) >> $($@_tmp)))
 	mv $($@_tmp) $@
 
 $(INFER_BUILD_DIR)/toplevel.cmo: toplevel.mlpack $(BUILD_DIR)
-	$(OCAMLBUILD_ALL) -build-dir $(INFER_BUILD_DIR) toplevel.cmo
+	$(OCAMLBUILD_CONFIG) -build-dir $(INFER_BUILD_DIR) toplevel.cmo
 	@touch $@
 
 .PHONY: toplevel
@@ -309,9 +312,12 @@ toplevel: $(INFER_BUILD_DIR)/toplevel.cmo
 .PHONY: checkCopyright
 checkCopyright: $(CHECKCOPYRIGHT_BIN)
 
-$(CHECKCOPYRIGHT_BIN): $(BUILD_DIR) $(CHECKCOPYRIGHT_MAIN).ml
-	rebuild -quiet -r -j $(NCPU) -build-dir $(BUILD_DIR)/checkCopyright -pkgs core,str -tag thread -use-ocamlfind $(CHECKCOPYRIGHT_MAIN).native
-	$(INSTALL_PROGRAM) $(BUILD_DIR)/checkCopyright/$(CHECKCOPYRIGHT_MAIN).native $(CHECKCOPYRIGHT_BIN)
+$(CHECKCOPYRIGHT_BIN): $(BUILD_DIR) $(CHECKCOPYRIGHT_MAIN).ml Makefile
+	rebuild -quiet -r -j $(NCPU) -build-dir $(BUILD_DIR)/checkCopyright \
+	  -cflags -g,-safe-string -lflags -g \
+	  -pkgs core,str -tag thread -use-ocamlfind $(CHECKCOPYRIGHT_MAIN).native
+	$(INSTALL_PROGRAM) \
+	  $(BUILD_DIR)/checkCopyright/$(CHECKCOPYRIGHT_MAIN).native $(CHECKCOPYRIGHT_BIN)
 
 define gen_atdgen_rules
 # generate files using atdgen
@@ -344,7 +350,7 @@ $(foreach atd_type,b j t v,\
 
 define mirror_fcp_file
 $(CLANG_SOURCES)/$(notdir $(1)): $(1)
-	$(INSTALL_DATA) -C $$< $$@
+	$(INSTALL_DATA) $$< $$@
 endef
 
 $(foreach file, $(FCP_FILES_TO_MIRROR), $(eval $(call mirror_fcp_file,$(file))))
@@ -358,7 +364,7 @@ $(CLANG_BINIOU_DICT): $(CLANG_ATDGEN_STUB_ATD)
 	  | sort | uniq  \
 	  > $@
 
-base/Version.ml: base/Version.ml.in Makefile
+base/Version.ml: base/Version.ml.in $(MAKEFILE_LIST)
 	TMPFILE=$$(mktemp $@.tmp.XXXX); \
 	INFER_GIT_COMMIT=$$(git --work-tree=$(ROOT_DIR) --git-dir=$(ROOT_DIR)/.git rev-parse --short HEAD || printf "unknown"); \
 	INFER_GIT_BRANCH=$$(git --work-tree=$(ROOT_DIR) --git-dir=$(ROOT_DIR)/.git rev-parse --abbrev-ref HEAD || printf "unknown"); \
@@ -369,8 +375,12 @@ base/Version.ml: base/Version.ml.in Makefile
 	  -e 's|@IS_RELEASE_TREE[@]|$(IS_RELEASE_TREE)|g' \
 	  -e "s|@INFER_GIT_COMMIT[@]|$$INFER_GIT_COMMIT|g" \
 	  -e "s|@INFER_GIT_BRANCH[@]|$$INFER_GIT_BRANCH|g" \
+	  -e "s|@BUILD_C_ANALYZERS[@]|$(BUILD_C_ANALYZERS)|g" \
+	  -e "s|@BUILD_JAVA_ANALYZERS[@]|$(BUILD_JAVA_ANALYZERS)|g" \
+	  -e "s|@XCODE_SELECT[@]|$(XCODE_SELECT)|g" \
 	  $< > "$$TMPFILE"; \
-	mv "$$TMPFILE" $@
+	cat "$$TMPFILE" > $@; \
+	$(REMOVE) "$$TMPFILE"
 
 $(BUILD_DIR):
 	$(MKDIR_P) $(BUILD_DIR)

@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -40,7 +37,7 @@ type t =
     each expression represents a path, with Dpvar being the simplest one */
 type vpath = option t;
 
-let java () => !Config.curr_language == Config.Java;
+let java () => Config.equal_language !Config.curr_language Config.Java;
 
 let eradicate_java () => Config.eradicate && java ();
 
@@ -145,7 +142,7 @@ let pp_vpath pe fmt vpath => {
     fun
     | Some de => pp fmt de
     | None => ();
-  if (pe.Pp.kind == Pp.HTML) {
+  if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
     F.fprintf
       fmt
       " %a{vpath: %a}%a"
@@ -172,7 +169,7 @@ let rec has_tmp_var =
   | Darray dexp1 dexp2
   | Dbinop _ dexp1 dexp2 => has_tmp_var dexp1 || has_tmp_var dexp2
   | Dretcall dexp dexp_list _ _
-  | Dfcall dexp dexp_list _ _ => has_tmp_var dexp || IList.exists has_tmp_var dexp_list
+  | Dfcall dexp dexp_list _ _ => has_tmp_var dexp || List.exists f::has_tmp_var dexp_list
   | Dconst _
   | Dunknown
   | Dsizeof _ None _ => false;

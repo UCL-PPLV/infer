@@ -47,13 +47,13 @@ let from_json json => {
 
 let compute_statistics values => {
   let num_elements = IList.length values;
-  let sum = IList.fold_left (fun acc v => acc +. v) 0.0 values;
+  let sum = List.fold f::(fun acc v => acc +. v) init::0.0 values;
   let average = sum /. float_of_int num_elements;
   let values_arr = Array.of_list values;
   Array.sort
     cmp::(
       fun a b =>
-        if (a == b) {
+        if (Float.equal a b) {
           0
         } else if (a -. b < 0.0) {
           (-1)

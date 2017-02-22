@@ -20,7 +20,7 @@ type proc_origin =
   {
     pname : Procname.t;
     loc: Location.t;
-    annotated_signature : Annotations.annotated_signature;
+    annotated_signature : AnnotatedSignature.t;
     is_library : bool;
   } [@@deriving compare]
 
@@ -34,7 +34,7 @@ type t =
   | Undef
 [@@deriving compare]
 
-let equal o1 o2 = 0 = compare o1 o2
+let equal = [%compare.equal : t]
 
 let to_string = function
   | Const _ -> "Const"
@@ -84,5 +84,10 @@ let get_description tenv origin =
 
 let join o1 o2 = match o1, o2 with (* left priority *)
   | Undef, _
-  | _, Undef -> Undef
-  | _ -> o1
+  | _, Undef ->
+      Undef
+  | Field _, (Const _ | Formal _ | Proc _ | New) ->
+      (* low priority to Field, to support field initialization patterns *)
+      o2
+  | _ ->
+      o1

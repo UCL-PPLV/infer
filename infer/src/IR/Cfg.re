@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -54,9 +51,9 @@ let iter_all_nodes sorted::sorted=false f cfg => {
     Procname.Hash.fold
       (
         fun _ pdesc desc_nodes =>
-          IList.fold_left
-            (fun desc_nodes node => [(pdesc, node), ...desc_nodes])
-            desc_nodes
+          List.fold
+            f::(fun desc_nodes node => [(pdesc, node), ...desc_nodes])
+            init::desc_nodes
             (Procdesc.get_nodes pdesc)
       )
       cfg.proc_desc_table
@@ -77,7 +74,7 @@ let get_all_procs cfg => {
 
 
 /** Get the procedures whose body is defined in this cfg */
-let get_defined_procs cfg => IList.filter Procdesc.is_defined (get_all_procs cfg);
+let get_defined_procs cfg => List.filter f::Procdesc.is_defined (get_all_procs cfg);
 
 
 /** checks whether a cfg is connected or not */
@@ -91,25 +88,26 @@ let check_cfg_connectedness cfg => {
     let succs = Procdesc.Node.get_succs n;
     let preds = Procdesc.Node.get_preds n;
     switch (Procdesc.Node.get_kind n) {
-    | Procdesc.Node.Start_node _ => IList.length succs == 0 || IList.length preds > 0
-    | Procdesc.Node.Exit_node _ => IList.length succs > 0 || IList.length preds == 0
+    | Procdesc.Node.Start_node _ => Int.equal (IList.length succs) 0 || IList.length preds > 0
+    | Procdesc.Node.Exit_node _ => IList.length succs > 0 || Int.equal (IList.length preds) 0
     | Procdesc.Node.Stmt_node _
     | Procdesc.Node.Prune_node _
-    | Procdesc.Node.Skip_node _ => IList.length succs == 0 || IList.length preds == 0
+    | Procdesc.Node.Skip_node _ =>
+      Int.equal (IList.length succs) 0 || Int.equal (IList.length preds) 0
     | Procdesc.Node.Join_node =>
       /* Join node has the exception that it may be without predecessors
          and pointing to an exit node */
       /* if the if brances end with a return */
       switch succs {
       | [n'] when is_exit_node n' => false
-      | _ => IList.length preds == 0
+      | _ => Int.equal (IList.length preds) 0
       }
     }
   };
   let do_pdesc pd => {
     let pname = Procname.to_string (Procdesc.get_proc_name pd);
     let nodes = Procdesc.get_nodes pd;
-    let broken = IList.exists broken_node nodes;
+    let broken = List.exists f::broken_node nodes;
     if broken {
       L.out "\n ***BROKEN CFG: '%s'\n" pname
     } else {
@@ -183,11 +181,15 @@ let inline_synthetic_method ret_id etl pdesc loc_call :option Sil.instr => {
       let instr' = Sil.Store (Exp.Lfield (Exp.Lvar pvar) fn ft) bt e1 loc_call;
       found instr instr'
     | (Sil.Call ret_id' (Exp.Const (Const.Cfun pn)) etl' _ cf, _, _)
-        when ret_id == None == (ret_id' == None) && IList.length etl' == IList.length etl =>
+        when
+          Bool.equal (is_none ret_id) (is_none ret_id') &&
+          Int.equal (IList.length etl') (IList.length etl) =>
       let instr' = Sil.Call ret_id (Exp.Const (Const.Cfun pn)) etl loc_call cf;
       found instr instr'
     | (Sil.Call ret_id' (Exp.Const (Const.Cfun pn)) etl' _ cf, _, _)
-        when ret_id == None == (ret_id' == None) && IList.length etl' + 1 == IList.length etl =>
+        when
+          Bool.equal (is_none ret_id) (is_none ret_id') &&
+          Int.equal (IList.length etl' + 1) (IList.length etl) =>
       let etl1 =
         switch (IList.rev etl) {
         /* remove last element */
@@ -260,7 +262,7 @@ let mark_unchanged_pdescs cfg_new cfg_old => {
     let node_map = ref Procdesc.NodeMap.empty;
     /* formals are the same if their types are the same */
     let formals_eq formals1 formals2 =>
-      IList.equal (fun (_, typ1) (_, typ2) => Typ.compare typ1 typ2) formals1 formals2;
+      List.equal equal::(fun (_, typ1) (_, typ2) => Typ.equal typ1 typ2) formals1 formals2;
     let nodes_eq n1s n2s => {
       /* nodes are the same if they have the same id, instructions, and succs/preds up to renaming
          with [exp_map] and [id_map] */
@@ -276,19 +278,21 @@ let mark_unchanged_pdescs cfg_new cfg_old => {
             0
           };
         let instrs_eq instrs1 instrs2 =>
-          IList.equal
-            (
+          List.equal
+            equal::(
               fun i1 i2 => {
                 let (n, exp_map') = Sil.compare_structural_instr i1 i2 !exp_map;
                 exp_map := exp_map';
-                n
+                Int.equal n 0
               }
             )
             instrs1
             instrs2;
-        compare_id n1 n2 == 0 &&
-        IList.equal Procdesc.Node.compare (Procdesc.Node.get_succs n1) (Procdesc.Node.get_succs n2) &&
-        IList.equal Procdesc.Node.compare (Procdesc.Node.get_preds n1) (Procdesc.Node.get_preds n2) &&
+        Int.equal (compare_id n1 n2) 0 &&
+        List.equal
+          equal::Procdesc.Node.equal (Procdesc.Node.get_succs n1) (Procdesc.Node.get_succs n2) &&
+        List.equal
+          equal::Procdesc.Node.equal (Procdesc.Node.get_preds n1) (Procdesc.Node.get_preds n2) &&
         instrs_eq (Procdesc.Node.get_instrs n1) (Procdesc.Node.get_instrs n2)
       };
       try (IList.for_all2 node_eq n1s n2s) {
@@ -297,7 +301,7 @@ let mark_unchanged_pdescs cfg_new cfg_old => {
     };
     let att1 = Procdesc.get_attributes pd1
     and att2 = Procdesc.get_attributes pd2;
-    att1.is_defined == att2.is_defined &&
+    Bool.equal att1.is_defined att2.is_defined &&
     Typ.equal att1.ret_type att2.ret_type &&
     formals_eq att1.formals att2.formals &&
     nodes_eq (Procdesc.get_nodes pd1) (Procdesc.get_nodes pd2)
@@ -338,42 +342,38 @@ let store_cfg_to_file source_file::source_file (filename: DB.filename) (cfg: cfg
 
 /** clone a procedure description and apply the type substitutions where
     the parameters are used */
-let specialize_types_proc callee_pdesc resolved_pdesc resolved_formals => {
+let specialize_types_proc callee_pdesc resolved_pdesc substitutions => {
   let resolved_pname = Procdesc.get_proc_name resolved_pdesc
   and callee_start_node = Procdesc.get_start_node callee_pdesc
   and callee_exit_node = Procdesc.get_exit_node callee_pdesc;
   let convert_pvar pvar => Pvar.mk (Pvar.get_name pvar) resolved_pname;
+  let mk_ptr_typ typename =>
+    /* Only consider pointers from Java objects for now */
+    Typ.Tptr (Typ.Tstruct typename) Typ.Pk_pointer;
   let convert_exp =
     fun
     | Exp.Lvar origin_pvar => Exp.Lvar (convert_pvar origin_pvar)
     | exp => exp;
-  let extract_class_name =
-    fun
-    | Typ.Tptr (Tstruct name) _ => Typename.name name
-    | _ => failwith "Expecting classname for Java types";
   let subst_map = ref Ident.IdentMap.empty;
-  let redirected_class_name origin_id =>
+  let redirect_typename origin_id =>
     try (Some (Ident.IdentMap.find origin_id !subst_map)) {
     | Not_found => None
     };
   let convert_instr instrs =>
     fun
-    | Sil.Load id (Exp.Lvar origin_pvar as origin_exp) origin_typ loc => {
-        let (_, specialized_typ) = {
-          let pvar_name = Pvar.get_name origin_pvar;
-          try (IList.find (fun (n, _) => Mangled.equal n pvar_name) resolved_formals) {
-          | Not_found => (pvar_name, origin_typ)
-          }
-        };
-        subst_map := Ident.IdentMap.add id specialized_typ !subst_map;
-        [Sil.Load id (convert_exp origin_exp) specialized_typ loc, ...instrs]
+    | Sil.Load
+        id (Exp.Lvar origin_pvar as origin_exp) (Typ.Tptr (Tstruct origin_typename) Pk_pointer) loc => {
+        let specialized_typname =
+          try (Mangled.Map.find (Pvar.get_name origin_pvar) substitutions) {
+          | Not_found => origin_typename
+          };
+        subst_map := Ident.IdentMap.add id specialized_typname !subst_map;
+        [Sil.Load id (convert_exp origin_exp) (mk_ptr_typ specialized_typname) loc, ...instrs]
       }
-    | Sil.Load id (Exp.Var origin_id as origin_exp) origin_typ loc => {
+    | Sil.Load id (Exp.Var origin_id as origin_exp) (Typ.Tstruct _ as origin_typ) loc => {
         let updated_typ =
-          switch (Ident.IdentMap.find origin_id !subst_map) {
-          | Typ.Tptr typ _ => typ
-          | _ => failwith "Expecting a pointer type"
-          | exception Not_found => origin_typ
+          try (Typ.Tstruct (Ident.IdentMap.find origin_id !subst_map)) {
+          | Not_found => origin_typ
           };
         [Sil.Load id (convert_exp origin_exp) updated_typ loc, ...instrs]
       }
@@ -392,12 +392,13 @@ let specialize_types_proc callee_pdesc resolved_pdesc resolved_formals => {
         [(Exp.Var id, _), ...origin_args]
         loc
         call_flags
-        when call_flags.CallFlags.cf_virtual && redirected_class_name id != None => {
-        let redirected_typ = Option.value_exn (redirected_class_name id);
+        when call_flags.CallFlags.cf_virtual && redirect_typename id != None => {
+        let redirected_typename = Option.value_exn (redirect_typename id);
+        let redirected_typ = mk_ptr_typ redirected_typename;
         let redirected_pname =
           Procname.replace_class
-            (Procname.Java callee_pname_java) (extract_class_name redirected_typ)
-        and args = {
+            (Procname.Java callee_pname_java) (Typename.name redirected_typename);
+        let args = {
           let other_args = IList.map (fun (exp, typ) => (convert_exp exp, typ)) origin_args;
           [(Exp.Var id, redirected_typ), ...other_args]
         };
@@ -433,7 +434,7 @@ let specialize_types_proc callee_pdesc resolved_pdesc resolved_formals => {
   let rec convert_node node => {
     let loc = Procdesc.Node.get_loc node
     and kind = convert_node_kind (Procdesc.Node.get_kind node)
-    and instrs = IList.fold_left convert_instr [] (Procdesc.Node.get_instrs node) |> IList.rev;
+    and instrs = List.fold f::convert_instr init::[] (Procdesc.Node.get_instrs node) |> IList.rev;
     Procdesc.create_node resolved_pdesc loc kind instrs
   }
   and loop callee_nodes =>
@@ -469,22 +470,23 @@ let specialize_types_proc callee_pdesc resolved_pdesc resolved_formals => {
     The virtual calls are also replaced to match the parameter types */
 let specialize_types callee_pdesc resolved_pname args => {
   let callee_attributes = Procdesc.get_attributes callee_pdesc;
-  let resolved_formals =
-    IList.map2
-      (
-        fun (param_name, param_typ) (_, arg_typ) =>
+  let (resolved_params, substitutions) =
+    List.fold2_exn
+      f::(
+        fun (params, subts) (param_name, param_typ) (_, arg_typ) =>
           switch arg_typ {
-          | Typ.Tptr (Tstruct _) _ =>
+          | Typ.Tptr (Tstruct typename) Pk_pointer =>
             /* Replace the type of the parameter by the type of the argument */
-            (param_name, arg_typ)
-          | _ => (param_name, param_typ)
+            ([(param_name, arg_typ), ...params], Mangled.Map.add param_name typename subts)
+          | _ => ([(param_name, param_typ), ...params], subts)
           }
       )
+      init::([], Mangled.Map.empty)
       callee_attributes.formals
       args;
   let resolved_attributes = {
     ...callee_attributes,
-    formals: resolved_formals,
+    formals: IList.rev resolved_params,
     proc_name: resolved_pname
   };
   AttributesTable.store_attributes resolved_attributes;
@@ -492,5 +494,5 @@ let specialize_types callee_pdesc resolved_pname args => {
     let tmp_cfg = create_cfg ();
     create_proc_desc tmp_cfg resolved_attributes
   };
-  specialize_types_proc callee_pdesc resolved_pdesc resolved_formals
+  specialize_types_proc callee_pdesc resolved_pdesc substitutions
 };

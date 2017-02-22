@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -21,6 +18,7 @@ let module Node: {
 
   /** node id */
   type id = private int [@@deriving compare];
+  let equal_id: id => id => bool;
 
   /** kind of cfg node */
   type nodekind =
@@ -31,6 +29,7 @@ let module Node: {
     | Prune_node bool Sil.if_kind string /** (true/false branch, if_kind, comment) */
     | Skip_node string
   [@@deriving compare];
+  let equal_nodekind: nodekind => nodekind => bool;
 
   /** kind of Stmt_node for an exception handler. */
   let exn_handler_kind: nodekind;
@@ -51,7 +50,7 @@ let module Node: {
   let d_instrs: sub_instrs::bool => option Sil.instr => t => unit;
 
   /** Create a dummy node */
-  let dummy: unit => t;
+  let dummy: option Procname.t => t;
 
   /** Check if two nodes are equal */
   let equal: t => t => bool;
@@ -167,6 +166,10 @@ let fold_calls: ('a => (Procname.t, Location.t) => 'a) => 'a => t => 'a;
 let fold_instrs: ('a => Node.t => Sil.instr => 'a) => 'a => t => 'a;
 
 
+/** fold over all nodes */
+let fold_nodes: ('a => Node.t => 'a) => 'a => t => 'a;
+
+
 /** Only call from Cfg. */
 let from_proc_attributes: called_from_cfg::bool => ProcAttributes.t => t;
 
@@ -275,3 +278,5 @@ let set_start_node: t => Node.t => unit;
 
 /** indicate that we have performed preanalysis on the CFG assoociated with [t] */
 let signal_did_preanalysis: t => unit;
+
+let is_loop_head: t => Node.t => bool;

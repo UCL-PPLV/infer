@@ -47,21 +47,21 @@ module APIs = struct
   let method_match pn pkgname cname mname =
     match pn with
     | Procname.Java pn_java ->
-        Procname.java_get_method pn_java = mname
+        String.equal (Procname.java_get_method pn_java) mname
         &&
         (match pkgname with
          | "" ->
-             Procname.java_get_simple_class_name pn_java = cname
+             String.equal (Procname.java_get_simple_class_name pn_java) cname
          | _ ->
-             Procname.java_get_class_name pn_java = pkgname ^ "." ^ cname)
+             String.equal (Procname.java_get_class_name pn_java) (pkgname ^ "." ^ cname))
     | _ ->
         false
   let is_begin pn =
     let filter (pkgname, cname, begin_name, _) = method_match pn pkgname cname begin_name in
-    IList.exists filter tracing_methods
+    List.exists ~f:filter tracing_methods
   let is_end pn =
     let filter (pkgname, cname, _, end_name) = method_match pn pkgname cname end_name in
-    IList.exists filter tracing_methods
+    List.exists ~f:filter tracing_methods
   let is_begin_or_end pn =
     is_begin pn || is_end pn
 end
@@ -113,17 +113,17 @@ module State = struct
 
   (** State is balanced. *)
   let is_balanced s =
-    ElemSet.for_all (fun elem -> Elem.get_int elem = 0) s
+    ElemSet.for_all (fun elem -> Int.equal (Elem.get_int elem) 0) s
 
   let equal = ElemSet.equal
 
-  let has_zero s = ElemSet.exists (fun elem -> Elem.get_int elem = 0) s
+  let has_zero s = ElemSet.exists (fun elem -> Int.equal (Elem.get_int elem) 0) s
 
   (** Map a function to the elements of the set, and filter out inconsistencies. *)
   let map2 (f : Elem.t -> Elem.t list) (s : t) : t =
     let l = ElemSet.elements s in
-    let l' = IList.filter Elem.is_consistent (IList.flatten (IList.map f l)) in
-    IList.fold_right ElemSet.add l' ElemSet.empty
+    let l' = List.filter ~f:Elem.is_consistent (List.concat (IList.map f l)) in
+    List.fold_right ~f:ElemSet.add l' ~init:ElemSet.empty
 
   let map (f : Elem.t -> Elem.t) s =
     map2 (fun elem -> [f elem]) s
@@ -228,7 +228,7 @@ module BooleanVars = struct
   let exp_boolean_var exp = match exp with
     | Exp.Lvar pvar when Pvar.is_local pvar ->
         let name = Mangled.to_string (Pvar.get_name pvar) in
-        if IList.mem String.equal name boolean_variables
+        if List.mem ~equal:String.equal boolean_variables name
         then Some name
         else None
     | _ -> None

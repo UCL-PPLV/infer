@@ -46,12 +46,9 @@ let add_printf_like_function plf =
 
 let printf_like_function
     (proc_name: Procname.t): printf_signature option =
-  try
-    Some (
-      IList.find
-        (fun printf -> String.equal printf.unique_id (Procname.to_unique_id proc_name))
-        !printf_like_functions)
-  with Not_found -> None
+  List.find
+    ~f:(fun printf -> String.equal printf.unique_id (Procname.to_unique_id proc_name))
+    !printf_like_functions
 
 let default_format_type_name
     (format_type: string): string =
@@ -69,15 +66,15 @@ let format_type_matches_given_type
     (given_type: string): bool =
   match format_type with
   | "d" | "i" | "u" | "x" | "X" | "o" ->
-      IList.mem
-        String.equal
-        given_type
+      List.mem
+        ~equal:String.equal
         ["java.lang.Integer"; "java.lang.Long"; "java.lang.Short"; "java.lang.Byte"]
-  | "a" | "A" | "f" | "F" | "g" | "G" | "e" | "E" ->
-      IList.mem
-        String.equal
         given_type
+  | "a" | "A" | "f" | "F" | "g" | "G" | "e" | "E" ->
+      List.mem
+        ~equal:String.equal
         ["java.lang.Double"; "java.lang.Float"]
+        given_type
   | "c" -> String.equal given_type "java.lang.Character"
   | "b" | "h" | "H" | "s" -> true  (* accepts pretty much anything, even null *)
   | _ -> false

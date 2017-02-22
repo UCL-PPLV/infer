@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -111,6 +108,8 @@ type ptr_kind =
   | Pk_objc_autoreleasing /** Obj-C __autoreleasing pointer */
 [@@deriving compare];
 
+let equal_ptr_kind = [%compare.equal : ptr_kind];
+
 let ptr_kind_string =
   fun
   | Pk_reference => "&"
@@ -135,7 +134,7 @@ type t =
   | Tarray t static_length /** array type with statically fixed length */
 [@@deriving compare];
 
-let equal t1 t2 => compare t1 t2 == 0;
+let equal = [%compare.equal : t];
 
 
 /** type comparison that treats T* [] and T** as the same type. Needed for C/C++ */
@@ -150,7 +149,12 @@ let array_sensitive_compare t1 t2 =>
 /** Pretty print a type with all the details, using the C syntax. */
 let rec pp_full pe f =>
   fun
-  | Tstruct tname => F.fprintf f "%s" (Typename.to_string tname)
+  | Tstruct tname =>
+    if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
+      F.fprintf f "%s" (Typename.to_string tname |> Escape.escape_xml)
+    } else {
+      F.fprintf f "%s" (Typename.to_string tname)
+    }
   | Tint ik => F.fprintf f "%s" (ikind_to_string ik)
   | Tfloat fk => F.fprintf f "%s" (fkind_to_string fk)
   | Tvoid => F.fprintf f "void"
@@ -238,7 +242,7 @@ let array_elem default_opt =>
 
 let is_class_of_kind typ ck =>
   switch typ {
-  | Tstruct (TN_csu (Class ck') _) => ck == ck'
+  | Tstruct (TN_csu (Class ck') _) => Csu.equal_class_kind ck ck'
   | _ => false
   };
 

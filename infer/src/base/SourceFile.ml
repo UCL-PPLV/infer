@@ -8,6 +8,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 let count_newlines (path: string): int =
   let f file = In_channel.fold_lines file ~init:0 ~f:(fun i _ -> i + 1) in
@@ -19,8 +20,7 @@ type t =
   | RelativeInferModel of string (* relative to infer models *)
 [@@deriving compare]
 
-let equal sf1 sf2 =
-  compare sf1 sf2 = 0
+let equal = [%compare.equal : t]
 
 module OrderedSourceFile =
 struct
@@ -126,10 +126,9 @@ let of_header header_file =
   let header_exts = ["h"; "hh"; "hpp"; "hxx"] in
   let file_no_ext, ext_opt = Filename.split_extension abs_path in
   let file_opt = match ext_opt with
-    | Some ext when IList.mem String.equal ext header_exts -> (
+    | Some ext when List.mem ~equal:String.equal header_exts ext -> (
         let possible_files = IList.map (fun ext -> file_no_ext ^ "." ^ ext) source_exts in
-        try Some (IList.find path_exists possible_files)
-        with Not_found -> None
+        List.find ~f:path_exists possible_files
       )
     | _ -> None in
   Option.map ~f:from_abs_path file_opt
@@ -143,14 +142,14 @@ let changed_files_set =
       from_abs_path path in
   Option.bind Config.changed_files_index Utils.read_file |>
   Option.map ~f:(
-    IList.fold_left
-      (fun changed_files line ->
-         let source_file = create_source_file line in
-         let changed_files' = Set.add source_file changed_files in
-         (* Add source corresponding to changed header if it exists *)
-         match of_header source_file with
-         | Some src -> Set.add src changed_files'
-         | None -> changed_files'
-      )
-      Set.empty
+    List.fold
+      ~f:(fun changed_files line ->
+          let source_file = create_source_file line in
+          let changed_files' = Set.add source_file changed_files in
+          (* Add source corresponding to changed header if it exists *)
+          match of_header source_file with
+          | Some src -> Set.add src changed_files'
+          | None -> changed_files'
+        )
+      ~init:Set.empty
   )

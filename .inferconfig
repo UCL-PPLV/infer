@@ -1,5 +1,7 @@
 {
-  "skip_translation": [
+  "siof-safe-methods": ["getGlobalNonPODWhitelisted", "whitelisted::getGlobalNonPOD",
+                        "whitelisted::TemplatedObject::getGlobalNonPOD"],
+  "skip-translation": [
     {
       "language": "Java",
       "source_contains": "_SHOULD_BE_SKIPPED_"

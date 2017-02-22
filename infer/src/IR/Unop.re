@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -26,7 +23,7 @@ type t =
   | LNot /** Logical Not (!) */
 [@@deriving compare];
 
-let equal o1 o2 => compare o1 o2 == 0;
+let equal = [%compare.equal : t];
 
 
 /** String representation of unary operator. */

@@ -36,18 +36,25 @@ let parse_command_and_arguments command_and_arguments =
     to be compiled, the directory to be compiled in, and the compilation command as a list
     and as a string. We pack this information into the compilationDatabase map, and remove the
     clang invocation part, because we will use a clang wrapper. *)
-let decode_json_file (database : t) json_path =
+let decode_json_file (database : t) json_format =
+  let json_path = match json_format with | `Raw x | `Escaped x -> x in
+  let to_string s = match json_format with
+    | `Raw _ ->
+        s
+    | `Escaped _ ->
+        Utils.with_process_in (Printf.sprintf "/bin/sh -c 'printf \"%%s\" %s'" s) input_line
+        |> fst in
   Logging.out "parsing compilation database from %s@\n" json_path;
   let exit_format_error () =
     failwith ("Json file doesn't have the expected format") in
   let json = Yojson.Basic.from_file json_path in
   let get_dir el =
     match el with
-    | ("directory", `String dir) -> Some dir
+    | ("directory", `String dir) -> Some (to_string dir)
     | _ -> None in
   let get_file el =
     match el with
-    | ("file", `String file) -> Some file
+    | ("file", `String file) -> Some (to_string file)
     | _ -> None in
   let get_cmd el =
     match el with
@@ -58,23 +65,24 @@ let decode_json_file (database : t) json_path =
     | `List arguments ->
         IList.iter parse_json arguments
     | `Assoc l ->
-        let dir = match IList.find_map_opt get_dir l with
+        let dir = match List.find_map ~f:get_dir l with
           | Some dir -> dir
           | None -> exit_format_error () in
-        let file = match IList.find_map_opt get_file l with
+        let file = match List.find_map ~f:get_file l with
           | Some file -> file
           | None -> exit_format_error () in
-        let cmd = match IList.find_map_opt get_cmd l with
+        let cmd = match List.find_map ~f:get_cmd l with
           | Some cmd -> cmd
           | None -> exit_format_error () in
         let command, args = parse_command_and_arguments cmd in
         let compilation_data = { dir; command; args;} in
-        let source_file = SourceFile.from_abs_path file in
+        let abs_file = if Filename.is_relative file then dir ^/ file else file in
+        let source_file = SourceFile.from_abs_path abs_file in
         database := SourceFile.Map.add source_file compilation_data !database
     | _ -> exit_format_error () in
   parse_json json
 
-let from_json_files  db_json_files =
+let from_json_files db_json_files =
   let db = empty () in
   IList.iter (decode_json_file db) db_json_files;
   Logging.out "created database with %d entries@\n" (get_size db);

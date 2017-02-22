@@ -32,8 +32,7 @@ type curr_class =
   | ContextNoCls
 [@@deriving compare]
 
-let equal_curr_class curr_class1 curr_class2 =
-  compare_curr_class curr_class1 curr_class2 = 0
+let equal_curr_class = [%compare.equal : curr_class]
 
 type str_node_map = (string, Procdesc.Node.t) Hashtbl.t
 
@@ -127,9 +126,9 @@ let add_block_static_var context block_name static_var_typ =
       (let new_static_vars, duplicate =
          try
            let static_vars = Procname.Map.find block_name outer_context.blocks_static_vars in
-           if IList.mem (
+           if List.mem ~equal:(
                fun (var1, _) (var2, _) -> Pvar.equal var1 var2
-             ) static_var_typ static_vars then
+             ) static_vars static_var_typ  then
              static_vars, true
            else
              static_var_typ :: static_vars, false

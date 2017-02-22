@@ -52,12 +52,9 @@ let log_issue
     ?session
     ?ltr
     exn =
-  let should_suppress_lint summary =
-    !Config.curr_language = Config.Java &&
-    let annotated_signature =
-      Annotations.get_annotated_signature summary.Specs.attributes in
-    let ret_annotation, _ = annotated_signature.Annotations.ret in
-    Annotations.ia_is_suppress_lint ret_annotation in
+  let should_suppress_lint (summary : Specs.summary) =
+    Config.curr_language_is Config.Java &&
+    Annotations.ia_is_suppress_lint (fst summary.attributes.ProcAttributes.method_annotation) in
   match Specs.get_summary proc_name with
   | Some summary when should_suppress_lint summary -> ()
   | Some summary ->

@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -25,6 +22,10 @@ type t = {
 [@@deriving compare];
 
 
+/** annotation for fields/methods marked with the "volatile" keyword */
+let volatile: t;
+
+
 /** Pretty print an annotation. */
 let pp: F.formatter => t => unit;
 
@@ -34,6 +35,7 @@ let module Item: {
 
   /** Annotation for one item: a list of annotations with visibility. */
   type nonrec t = list (t, bool) [@@deriving compare];
+  let equal: t => t => bool;
 
   /** Pretty print an item annotation. */
   let pp: F.formatter => t => unit;

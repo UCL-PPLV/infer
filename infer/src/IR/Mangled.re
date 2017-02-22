@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -18,7 +15,7 @@ let module F = Format;
 
 type t = {plain: string, mangled: option string} [@@deriving compare];
 
-let equal pn1 pn2 => compare pn1 pn2 == 0;
+let equal = [%compare.equal : t];
 
 
 /** Convert a string to a mangled name */
@@ -54,7 +51,7 @@ let get_mangled pn =>
 
 /** Create a mangled type name from a package name and a class name */
 let from_package_class package_name class_name =>
-  if (package_name == "") {
+  if (String.equal package_name "") {
     from_string class_name
   } else {
     from_string (package_name ^ "." ^ class_name)
@@ -64,7 +61,12 @@ let from_package_class package_name class_name =>
 /** Pretty print a mangled name */
 let pp f pn => F.fprintf f "%s" (to_string pn);
 
-let module MangledSet = Caml.Set.Make {
+let module Set = Caml.Set.Make {
+  type nonrec t = t;
+  let compare = compare;
+};
+
+let module Map = Caml.Map.Make {
   type nonrec t = t;
   let compare = compare;
 };

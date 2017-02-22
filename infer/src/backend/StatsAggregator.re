@@ -8,6 +8,8 @@
  */
 open! IStd;
 
+open! PVariant;
+
 let aggregated_stats_filename = "aggregated_stats.json";
 
 let aggregated_stats_by_target_filename = "aggregated_stats_by_target.json";
@@ -25,13 +27,13 @@ let find_json_files_in_dir dir => {
     let s = Unix.lstat path;
     let json_regex = Str.regexp_case_fold ".*\\.json$";
     not (Str.string_match json_files_to_ignore_regex path 0) &&
-    Str.string_match json_regex path 0 && s.st_kind == Unix.S_REG
+    Str.string_match json_regex path 0 && Polymorphic_compare.(==) s.st_kind Unix.S_REG
   };
   dir_exists dir ?
     {
       let content = Array.to_list (Sys.readdir dir);
       let content_with_path = IList.map (fun p => Filename.concat dir p) content;
-      IList.filter is_valid_json_file content_with_path
+      List.filter f::is_valid_json_file content_with_path
     } :
     []
 };
@@ -133,7 +135,7 @@ let aggregate_all_stats origin => {
   let stats_paths =
     switch origin {
     | Buck_out tf =>
-      IList.fold_left (fun acc (_, paths) => accumulate_paths acc paths) empty_stats_paths tf
+      List.fold f::(fun acc (_, paths) => accumulate_paths acc paths) init::empty_stats_paths tf
     | Infer_out paths => paths
     };
   {
@@ -150,7 +152,7 @@ let aggregate_stats_by_target tp => {
       | Some v => [(t, v), ...acc]
       | None => acc
       };
-    let l = IList.fold_left (fun acc (t, p) => collect_valid_stats acc t (f p)) [] aggr_stats;
+    let l = List.fold f::(fun acc (t, p) => collect_valid_stats acc t (f p)) init::[] aggr_stats;
     switch l {
     | [] => None
     | _ as v => Some (`Assoc v)

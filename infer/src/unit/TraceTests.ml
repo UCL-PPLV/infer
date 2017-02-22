@@ -43,7 +43,7 @@ module MockTraceElem = struct
   module Set = PrettyPrintable.MakePPSet(struct
       type nonrec t = t
       let compare = compare
-      let pp_element = pp
+      let pp = pp
     end)
 
   let with_callsite t _ = t
@@ -58,7 +58,7 @@ module MockSource = struct
        let get_tainted_formals _ = assert false
      end))
 
-  let equal source1 source2 = compare source1 source2 = 0
+  let equal = [%compare.equal : t]
 end
 
 module MockSink = struct
@@ -67,7 +67,7 @@ module MockSink = struct
 
   let get _ = assert false
 
-  let equal sink1 sink2 = compare sink1 sink2 = 0
+  let equal = [%compare.equal : t]
 end
 
 
@@ -76,7 +76,7 @@ module MockTrace = Trace.Make(struct
     module Sink = MockSink
 
     let should_report source sink =
-      Source.kind source = Sink.kind sink
+      [%compare.equal : MockTraceElem.t] (Source.kind source) (Sink.kind sink)
   end)
 
 let tests =
@@ -98,13 +98,15 @@ let tests =
       assert_equal (IList.length reports) 2;
       assert_bool
         "Reports should contain source1 -> sink1"
-        (IList.exists
-           (fun (source, sink, _) -> MockSource.equal source source1 && MockSink.equal sink sink1)
+        (List.exists
+           ~f:(fun (source, sink, _) ->
+               MockSource.equal source source1 && MockSink.equal sink sink1)
            reports);
       assert_bool
         "Reports should contain source2 -> sink2"
-        (IList.exists
-           (fun (source, sink, _) -> MockSource.equal source source2 && MockSink.equal sink sink2)
+        (List.exists
+           ~f:(fun (source, sink, _) ->
+               MockSource.equal source source2 && MockSink.equal sink sink2)
            reports) in
     "get_reports">::get_reports_ in
 

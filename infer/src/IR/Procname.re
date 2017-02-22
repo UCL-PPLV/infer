@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -30,6 +27,8 @@ type method_kind =
   | Non_Static /* in Java, procedures called with invokevirtual, invokespecial, and invokeinterface */
   | Static /* in Java, procedures called with invokestatic */
 [@@deriving compare];
+
+let equal_method_kind = [%compare.equal : method_kind];
 
 
 /** Type of java procedure names. */
@@ -73,14 +72,17 @@ type t =
   | ObjC_Cpp objc_cpp
 [@@deriving compare];
 
-let equal pn1 pn2 => compare pn1 pn2 == 0;
+let equal = [%compare.equal : t];
 
 
 /** Level of verbosity of some to_string functions. */
 type detail_level =
   | Verbose
   | Non_verbose
-  | Simple;
+  | Simple
+[@@deriving compare];
+
+let equal_detail_level = [%compare.equal : detail_level];
 
 let objc_method_kind_of_bool is_instance =>
   if is_instance {ObjCInstanceMethod} else {ObjCClassMethod};
@@ -262,7 +264,7 @@ let java_get_parameters_as_strings j =>
 /** Return true if the java procedure is static */
 let java_is_static =
   fun
-  | Java j => j.kind == Static
+  | Java j => equal_method_kind j.kind Static
   | _ => false;
 
 
@@ -284,7 +286,7 @@ let java_to_string withclass::withclass=false (j: java) verbosity =>
       | _ => " "
       };
     let output = class_name ^ "." ^ j.method_name ^ "(" ^ params ^ ")";
-    if (verbosity == Verbose) {
+    if (equal_detail_level verbosity Verbose) {
       output ^ separator ^ return_type
     } else {
       return_type ^ separator ^ output
@@ -303,7 +305,7 @@ let java_to_string withclass::withclass=false (j: java) verbosity =>
       | _ => "..."
       };
     let method_name =
-      if (j.method_name == "<init>") {
+      if (String.equal j.method_name "<init>") {
         java_get_simple_class_name j
       } else {
         cls_prefix ^ j.method_name
@@ -402,7 +404,7 @@ let java_is_vararg =
   | _ => false;
 
 let is_objc_constructor method_name =>
-  method_name == "new" || String.is_prefix prefix::"init" method_name;
+  String.equal method_name "new" || String.is_prefix prefix::"init" method_name;
 
 let is_objc_kind =
   fun
@@ -415,12 +417,12 @@ let is_objc_kind =
 /** [is_constructor pname] returns true if [pname] is a constructor */
 let is_constructor =
   fun
-  | Java js => js.method_name == "<init>"
+  | Java js => String.equal js.method_name "<init>"
   | ObjC_Cpp {kind: CPPConstructor _} => true
   | ObjC_Cpp {kind, method_name} when is_objc_kind kind => is_objc_constructor method_name
   | _ => false;
 
-let is_objc_dealloc method_name => method_name == "dealloc";
+let is_objc_dealloc method_name => String.equal method_name "dealloc";
 
 
 /** [is_dealloc pname] returns true if [pname] is the dealloc method in Objective-C
@@ -432,14 +434,14 @@ let is_destructor =
 
 let java_is_close =
   fun
-  | Java js => js.method_name == "close"
+  | Java js => String.equal js.method_name "close"
   | _ => false;
 
 
 /** [is_class_initializer pname] returns true if [pname] is a class initializer */
 let is_class_initializer =
   fun
-  | Java js => js.method_name == "<clinit>"
+  | Java js => String.equal js.method_name "<clinit>"
   | _ => false;
 
 
@@ -572,3 +574,12 @@ let module Set = Caml.Set.Make {
 
 /** Pretty print a set of proc names */
 let pp_set fmt set => Set.iter (fun pname => F.fprintf fmt "%a " pp pname) set;
+
+let get_qualifiers pname =>
+  switch pname {
+  | C c => fst c |> QualifiedCppName.qualifiers_of_qual_name
+  | ObjC_Cpp objc_cpp =>
+    List.append
+      (QualifiedCppName.qualifiers_of_qual_name objc_cpp.class_name) [objc_cpp.method_name]
+  | _ => []
+  };

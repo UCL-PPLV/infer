@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -30,6 +27,8 @@ type access =
   | Private
   | Protected
 [@@deriving compare];
+
+let equal_access = [%compare.equal : access];
 
 
 /** Return the value of the FA_sentinel attribute in [attr_list] if it is found */
@@ -69,6 +68,8 @@ type res_act_kind =
   | Rrelease
 [@@deriving compare];
 
+let equal_res_act_kind = [%compare.equal : res_act_kind];
+
 
 /** kind of dangling pointers */
 type dangling_kind =
@@ -85,7 +86,7 @@ type dangling_kind =
 /** position in a path: proc name, node id */
 type path_pos = (Procname.t, int) [@@deriving compare];
 
-let equal_path_pos pp1 pp2 => compare_path_pos pp1 pp2 == 0;
+let equal_path_pos = [%compare.equal : path_pos];
 
 type taint_kind =
   | Tk_unverified_SSL_socket
@@ -155,7 +156,7 @@ type t =
   | Aunsubscribed_observer
 [@@deriving compare];
 
-let equal att1 att2 => compare att1 att2 == 0;
+let equal = [%compare.equal : t];
 
 
 /** name of the allocation function for the given memory kind */
@@ -189,7 +190,7 @@ type category =
   | ACobserver
 [@@deriving compare];
 
-let equal_category att1 att2 => compare_category att1 att2 == 0;
+let equal_category = [%compare.equal : category];
 
 let to_category att =>
   switch att {

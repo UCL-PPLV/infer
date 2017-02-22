@@ -22,6 +22,13 @@ module SourceKind = struct
 
   let unknown = Unknown
 
+  let of_string = function
+    | "PrivateData" -> PrivateData
+    | "Intent" -> Intent
+    | _ -> Other
+
+  let external_sources = QuandaryConfig.Source.of_json Config.quandary_sources
+
   let get pname tenv = match pname with
     | Procname.Java pname ->
         begin
@@ -49,10 +56,24 @@ module SourceKind = struct
                     Some PrivateData
                 | _ ->
                     None in
-              PatternMatch.supertype_find_map_opt
-                tenv
-                taint_matching_supertype
-                (Typename.Java.from_string class_name)
+              let kind_opt =
+                PatternMatch.supertype_find_map_opt
+                  tenv
+                  taint_matching_supertype
+                  (Typename.Java.from_string class_name) in
+              begin
+                match kind_opt with
+                | Some _ -> kind_opt
+                | None ->
+                    (* check the list of externally specified sources *)
+                    let procedure = class_name ^ "." ^ method_name in
+                    List.find_map
+                      ~f:(fun (source_spec : QuandaryConfig.Source.t) ->
+                          if Str.string_match source_spec.procedure procedure 0
+                          then Some (of_string source_spec.kind)
+                          else None)
+                      external_sources
+              end
         end
     | pname when BuiltinDecl.is_declared pname -> None
     | pname -> failwithf "Non-Java procname %a in Java analysis@." Procname.pp pname
@@ -62,10 +83,12 @@ module SourceKind = struct
       name, typ, None in
     let taint_formals_with_types type_strs kind formals =
       let taint_formal_with_types ((formal_name, formal_typ) as formal) =
-        let matches_classname typ typ_str = match typ with
-          | Typ.Tptr (Tstruct typename, _) -> Typename.name typename = typ_str
-          | _ -> false in
-        if IList.mem matches_classname formal_typ type_strs
+        let matches_classname = match formal_typ with
+          | Typ.Tptr (Tstruct typename, _) ->
+              List.mem ~equal:String.equal type_strs (Typename.name typename)
+          | _ ->
+              false in
+        if matches_classname
         then
           formal_name, formal_typ, Some kind
         else
@@ -118,6 +141,14 @@ module SinkKind = struct
     | Other (** for testing or uncategorized sinks *)
   [@@deriving compare]
 
+  let of_string = function
+    | "Intent" -> Intent
+    | "JavaScript" -> JavaScript
+    | "Logging" -> Logging
+    | _ -> Other
+
+  let external_sinks = QuandaryConfig.Sink.of_json Config.quandary_sinks
+
   let get pname actuals tenv =
     (* taint all the inputs of [pname]. for non-static procedures, taints the "this" parameter only
        if [taint_this] is true. *)
@@ -125,7 +156,7 @@ module SinkKind = struct
       let actuals_to_taint, offset =
         if Procname.java_is_static pname || taint_this
         then actuals, 0
-        else IList.tl actuals, 1 in
+        else List.tl_exn actuals, 1 in
       IList.mapi
         (fun param_num _ -> kind, param_num + offset, report_reachable)
         actuals_to_taint in
@@ -171,22 +202,7 @@ module SinkKind = struct
                     Some (taint_nth 0 Intent ~report_reachable:true)
                 | "android.content.Context", "startIntentSender" ->
                     Some (taint_nth 1 Intent ~report_reachable:true)
-                | "android.content.Intent",
-                  ("fillIn" |
-                   "makeMainSelectorActivity" |
-                   "parseIntent" |
-                   "parseUri" |
-                   "replaceExtras" |
-                   "setAction" |
-                   "setClassName" |
-                   "setData" |
-                   "setDataAndNormalize" |
-                   "setDataAndType" |
-                   "setDataAndTypeAndNormalize" |
-                   "setPackage" |
-                   "setSelector" |
-                   "setType" |
-                   "setTypeAndNormalize") ->
+                | "android.content.Intent", ("fillIn" | "parseIntent" | "parseUri") ->
                     Some (taint_all Intent ~report_reachable:true)
                 | "android.webkit.WebChromeClient",
                   ("onJsAlert" | "onJsBeforeUnload" | "onJsConfirm" | "onJsPrompt") ->
@@ -202,8 +218,23 @@ module SinkKind = struct
                 | "android.webkit.WebViewClient",
                   ("onLoadResource" | "shouldInterceptRequest" | "shouldOverrideUrlLoading") ->
                     Some (taint_all JavaScript ~report_reachable:true)
-                | _ ->
-                    None in
+                | class_name, method_name ->
+                    (* check the list of externally specified sinks *)
+                    let procedure = class_name ^ "." ^ method_name in
+                    List.find_map
+                      ~f:(fun (sink_spec : QuandaryConfig.Sink.t) ->
+                          if Str.string_match sink_spec.procedure procedure 0
+                          then
+                            let kind = of_string sink_spec.kind in
+                            try
+                              let n = int_of_string sink_spec.index in
+                              Some (taint_nth n kind ~report_reachable:true)
+                            with Failure _ ->
+                              (* couldn't parse the index, just taint everything *)
+                              Some (taint_all kind ~report_reachable:true)
+                          else
+                            None)
+                      external_sinks in
               begin
                 match
                   PatternMatch.supertype_find_map_opt

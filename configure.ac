@@ -15,7 +15,7 @@ AC_PREREQ([2.63])
 # - opam
 # - docker/Dockerfile
 AC_INIT([Infer],
-        [0.9.4],
+        [0.10.0],
         [https://github.com/facebook/infer/issues/])
 
 # this has to happen just after AC_INIT() because later macros may mess with the arguments passed to
@@ -26,8 +26,8 @@ AC_CONFIG_SRCDIR([infer/src/IR/Sil.re])
 
 # WARNING: keep in sync with above
 INFER_MAJOR=0
-INFER_MINOR=9
-INFER_PATCH=4
+INFER_MINOR=10
+INFER_PATCH=0
 
 AC_SUBST([INFER_MAJOR])
 AC_SUBST([INFER_MINOR])
@@ -273,6 +273,10 @@ if test ! -z "$SANDCASTLE"; then
 else
   AC_CHECK_TOOL([BUCK], [buck], [no])
 fi
+AC_ARG_VAR([MVN], [command to execute Maven when running tests])
+AS_IF([test "x$MVN" = "x"], [
+  AC_CHECK_TOOL([MVN], [mvn], [no])
+])
 AC_CHECK_TOOL([NDKBUILD], [ndk-build], [no])
 if test x"$NDKBUILD" = x"no"; then
 # ndk-build not in $PATH, look into potential android NDK install paths and record the absolute path
@@ -283,8 +287,35 @@ fi
 
 AC_CHECK_PYTHON_MODULE([$PYTHON27], [lxml])
 
+AC_CHECK_TOOL([XCPRETTY], [xcpretty], [no])
+
+BREW=no
+if which brew > /dev/null; then
+  BREW="$(which brew)"
+fi
+
+# warn about broken pkg-config version for brew users
+if test "$BREW" != "no"; then
+  if "$BREW" info pkg-config > /dev/null && \
+     test x"$(which pkg-config)" = x"/usr/local/bin/pkg-config"; then
+    AC_MSG_NOTICE([pkg-config seems to have been installed from Homebrew])
+    AC_MSG_CHECKING([for bad version of pkg-config brew package])
+    if readlink $(which pkg-config) | grep -q -e '/0.29.1_1/'; then
+      AC_MSG_RESULT([found 0.29.1_1])
+      AC_MSG_WARN([])
+      AC_MSG_WARN([This version of pkg-config is known to cause issues with compiling infer.])
+      AC_MSG_WARN([Consider running the following command to get a working version:])
+      AC_MSG_WARN([])
+      AC_MSG_WARN([  brew remove pkg-config && brew update && brew install pkg-config])
+      AC_MSG_WARN([])
+    else
+      AC_MSG_RESULT([no bad version found])
+    fi
+  fi
+fi
+
 AC_CONFIG_FILES([
-  Makefile.config
+  Makefile.autoconf
 ])
 
 AC_MSG_NOTICE([saving configure flags to ./config.flags])

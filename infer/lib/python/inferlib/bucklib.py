@@ -13,20 +13,15 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import argparse
-import csv
 import json
 import logging
-import multiprocessing
 import os
-import platform
-import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-import traceback
 import zipfile
 
 from inferlib import config, issues, utils
@@ -55,10 +50,7 @@ def prepare_build(args):
     configuration that tells buck to use that script.
     """
 
-    infer_options = [
-        '--buck',
-        '--analyzer', args.analyzer,
-    ]
+    infer_options = ['--buck']
 
     if args.java_jar_compiler is not None:
         infer_options += [
@@ -66,20 +58,11 @@ def prepare_build(args):
             args.java_jar_compiler,
         ]
 
-    if args.debug:
-        infer_options.append('--debug')
-
-    if args.no_filtering:
-        infer_options.append('--no-filtering')
-
-    if args.debug_exceptions:
-        infer_options += ['--debug-exceptions', '--no-filtering']
-
     # Create a temporary directory as a cache for jar files.
     infer_cache_dir = os.path.join(args.infer_out, 'cache')
     if not os.path.isdir(infer_cache_dir):
         os.mkdir(infer_cache_dir)
-    infer_options += ['--infer_cache', infer_cache_dir]
+    infer_options += ['--infer-cache', infer_cache_dir]
     temp_files = [infer_cache_dir]
 
     try:
@@ -91,10 +74,6 @@ def prepare_build(args):
     # make sure INFER_ANALYSIS is set when buck is called
     logging.info('Setup Infer analysis mode for Buck: export INFER_ANALYSIS=1')
     os.environ['INFER_ANALYSIS'] = '1'
-
-    # Export the Infer command as environment variables
-    os.environ['INFER_JAVA_BUCK_OPTIONS'] = json.dumps(infer_command)
-    os.environ['INFER_RULE_KEY'] = utils.infer_key(args.analyzer)
 
     # Create a script to be called by buck
     infer_script = None
@@ -164,13 +143,6 @@ def collect_results(args, start_time, targets):
     """
     all_json_rows = set()
 
-    accumulation_whitelist = list(map(re.compile, [
-        '^cores$',
-        '^time$',
-        '^start_time$',
-        '.*_pc',
-    ]))
-
     for path in get_output_jars(targets):
         try:
             with zipfile.ZipFile(path) as jar:
@@ -194,7 +166,8 @@ def collect_results(args, start_time, targets):
     bugs_out = os.path.join(args.infer_out, config.BUGS_FILENAME)
     issues.print_and_save_errors(args.infer_out, args.project_root,
                                  json_report, bugs_out, args.pmd_xml)
-    shutil.copy(bugs_out, os.path.join(args.infer_out, ANALYSIS_SUMMARY_OUTPUT))
+    shutil.copy(bugs_out, os.path.join(args.infer_out,
+                                       ANALYSIS_SUMMARY_OUTPUT))
 
 
 def cleanup(temp_files):
@@ -237,7 +210,10 @@ def parse_buck_command(args):
         parsed_args = parser.parse_args(buck_args)
         base_cmd_without_targets = [p for p in buck_args
                                     if p not in parsed_args.targets]
-        base_cmd = ['buck', build_keyword] + base_cmd_without_targets
+        buck_build_command = ['buck', build_keyword]
+        if not parsed_args.deep:
+            buck_build_command.append('--deep')
+        base_cmd = buck_build_command + base_cmd_without_targets
         return base_cmd, parsed_args
 
     else:
@@ -285,7 +261,9 @@ class Wrapper:
                 logging.info('Nothing to analyze')
             else:
                 self.timer.start('Running Buck ...')
-                javac_config = ['--config', 'tools.javac=' + infer_script]
+                javac_config = [
+                    '--config', 'tools.javac=' + infer_script,
+                    '--config', 'java.abi_generation_mode=class']
                 buck_cmd = self.buck_cmd + javac_config
                 subprocess.check_call(buck_cmd)
                 self.timer.stop('Buck finished')

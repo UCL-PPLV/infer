@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -65,6 +62,8 @@ type ptr_kind =
   | Pk_objc_unsafe_unretained /** Obj-C __unsafe_unretained pointer */
   | Pk_objc_autoreleasing /** Obj-C __autoreleasing pointer */
 [@@deriving compare];
+
+let equal_ptr_kind: ptr_kind => ptr_kind => bool;
 
 
 /** statically determined length of an array type, if any */

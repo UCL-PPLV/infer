@@ -23,7 +23,8 @@ let analyze_exe_env exe_env => {
   if Config.checkers {
     /* run the checkers only */
     let call_graph = Exe_env.get_cg exe_env;
-    Callbacks.iterate_callbacks Checkers.ST.store_summary call_graph exe_env
+    Callbacks.iterate_callbacks Checkers.ST.store_summary call_graph exe_env;
+    Printer.write_all_html_files exe_env
   } else {
     /* run the full analysis */
     Interproc.do_analysis exe_env;
@@ -53,7 +54,7 @@ let analyze_cluster cluster_num (cluster: Cluster.t) => {
 };
 
 let output_json_makefile_stats clusters => {
-  let clusters_to_analyze = IList.filter ClusterMakefile.cluster_should_be_analyzed clusters;
+  let clusters_to_analyze = List.filter f::ClusterMakefile.cluster_should_be_analyzed clusters;
   let num_files = IList.length clusters_to_analyze;
   let num_procs = 0;
   /* can't compute it at this stage */

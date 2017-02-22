@@ -8,6 +8,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 (** Process variable declarations by saving them as local or global variables.  *)
 (** Computes the local variables of a function or method to be added to the procdesc *)
@@ -95,7 +96,8 @@ let captured_vars_from_block_info context cvl =
         (match dr.Clang_ast_t.dr_name, dr.Clang_ast_t.dr_type_ptr with
          | Some name_info, Some type_ptr ->
              let n = name_info.Clang_ast_t.ni_name in
-             if n = CFrontend_config.self && not (CContext.is_objc_instance context) then
+             if String.equal n CFrontend_config.self &&
+                not (CContext.is_objc_instance context) then
                vars
              else
                let pvar = sil_var_of_decl_ref context dr procname in
@@ -103,4 +105,4 @@ let captured_vars_from_block_info context cvl =
                (pvar, typ) :: vars
          | _ -> assert false)
     | _ -> assert false in
-  IList.fold_right sil_var_of_captured_var cvl []
+  List.fold_right ~f:sil_var_of_captured_var cvl ~init:[]

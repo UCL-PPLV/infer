@@ -231,7 +231,7 @@ struct
 
   let own_priority_node pri stmt_info =
     match pri with
-    | Busy p when p = stmt_info.Clang_ast_t.si_pointer -> true
+    | Busy p when Int.equal p stmt_info.Clang_ast_t.si_pointer -> true
     | _ -> false
 
   (* Used by translation functions to handle potenatial cfg nodes. *)
@@ -356,9 +356,9 @@ let new_or_alloc_trans trans_state loc stmt_info type_ptr class_name_opt selecto
     match class_name_opt with
     | Some class_name -> class_name
     | None -> CType.classname_of_type function_type in
-  if selector = CFrontend_config.alloc then
+  if String.equal selector CFrontend_config.alloc then
     alloc_trans trans_state loc stmt_info function_type true None
-  else if selector = CFrontend_config.new_str then
+  else if String.equal selector CFrontend_config.new_str then
     objc_new_trans trans_state loc stmt_info class_name function_type
   else assert false
 
@@ -399,9 +399,9 @@ let dereference_var_sil (exp, typ) sil_loc =
     assigned to it *)
 let dereference_value_from_result sil_loc trans_result ~strip_pointer =
   let (obj_sil, class_typ) = extract_exp_from_list trans_result.exps "" in
-  let cast_inst, cast_exp = dereference_var_sil (obj_sil, class_typ) sil_loc in
   let typ_no_ptr = match class_typ with | Typ.Tptr (typ, _) -> typ | _ -> assert false in
   let cast_typ = if strip_pointer then typ_no_ptr else class_typ in
+  let cast_inst, cast_exp = dereference_var_sil (obj_sil, cast_typ) sil_loc in
   { trans_result with
     instrs = trans_result.instrs @ cast_inst;
     exps = [(cast_exp, cast_typ)]
@@ -433,7 +433,7 @@ let cast_operation trans_state cast_kind exps cast_typ sil_loc is_objc_bridged =
   | `LValueToRValue ->
       (* Takes an LValue and allow it to use it as RValue. *)
       (* So we assign the LValue to a temp and we pass it to the parent.*)
-      let instrs, deref_exp = dereference_var_sil (exp, typ) sil_loc in
+      let instrs, deref_exp = dereference_var_sil (exp, cast_typ) sil_loc in
       instrs, (deref_exp, cast_typ)
   | _ ->
       Logging.err_debug
@@ -596,7 +596,7 @@ struct
     else empty_res_trans
 
   let is_var_self pvar is_objc_method =
-    let is_self = Mangled.to_string (Pvar.get_name pvar) = CFrontend_config.self in
+    let is_self = String.equal (Mangled.to_string (Pvar.get_name pvar)) CFrontend_config.self in
     is_self && is_objc_method
 
 end
@@ -612,7 +612,7 @@ let is_owning_name n =
     else (
       let prefix = Str.string_before s' (String.length fam) in
       let suffix = Str.string_after s' (String.length fam) in
-      prefix = fam && not (Str.string_match (Str.regexp "[a-z]") suffix 0)
+      String.equal prefix fam && not (Str.string_match (Str.regexp "[a-z]") suffix 0)
     ) in
   match Str.split (Str.regexp_string ":") n with
   | fst:: _ ->
@@ -706,7 +706,7 @@ let is_dispatch_function stmt_list =
   | _ -> None
 
 let is_block_enumerate_function mei =
-  mei.Clang_ast_t.omei_selector = CFrontend_config.enumerateObjectsUsingBlock
+  String.equal mei.Clang_ast_t.omei_selector CFrontend_config.enumerateObjectsUsingBlock
 
 (* This takes a variable of type struct or array and returns a list of expressions *)
 (* for each of its fields (also recursively, such that each field access is of a basic type) *)
@@ -723,7 +723,7 @@ let var_or_zero_in_init_list tenv e typ ~return_zero:return_zero =
               IList.map (fun (fieldname, _, _) -> Exp.Lfield (e, fieldname, typ)) fields in
             let lh_types = IList.map (fun (_, fieldtype, _) -> fieldtype) fields in
             let exp_types = zip lh_exprs lh_types in
-            IList.map (fun (e, t) -> IList.flatten (var_or_zero_in_init_list' e t tns)) exp_types
+            IList.map (fun (e, t) -> List.concat (var_or_zero_in_init_list' e t tns)) exp_types
         | None ->
             assert false
       )
@@ -737,12 +737,12 @@ let var_or_zero_in_init_list tenv e typ ~return_zero:return_zero =
         let lh_types = replicate size arrtyp in
         let exp_types = zip lh_exprs lh_types in
         IList.map (fun (e, t) ->
-            IList.flatten (var_or_zero_in_init_list' e t tns)) exp_types
+            List.concat (var_or_zero_in_init_list' e t tns)) exp_types
     | Typ.Tint _ | Typ.Tfloat _  | Typ.Tptr _ ->
         let exp = if return_zero then Sil.zero_value_of_numerical_type typ else e in
         [ [(exp, typ)] ]
     | Typ.Tfun _ | Typ.Tvoid | Typ.Tarray _ -> assert false in
-  IList.flatten (var_or_zero_in_init_list' e typ String.Set.empty)
+  List.concat (var_or_zero_in_init_list' e typ String.Set.empty)
 
 (*
 (** Similar to extract_item_from_singleton but for option type *)

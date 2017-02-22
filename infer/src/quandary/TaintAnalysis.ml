@@ -168,8 +168,8 @@ module Make (TaintSpecification : TaintSpec.S) = struct
             TraceDomain.empty in
 
       let pp_path_short fmt (_, sources_passthroughs, sinks_passthroughs) =
-        let original_source = fst (IList.hd sources_passthroughs) in
-        let final_sink = fst (IList.hd sinks_passthroughs) in
+        let original_source = fst (List.hd_exn sources_passthroughs) in
+        let final_sink = fst (List.hd_exn sinks_passthroughs) in
         F.fprintf
           fmt
           "%a -> %a"
@@ -217,7 +217,7 @@ module Make (TaintSpecification : TaintSpec.S) = struct
             end
         | None ->
             access_tree_acc in
-      let access_tree' = IList.fold_left add_sink_to_actual access_tree sinks in
+      let access_tree' = List.fold ~f:add_sink_to_actual ~init:access_tree sinks in
       { astate with Domain.access_tree = access_tree'; }
 
     let apply_summary
@@ -225,7 +225,7 @@ module Make (TaintSpecification : TaintSpec.S) = struct
         actuals
         summary
         (astate_in : Domain.astate)
-        proc_data
+        (proc_data : FormalMap.t ProcData.t)
         callee_site =
       let callee_loc = CallSite.loc callee_site in
       let caller_access_tree = astate_in.access_tree in
@@ -264,46 +264,35 @@ module Make (TaintSpecification : TaintSpec.S) = struct
                   None
             end in
 
-      let get_caller_ap_node ap =
+      let get_caller_ap_node ap access_tree =
         match get_caller_ap ap with
         | Some caller_ap ->
             let caller_node_opt =
-              access_path_get_node caller_ap caller_access_tree proc_data callee_loc in
+              access_path_get_node caller_ap access_tree proc_data callee_loc in
             let caller_node = match caller_node_opt with
               | Some caller_node -> caller_node | None -> TaintDomain.empty_node in
             caller_ap, caller_node
         | None ->
             ap, TaintDomain.empty_node in
 
-      let replace_footprint_sources callee_trace caller_trace =
+      let replace_footprint_sources callee_trace caller_trace access_tree =
         let replace_footprint_source source acc =
           match TraceDomain.Source.get_footprint_access_path source with
           | Some footprint_access_path ->
-              let _, (caller_ap_trace, _) = get_caller_ap_node footprint_access_path in
+              let _, (caller_ap_trace, _) = get_caller_ap_node footprint_access_path access_tree in
               TraceDomain.join caller_ap_trace acc
           | None ->
               acc in
         TraceDomain.Sources.fold
           replace_footprint_source (TraceDomain.sources callee_trace) caller_trace in
 
-      let add_to_caller_tree acc callee_ap callee_trace =
-        let can_assign ap =
-          let (base, _), accesses = AccessPath.extract ap in
-          match base with
-          | Var.LogicalVar id ->
-              (* Java is pass-by-value, so we can't assign directly to a formal *)
-              Ident.is_footprint id && accesses <> []
-          | Var.ProgramVar pvar ->
-              (* can't assign to callee locals in the caller *)
-              Pvar.is_global pvar || Pvar.is_return pvar in
-        let caller_ap, (caller_trace, caller_tree) = get_caller_ap_node callee_ap in
-        let caller_trace' = replace_footprint_sources callee_trace caller_trace in
+      let add_to_caller_tree access_tree_acc callee_ap callee_trace =
+        let caller_ap, (caller_trace, caller_tree) = get_caller_ap_node callee_ap access_tree_acc in
+        let caller_trace' = replace_footprint_sources callee_trace caller_trace access_tree_acc in
         let appended_trace =
           TraceDomain.append caller_trace' callee_trace callee_site in
         report_trace appended_trace callee_site proc_data;
-        if can_assign callee_ap
-        then TaintDomain.add_node caller_ap (appended_trace, caller_tree) acc
-        else acc in
+        TaintDomain.add_node caller_ap (appended_trace, caller_tree) access_tree_acc in
 
       let access_tree =
         TaintDomain.fold
@@ -384,8 +373,10 @@ module Make (TaintSpecification : TaintSpec.S) = struct
               | Some (trace, _) -> TraceDomain.join trace trace_acc
               | None -> trace_acc in
             let propagate_to_access_path access_path actuals (astate : Domain.astate) =
+              let initial_trace =
+                access_path_get_trace access_path astate.access_tree proc_data callee_loc in
               let trace_with_propagation =
-                IList.fold_left exp_join_traces TraceDomain.empty actuals in
+                List.fold ~f:exp_join_traces ~init:initial_trace actuals in
               let access_tree =
                 TaintDomain.add_trace access_path trace_with_propagation astate.access_tree in
               { astate with access_tree; } in
@@ -399,22 +390,24 @@ module Make (TaintSpecification : TaintSpec.S) = struct
               | TaintSpec.Propagate_to_receiver,
                 (receiver_exp, receiver_typ) :: (_ :: _ as other_actuals),
                 _ ->
-                  let receiver_ap =
+                  begin
                     match AccessPath.of_lhs_exp receiver_exp receiver_typ ~f_resolve_id with
                     | Some ap ->
-                        AccessPath.Exact ap
+                        propagate_to_access_path (AccessPath.Exact ap) other_actuals astate_acc
                     | None ->
-                        failwithf
-                          "Receiver for called procedure %a does not have an access path"
-                          Procname.pp
-                          callee_pname in
-                  propagate_to_access_path receiver_ap other_actuals astate_acc
+                        (* this can happen when (for example) the receiver is a string literal *)
+                        astate_acc
+                  end
               | _ ->
                   astate_acc in
 
             let propagations =
-              TaintSpecification.handle_unknown_call callee_pname (Option.map ~f:snd ret) in
-            IList.fold_left handle_unknown_call_ astate propagations in
+              TaintSpecification.handle_unknown_call
+                callee_pname
+                (Option.map ~f:snd ret)
+                actuals
+                proc_data.tenv in
+            List.fold ~f:handle_unknown_call_ ~init:astate propagations in
 
           let analyze_call astate_acc callee_pname =
             let call_site = CallSite.make callee_pname callee_loc in
@@ -431,8 +424,10 @@ module Make (TaintSpecification : TaintSpec.S) = struct
                   let access_tree = add_source source ret_id ret_typ astate_with_sink.access_tree in
                   { astate_with_sink with access_tree; }
               | Some _, None ->
-                  failwithf
-                    "%a is marked as a source, but has no return value" Procname.pp callee_pname
+                  L.err
+                    "Warning: %a is marked as a source, but has no return value"
+                    Procname.pp callee_pname;
+                  astate_with_sink
               | None, _ ->
                   astate_with_sink in
 
@@ -453,7 +448,7 @@ module Make (TaintSpecification : TaintSpec.S) = struct
           (* highly polymorphic call sites stress reactive mode too much by using too much memory.
              here, we choose an arbitrary call limit that allows us to finish the analysis in
              practice. this is obviously unsound; will try to remove in the future. *)
-          let max_calls = 10 in
+          let max_calls = 3 in
           let targets =
             if IList.length call_flags.cf_targets <= max_calls
             then
@@ -464,7 +459,7 @@ module Make (TaintSpecification : TaintSpec.S) = struct
                 [called_pname]
               end in
           (* for each possible target of the call, apply the summary. join all results together *)
-          IList.fold_left analyze_call Domain.empty targets
+          List.fold ~f:analyze_call ~init:Domain.empty targets
       | Sil.Call _ ->
           failwith "Unimp: non-pname call expressions"
       | Sil.Nullify (pvar, _) ->
@@ -472,19 +467,16 @@ module Make (TaintSpecification : TaintSpec.S) = struct
           { astate with id_map; }
       | Sil.Remove_temps (ids, _) ->
           let id_map =
-            IList.fold_left
-              (fun acc id -> IdMapDomain.remove (Var.of_id id) acc)
-              astate.id_map
+            List.fold
+              ~f:(fun acc id -> IdMapDomain.remove (Var.of_id id) acc)
+              ~init:astate.id_map
               ids in
           { astate with id_map; }
       | Sil.Prune _ | Abstract _ | Declare_locals _ ->
           astate
   end
 
-  module Analyzer = AbstractInterpreter.Make
-      (ProcCfg.Exceptional)
-      (Scheduler.ReversePostorder)
-      (TransferFunctions)
+  module Analyzer = AbstractInterpreter.Make (ProcCfg.Exceptional) (TransferFunctions)
 
   let make_summary formal_map access_tree =
     let access_tree' =
@@ -508,14 +500,14 @@ module Make (TaintSpecification : TaintSpec.S) = struct
     let make_initial pdesc =
       let pname = Procdesc.get_proc_name pdesc in
       let access_tree =
-        IList.fold_left (fun acc (name, typ, taint_opt) ->
+        List.fold ~f:(fun acc (name, typ, taint_opt) ->
             match taint_opt with
             | Some source ->
                 let base_ap = AccessPath.Exact (AccessPath.of_pvar (Pvar.mk name pname) typ) in
                 TaintDomain.add_trace base_ap (TraceDomain.of_source source) acc
             | None ->
                 acc)
-          TaintDomain.empty
+          ~init:TaintDomain.empty
           (TraceDomain.Source.get_tainted_formals pdesc tenv) in
       if TaintDomain.BaseMap.is_empty access_tree
       then Domain.empty

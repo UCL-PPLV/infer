@@ -9,6 +9,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 open Javalib_pack
 
@@ -25,7 +26,7 @@ let register_perf_stats_report source_file =
 
 
 let init_global_state source_file =
-  register_perf_stats_report source_file ;
+  if not Config.buck_cache_mode then register_perf_stats_report source_file ;
   Config.curr_language := Config.Java;
   DB.Results_dir.init source_file;
   Ident.NameGenerator.reset ();
@@ -112,8 +113,8 @@ let do_all_files classpath sources classes =
   let linereader = Printer.LineReader.create () in
   let skip source_file =
     let is_path_matching path =
-      IList.exists
-        (fun pattern -> Str.string_match (Str.regexp pattern) path 0)
+      List.exists
+        ~f:(fun pattern -> Str.string_match (Str.regexp pattern) path 0)
         Config.skip_analysis_in_path in
     is_path_matching (SourceFile.to_rel_path source_file)
     || Inferconfig.skip_translation_matcher source_file Procname.empty_block in
@@ -138,7 +139,6 @@ let do_all_files classpath sources classes =
   JClasspath.cleanup program;
   L.out_debug "done @."
 
-
 (* loads the source files and translates them *)
 let main load_sources_and_classes =
   (match Config.models_mode, Sys.file_exists Config.models_jar = `Yes with
@@ -152,8 +152,15 @@ let main load_sources_and_classes =
        JClasspath.add_models Config.models_jar
   );
   JBasics.set_permissive true;
-  let classpath, sources, classes = Lazy.force load_sources_and_classes in
+  let classpath, sources, classes = match load_sources_and_classes with
+    | `FromVerboseOut verbose_out_file ->
+        JClasspath.load_from_verbose_output verbose_out_file
+    | `FromArguments path ->
+        JClasspath.load_from_arguments path in
   if String.Map.is_empty sources then
     failwith "Failed to load any Java source code"
   else
     do_all_files classpath sources classes
+
+let from_arguments path = main (`FromArguments path)
+let from_verbose_out verbose_out_file = main (`FromVerboseOut verbose_out_file)

@@ -9,6 +9,7 @@
  *)
 
 open! IStd
+open! PVariant
 module Hashtbl = Caml.Hashtbl
 
 (** Specifications and spec table *)
@@ -36,7 +37,7 @@ module Jprop = struct
 
   (** Return true if the two join_prop's are equal *)
   let equal jp1 jp2 =
-    compare jp1 jp2 = 0
+    Int.equal (compare jp1 jp2) 0
 
   let to_prop = function
     | Prop (_, p) -> p
@@ -303,11 +304,13 @@ type stats =
     call_stats : call_stats;
   }
 
-type status = ACTIVE | INACTIVE | STALE
+type status = ACTIVE | INACTIVE | STALE [@@deriving compare]
 
-type phase = FOOTPRINT | RE_EXECUTION
+let equal_status = [%compare.equal : status]
 
-type dependency_map_t = int Procname.Map.t
+type phase = FOOTPRINT | RE_EXECUTION [@@deriving compare]
+
+let equal_phase = [%compare.equal : phase]
 
 type call_summary = CallSite.Set.t Annot.Map.t
 
@@ -322,21 +325,21 @@ type payload =
     quandary : QuandarySummary.t option;
     siof : SiofDomain.astate option;
     threadsafety : ThreadSafetyDomain.summary option;
+    buffer_overrun : BufferOverrunDomain.Summary.t option;
     permsafety : PermsDomain.summary option;
   }
 
-type summary =
-  { dependency_map: dependency_map_t;  (** maps children procs to timestamp as last seen at the start of an analysys phase for this proc *)
-    nodes: Procdesc.Node.id list; (** ids of cfg nodes of the procedure *)
-    phase: phase; (** in FOOTPRINT phase or in RE_EXECUTION PHASE *)
-    payload: payload;  (** payload containing the result of some analysis *)
-    sessions: int ref; (** Session number: how many nodes went trough symbolic execution *)
-    stats: stats;  (** statistics: execution time and list of errors *)
-    status: status; (** ACTIVE when the proc is being analyzed *)
-    timestamp: int; (** Timestamp of the specs, >= 0, increased every time the specs change *)
-    attributes : ProcAttributes.t; (** Attributes of the procedure *)
-    proc_desc_option : Procdesc.t option;
-  }
+type summary = {
+  nodes: Procdesc.Node.id list; (** ids of cfg nodes of the procedure *)
+  phase: phase; (** in FOOTPRINT phase or in RE_EXECUTION PHASE *)
+  payload: payload;  (** payload containing the result of some analysis *)
+  sessions: int ref; (** Session number: how many nodes went trough symbolic execution *)
+  stats: stats;  (** statistics: execution time and list of errors *)
+  status: status; (** ACTIVE when the proc is being analyzed *)
+  timestamp: int; (** Timestamp of the specs, >= 0, increased every time the specs change *)
+  attributes : ProcAttributes.t; (** Attributes of the procedure *)
+  proc_desc_option : Procdesc.t option;
+}
 
 type spec_tbl = summary Procname.Hash.t
 
@@ -404,19 +407,14 @@ let pp_specs pe fmt specs =
                    F.fprintf fmt "\\subsection*{Spec %d of %d}@\n\\(%a\\)@\n"
                      !cnt total (pp_spec pe None) spec) specs
 
-(** Print the decpendency map *)
-let pp_dependency_map fmt dependency_map =
-  let pp_entry fmt proc_name n = F.fprintf fmt "%a=%d " Procname.pp proc_name n in
-  Procname.Map.iter (pp_entry fmt) dependency_map
-
 let describe_timestamp summary =
   ("Timestamp", Printf.sprintf "%d" summary.timestamp)
 
 let describe_status summary =
-  ("Status", if summary.status = ACTIVE then "ACTIVE" else "INACTIVE")
+  ("Status", if equal_status summary.status ACTIVE then "ACTIVE" else "INACTIVE")
 
 let describe_phase summary =
-  ("Phase", if summary.phase = FOOTPRINT then "FOOTPRINT" else "RE_EXECUTION")
+  ("Phase", if equal_phase summary.phase FOOTPRINT then "FOOTPRINT" else "RE_EXECUTION")
 
 (** Return the signature of a procedure declaration as a string *)
 let get_signature summary =
@@ -425,7 +423,7 @@ let get_signature summary =
     (fun (p, typ) ->
        let pp f = F.fprintf f "%a %a" (Typ.pp_full Pp.text) typ Mangled.pp p in
        let decl = F.asprintf "%t" pp in
-       s := if !s = "" then decl else !s ^ ", " ^ decl)
+       s := if String.equal !s "" then decl else !s ^ ", " ^ decl)
     summary.attributes.ProcAttributes.formals;
   let pp f =
     F.fprintf
@@ -448,20 +446,20 @@ let pp_summary_no_stats_specs fmt summary =
   F.fprintf fmt "%s@\n" (get_signature summary);
   F.fprintf fmt "%a@\n" pp_pair (describe_timestamp summary);
   F.fprintf fmt "%a@\n" pp_pair (describe_status summary);
-  F.fprintf fmt "%a@\n" pp_pair (describe_phase summary);
-  F.fprintf fmt "Dependency_map: @[%a@]@\n" pp_dependency_map summary.dependency_map
+  F.fprintf fmt "%a@\n" pp_pair (describe_phase summary)
 
-let pp_payload pe fmt { preposts; typestate; crashcontext_frame; quandary; siof; threadsafety } =
+let pp_payload pe fmt { preposts; typestate; crashcontext_frame; quandary; siof; threadsafety; buffer_overrun } =
   let pp_opt pp fmt = function
     | Some x -> pp fmt x
     | None -> () in
-  F.fprintf fmt "%a%a%a%a%a%a@\n"
+  F.fprintf fmt "%a%a%a%a%a%a%a@\n"
     (pp_specs pe) (get_specs_from_preposts preposts)
     (pp_opt (TypeState.pp TypeState.unit_ext)) typestate
     (pp_opt Crashcontext.pp_stacktree) crashcontext_frame
     (pp_opt QuandarySummary.pp) quandary
     (pp_opt SiofDomain.pp) siof
     (pp_opt ThreadSafetyDomain.pp_summary) threadsafety
+    (pp_opt BufferOverrunDomain.Summary.pp) buffer_overrun
 
 
 let pp_summary_text ~whole_seconds fmt summary =
@@ -670,7 +668,7 @@ let get_status summary =
   summary.status
 
 let is_active summary =
-  get_status summary = ACTIVE
+  equal_status (get_status summary) ACTIVE
 
 let get_timestamp summary =
   summary.timestamp
@@ -718,28 +716,6 @@ let set_status proc_name status =
   | None -> raise (Failure ("Specs.set_status: " ^ (Procname.to_string proc_name) ^ " Not_found"))
   | Some summary -> add_summary proc_name { summary with status = status }
 
-(** Create the initial dependency map with the given list of dependencies *)
-let mk_initial_dependency_map proc_list : dependency_map_t =
-  IList.fold_left (fun map pname -> Procname.Map.add pname (- 1) map) Procname.Map.empty proc_list
-
-(** Re-initialize a dependency map *)
-let re_initialize_dependency_map dependency_map =
-  Procname.Map.map (fun _ -> - 1) dependency_map
-
-(** Update the dependency map of [proc_name] with the current
-    timestamps of the dependents *)
-let update_dependency_map proc_name =
-  match get_summary proc_name with
-  | None ->
-      raise
-        (Failure ("Specs.update_dependency_map: " ^ (Procname.to_string proc_name) ^ " Not_found"))
-  | Some summary ->
-      let current_dependency_map =
-        Procname.Map.mapi
-          (fun _ _ -> get_timestamp summary)
-          summary.dependency_map in
-      add_summary proc_name { summary with dependency_map = current_dependency_map }
-
 let empty_payload =
   {
     preposts = None;
@@ -749,6 +725,7 @@ let empty_payload =
     quandary = None;
     siof = None;
     threadsafety = None;
+    buffer_overrun = None;
     permsafety = None;
   }
 
@@ -756,14 +733,12 @@ let empty_payload =
     proc_flags, calls, in_out_calls_opt, proc_attributes)]
     initializes the summary for [proc_name] given dependent procs in list [depend_list]. *)
 let init_summary
-    (depend_list, nodes,
+    (nodes,
      proc_flags, calls, in_out_calls_opt,
      proc_attributes,
      proc_desc_option) =
-  let dependency_map = mk_initial_dependency_map depend_list in
   let summary =
     {
-      dependency_map = dependency_map;
       nodes = nodes;
       phase = FOOTPRINT;
       sessions = ref 0;
@@ -780,14 +755,12 @@ let init_summary
 
 (** Reset a summary rebuilding the dependents and preserving the proc attributes if present. *)
 let reset_summary call_graph proc_name attributes_opt proc_desc_option =
-  let dependents = Cg.get_defined_children call_graph proc_name in
   let proc_attributes = match attributes_opt with
     | Some attributes ->
         attributes
     | None ->
         ProcAttributes.default proc_name !Config.curr_language in
   init_summary (
-    Procname.Set.elements dependents,
     [],
     ProcAttributes.proc_flags_empty (),
     [],

@@ -201,8 +201,8 @@ struct
     | Core_graphics -> core_graphics_types
 
   let is_objc_memory_model_controlled o =
-    IList.mem String.equal o core_foundation_types ||
-    IList.mem String.equal o core_graphics_types
+    List.mem ~equal:String.equal core_foundation_types o ||
+    List.mem ~equal:String.equal core_graphics_types o
 
   let rec is_core_lib lib typ =
     match typ with
@@ -210,7 +210,7 @@ struct
         is_core_lib lib styp
     | Typ.Tstruct name ->
         let core_lib_types = core_lib_to_type_list lib in
-        IList.mem String.equal (Typename.name name) core_lib_types
+        List.mem ~equal:String.equal core_lib_types (Typename.name name)
     | _ -> false
 
   let is_core_foundation_type typ =
@@ -232,17 +232,16 @@ struct
     (String.is_substring ~substring:cf_type typ)
 
   let is_core_lib_retain typ funct =
-    function_arg_is_cftype typ && funct = cf_retain
+    function_arg_is_cftype typ && String.equal funct cf_retain
 
   let is_core_lib_release typ funct =
-    function_arg_is_cftype typ && funct = cf_release
+    function_arg_is_cftype typ && String.equal funct cf_release
 
   let is_core_graphics_release typ funct =
-    try
-      let cg_typ = IList.find
-          (fun lib -> (funct = (lib^upper_release))) core_graphics_types in
-      (String.is_substring ~substring:(cg_typ^ref) typ)
-    with Not_found -> false
+    let f lib =
+      String.equal funct (lib ^ upper_release) &&
+      String.is_substring ~substring:(lib ^ ref) typ in
+    List.exists ~f core_graphics_types
 
 (*
   let function_arg_is_core_pgraphics typ =

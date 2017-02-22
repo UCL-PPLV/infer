@@ -8,12 +8,12 @@ module L = Logging
 module Ident = struct
   module I = struct
     include Ident
-    let pp_element = pp Pp.text
+    let pp = pp Pp.text
+    let pp_element = pp
     let pp_key = pp_element
   end
   include I
 
-  let pp = pp Pp.text
   let to_z3 = pp
 
   module Set = struct
@@ -46,9 +46,9 @@ module Field = struct
     let compare = Ident.compare_fieldname
     let pp_key = Ident.pp_fieldname
     let pp_element = pp_key
+    let pp = pp_element
   end
-
-  let pp = F.pp_element
+  include F
 
   module Set = PrettyPrintable.MakePPSet(F)
 
@@ -111,11 +111,7 @@ module Constr = struct
 
   (* ordered set of permission constraints *)
   module Set = struct
-    include PrettyPrintable.MakePPSet
-        (struct
-          include Exp
-          let pp_element = pp
-        end)
+    include PrettyPrintable.MakePPSet(Exp)
 
     (* variables of a constraint set *)
     let vars c =
@@ -135,13 +131,7 @@ module Constr = struct
   end
 end
 
-module ExpSet = struct
-  include PrettyPrintable.MakePPSet
-      (struct
-        include Exp
-        let pp_element = pp
-      end)
-end
+module ExpSet = PrettyPrintable.MakePPSet(Exp)
 
 type perms_t = Ident.t Field.Map.t
 

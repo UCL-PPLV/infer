@@ -23,7 +23,7 @@ let frame_id_of_stackframe frame =
     loc_str
 
 let frame_id_of_summary stacktree =
-  let short_name = IList.hd
+  let short_name = List.hd_exn
       (Str.split (Str.regexp "(") stacktree.Stacktree_j.method_name) in
   match stacktree.Stacktree_j.location with
   | None ->
@@ -52,15 +52,15 @@ let stitch_summaries stacktrace_file summary_files out_file =
   let summaries = IList.map
       (Ag_util.Json.from_file Stacktree_j.read_stacktree)
       summary_files in
-  let summary_map = IList.fold_left
-      (fun acc stacktree ->
-         String.Map.add ~key:(frame_id_of_summary stacktree) ~data:stacktree acc)
-      String.Map.empty
+  let summary_map = List.fold
+      ~f:(fun acc stacktree ->
+          String.Map.add ~key:(frame_id_of_summary stacktree) ~data:stacktree acc)
+      ~init:String.Map.empty
       summaries in
   let expand_stack_frame frame =
     (* TODO: Implement k > 1 case *)
     let frame_id = frame_id_of_stackframe frame in
-    if String.Map.existsi ~f:(fun ~key ~data:_ -> key = frame_id) summary_map then
+    if String.Map.existsi ~f:(fun ~key ~data:_ -> String.equal key frame_id) summary_map then
       String.Map.find_exn summary_map frame_id
     else
       stracktree_of_frame frame in

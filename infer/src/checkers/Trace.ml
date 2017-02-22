@@ -104,10 +104,10 @@ module Expander (TraceElem : TraceElem.S) = struct
         CallSite.Set.mem (TraceElem.call_site callee_elem) seen in
       (* find sinks that are the same kind as the caller, but have a different procname *)
       let matching_elems =
-        IList.filter
-          (fun callee_elem ->
-             TraceElem.Kind.compare (TraceElem.kind callee_elem) elem_kind = 0 &&
-             not (is_recursive callee_elem seen_acc'))
+        List.filter
+          ~f:(fun callee_elem ->
+              [%compare.equal : TraceElem.Kind.t] (TraceElem.kind callee_elem) elem_kind &&
+              not (is_recursive callee_elem seen_acc'))
           elems in
       (* arbitrarily pick one elem and explore it further *)
       match matching_elems with
@@ -139,12 +139,11 @@ module Make (Spec : Spec) = struct
       passthroughs : Passthrough.Set.t; (** calls that occurred between source and sink *)
     } [@@deriving compare]
 
+  let equal = [%compare.equal : t]
+
   type astate = t
 
   type path = Passthroughs.t * (Source.t * Passthroughs.t) list * (Sink.t * Passthroughs.t) list
-
-  let equal t1 t2 =
-    compare t1 t2 = 0
 
   let pp fmt t =
     F.fprintf
@@ -209,8 +208,8 @@ module Make (Spec : Spec) = struct
     let pp_sources = pp_elems Source.call_site in
     let pp_sinks = pp_elems Sink.call_site in
 
-    let original_source = fst (IList.hd sources_passthroughs) in
-    let final_sink = fst (IList.hd sinks_passthroughs) in
+    let original_source = fst (List.hd_exn sources_passthroughs) in
+    let final_sink = fst (List.hd_exn sinks_passthroughs) in
     F.fprintf
       fmt
       "Error: %a -> %a. Full trace:@.%a@.Current procedure %a %a@.%a"
@@ -289,9 +288,9 @@ module Make (Spec : Spec) = struct
           (fun passthrough1 passthrough2 ->
              let loc1 = CallSite.loc (Passthrough.site passthrough1) in
              let loc2 = CallSite.loc (Passthrough.site passthrough2) in
-             Pervasives.compare loc1.Location.line loc2.Location.line)
+             Int.compare loc1.Location.line loc2.Location.line)
           (Passthroughs.elements passthroughs) in
-      IList.fold_right trace_elem_of_passthrough sorted_passthroughs acc0 in
+      List.fold_right ~f:trace_elem_of_passthrough sorted_passthroughs ~init:acc0 in
 
     let get_nesting should_nest elems start_nesting =
       let level = ref start_nesting in
@@ -319,10 +318,12 @@ module Make (Spec : Spec) = struct
     let sources_with_level = get_nesting source_should_nest sources (-1) in
     let sinks_with_level = get_nesting sink_should_nest sinks 0 in
     let trace_prefix =
-      IList.fold_right trace_elems_of_sink sinks_with_level []
+      List.fold_right ~f:trace_elems_of_sink sinks_with_level ~init:[]
       |> trace_elems_of_passthroughs 0 passthroughs in
-    IList.fold_left
-      (fun acc source -> trace_elems_of_source source acc) trace_prefix sources_with_level
+    List.fold
+      ~f:(fun acc source -> trace_elems_of_source source acc)
+      ~init:trace_prefix
+      sources_with_level
 
   let of_source source =
     let sources = Sources.singleton source in

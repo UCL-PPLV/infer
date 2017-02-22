@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -37,6 +34,8 @@ type access =
   | Protected
 [@@deriving compare];
 
+let equal_access: access => access => bool;
+
 type mem_kind =
   | Mmalloc /** memory allocated with malloc */
   | Mnew /** memory allocated with new */
@@ -59,6 +58,8 @@ type res_act_kind =
   | Racquire
   | Rrelease
 [@@deriving compare];
+
+let equal_res_act_kind: res_act_kind => res_act_kind => bool;
 
 
 /** kind of dangling pointers */

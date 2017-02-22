@@ -13,7 +13,7 @@ module CLOpt = CommandLineOption
 module F = Format
 
 let capture_text =
-  if Config.analyzer = Config.Linters then "linting"
+  if Config.equal_analyzer Config.analyzer Config.Linters then "linting"
   else "translating"
 
 (** Read the files to compile from the changed files index. *)
@@ -29,12 +29,12 @@ let should_capture_file_from_index () =
 
 (** The buck targets are assumed to start with //, aliases are not supported. *)
 let check_args_for_targets args =
-  if not (IList.exists Buck.is_target_string args) then
+  if not (List.exists ~f:Buck.is_target_string args) then
     Buck.no_targets_found_error_and_exit args
 
 let add_flavor_to_targets args =
   let flavor =
-    match Config.use_compilation_database with
+    match Config.buck_compilation_database with
     | Some `Deps -> "#uber-compilation-database"
     | Some `NoDeps -> "#compilation-database"
     | _ -> assert false (* cannot happen *) in
@@ -86,7 +86,14 @@ let run_compilation_database compilation_database should_capture_file =
   let capture_text_upper = String.capitalize capture_text in
   let job_to_string =
     fun file -> Format.asprintf "%s %a" capture_text_upper SourceFile.pp file in
-  Process.run_jobs_in_parallel jobs_stack (run_compilation_file compilation_database) job_to_string
+  let fail_on_failed_job =
+    if Config.linters_ignore_clang_failures then false
+    else
+      match Config.buck_compilation_database with
+      | Some `NoDeps -> Config.clang_frontend_do_lint
+      | _ -> false in
+  Process.run_jobs_in_parallel ~fail_on_failed_job jobs_stack
+    (run_compilation_file compilation_database) job_to_string
 
 (** Computes the compilation database files. *)
 let get_compilation_database_files_buck () =
@@ -103,13 +110,11 @@ let get_compilation_database_files_buck () =
          match fst @@ Utils.with_process_in buck_targets In_channel.input_lines with
          | [] -> Logging.stdout "There are no files to process, exiting."; exit 0
          | lines ->
-             Logging.out "Reading compilation database from:@\n%s@\n" (String.concat ~sep:"\n" lines);
+             Logging.out "Reading compilation database from:@\n%s@\n"
+               (String.concat ~sep:"\n" lines);
              let scan_output compilation_database_files chan =
-               Scanf.sscanf chan "%s %s"
-                 (fun target file -> String.Map.add ~key:target ~data:file compilation_database_files) in
-             (* Map from targets to json output *)
-             let compilation_database_files = IList.fold_left scan_output String.Map.empty lines in
-             String.Map.data compilation_database_files
+               Scanf.sscanf chan "%s %s" (fun _ file -> `Raw file::compilation_database_files) in
+             List.fold ~f:scan_output ~init:[] lines
        with Unix.Unix_error (err, _, _) ->
          Process.print_error_and_exit
            "Cannot execute %s\n%!"
@@ -126,16 +131,19 @@ let get_compilation_database_files_xcodebuild () =
   let tmp_file = Filename.temp_file ~in_dir:temp_dir "cdb" ".json" in
   let xcodebuild_prog, xcodebuild_args =
     match prog_args with
-    | prog :: args -> (prog, args)
+    | prog :: _ -> (prog, prog_args)
     | [] -> failwith("Build command cannot be empty") in
   let xcpretty_prog = "xcpretty" in
-  let xcpretty_args = ["--report"; "json-compilation-database"; "--output"; tmp_file] in
+  let xcpretty_args =
+    [xcpretty_prog; "--report"; "json-compilation-database"; "--output"; tmp_file] in
+  Logging.out "Running %s | %s\n@." (List.to_string ~f:Fn.id xcodebuild_args)
+    (List.to_string ~f:Fn.id xcpretty_args);
   let producer_status, consumer_status =
     Process.pipeline
       ~producer_prog:xcodebuild_prog ~producer_args:xcodebuild_args
       ~consumer_prog:xcpretty_prog ~consumer_args:xcpretty_args in
   match producer_status, consumer_status with
-  | Ok (), Ok () -> [tmp_file]
+  | Ok (), Ok () -> [`Escaped tmp_file]
   | _ ->
       Logging.stderr "There was an error executing the build command";
       exit 1

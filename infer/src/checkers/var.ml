@@ -16,8 +16,7 @@ type t =
   | ProgramVar of Pvar.t
 [@@deriving compare]
 
-let equal v1 v2 =
-  compare v1 v2 = 0
+let equal = [%compare.equal : t]
 
 let of_id id =
   LogicalVar id
@@ -40,12 +39,12 @@ let pp fmt = function
 module Map = PrettyPrintable.MakePPMap(struct
     type nonrec t = t
     let compare = compare
-    let pp_key = pp
+    let pp = pp
   end)
 
 module Set = PrettyPrintable.MakePPCompareSet(struct
     type nonrec t = t
     let compare = compare
     let compare_pp = compare_alpha
-    let pp_element = pp
+    let pp = pp
   end)

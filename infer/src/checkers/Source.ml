@@ -46,7 +46,7 @@ module Make (Kind : Kind) = struct
   type kind =
     | Normal of Kind.t (** known source returned directly or transitively from a callee *)
     | Footprint of AccessPath.t (** unknown source read from the environment *)
-  [@@ deriving compare]
+  [@@deriving compare]
 
   let pp_kind fmt = function
     | Normal kind -> Kind.pp fmt kind
@@ -99,7 +99,7 @@ module Make (Kind : Kind) = struct
   module Set = PrettyPrintable.MakePPSet(struct
       type nonrec t = t
       let compare = compare
-      let pp_element = pp
+      let pp = pp
     end)
 end
 
@@ -133,7 +133,7 @@ module Dummy = struct
   module Set = PrettyPrintable.MakePPSet(struct
       type nonrec t = t
       let compare = compare
-      let pp_element = pp
+      let pp = pp
     end)
 
   let with_callsite t _ = t

@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -62,6 +59,8 @@ type instr =
   | Remove_temps (list Ident.t) Location.t /** remove temporaries */
   | Declare_locals (list (Pvar.t, Typ.t)) Location.t /** declare local variables */
 [@@deriving compare];
+
+let equal_instr: instr => instr => bool;
 
 
 /** compare instructions from different procedures without considering loc's, ident's, and pvar's.
@@ -127,6 +126,8 @@ type inst =
   | Iupdate zero_flag null_case_flag int PredSymb.path_pos
   | Ireturn_from_call int
 [@@deriving compare];
+
+let equal_inst: inst => inst => bool;
 
 let inst_abstraction: inst;
 
@@ -715,7 +716,7 @@ let sub_filter: (Ident.t => bool) => subst => subst;
 
 /** [sub_filter_exp filter sub] restricts the domain of [sub] to the
     identifiers satisfying [filter(id, sub(id))]. */
-let sub_filter_pair: ((Ident.t, Exp.t) => bool) => subst => subst;
+let sub_filter_pair: subst => f::((Ident.t, Exp.t) => bool) => subst;
 
 
 /** [sub_range_partition filter sub] partitions [sub] according to

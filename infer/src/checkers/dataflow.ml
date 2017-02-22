@@ -100,9 +100,9 @@ module MakeDF(St: DFStateType) : DF with type state = St.t = struct
     | Transition of state * state list * state list
 
   let join states initial_state =
-    IList.fold_left
-      St.join
-      initial_state
+    List.fold
+      ~f:St.join
+      ~init:initial_state
       states
 
   (** Propagate [new_state] to all the nodes immediately reachable. *)
@@ -176,7 +176,7 @@ let callback_test_dataflow { Callbacks.proc_desc; tenv } =
   let module DFCount = MakeDF(struct
       type t = int
       let equal = Int.equal
-      let join n m = if n = 0 then m else n
+      let join n m = if Int.equal n 0 then m else n
       let do_node _ n s =
         if verbose then L.stdout "visiting node %a with state %d@." Procdesc.Node.pp n s;
         [s + 1], [s + 1]

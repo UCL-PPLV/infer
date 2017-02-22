@@ -20,15 +20,24 @@ let dummy_constructor_annot = "__infer_is_constructor"
 let annotation_of_str annot_str =
   { Annot.class_name = annot_str; parameters = []; }
 
-(* TODO: read custom source/sink pairs from user code here *)
 let src_snk_pairs () =
+  (* parse user-defined specs from .inferconfig *)
+  let parse_user_defined_specs = function
+    | `List user_specs ->
+        let parse_user_spec json =
+          let open Yojson.Basic.Util in
+          let sources = member "sources" json |> to_list |> List.map ~f:to_string in
+          let sinks = member "sink" json |> to_string in
+          sources, sinks in
+        List.map ~f:parse_user_spec user_specs
+    | _ ->
+        [] in
   let specs =
-    [
-      ([Annotations.performance_critical], Annotations.expensive);
-      ([Annotations.no_allocation; Annotations.on_bind], dummy_constructor_annot);
-      ([Annotations.any_thread; Annotations.for_non_ui_thread], Annotations.ui_thread);
-      ([Annotations.ui_thread; Annotations.for_ui_thread], Annotations.for_non_ui_thread);
-    ] in
+    ([Annotations.performance_critical], Annotations.expensive) ::
+    ([Annotations.no_allocation], dummy_constructor_annot) ::
+    ([Annotations.any_thread; Annotations.for_non_ui_thread], Annotations.ui_thread) ::
+    ([Annotations.ui_thread; Annotations.for_ui_thread], Annotations.for_non_ui_thread) ::
+    (parse_user_defined_specs Config.annotation_reachability) in
   IList.map
     (fun (src_annot_str_list, snk_annot_str) ->
        IList.map annotation_of_str src_annot_str_list, annotation_of_str snk_annot_str)
@@ -127,24 +136,11 @@ let is_allocator tenv pname =
       false
 
 let check_attributes check tenv pname =
-  let check_method_attributes check pname =
-    match Specs.proc_resolve_attributes pname with
-    | None -> false
-    | Some attributes ->
-        let annotated_signature = Annotations.get_annotated_signature attributes in
-        let ret_annotation, _ = annotated_signature.Annotations.ret in
-        check ret_annotation in
-  PatternMatch.check_class_attributes check tenv pname || check_method_attributes check pname
+  PatternMatch.check_class_attributes check tenv pname ||
+  Annotations.pname_has_return_annot pname ~attrs_of_pname:Specs.proc_resolve_attributes check
 
 let method_overrides is_annotated tenv pname =
-  let overrides () =
-    let found = ref false in
-    PatternMatch.proc_iter_overridden_methods
-      (fun pn -> found := is_annotated tenv pn)
-      tenv pname;
-    !found in
-  is_annotated tenv pname ||
-  overrides ()
+  PatternMatch.override_exists (fun pn -> is_annotated tenv pn) tenv pname
 
 let method_has_annot annot tenv pname =
   let has_annot ia = Annotations.ia_ends_with ia annot.Annot.class_name in
@@ -194,7 +190,7 @@ let report_allocation_stack
   Reporting.log_error pname ~loc:fst_call_loc ~ltr:final_trace exn
 
 let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str snk_pname call_loc =
-  if snk_annot = dummy_constructor_annot
+  if String.equal snk_annot dummy_constructor_annot
   then report_allocation_stack src_annot src_pname loc trace stack_str snk_pname call_loc
   else
     let final_trace = IList.rev (update_trace call_loc trace) in
@@ -209,7 +205,7 @@ let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str sn
         exp_pname_str
         snk_annot in
     let msg =
-      if src_annot = Annotations.performance_critical
+      if String.equal src_annot Annotations.performance_critical
       then calls_expensive_method
       else annotation_reachability_error in
     let exn =
@@ -232,13 +228,14 @@ let report_call_stack end_of_stack lookup_next_calls report call_site calls =
       let new_stack_str = stack_str ^ callee_pname_str ^ " -> " in
       let new_trace = update_trace call_loc trace |> update_trace callee_def_loc in
       let unseen_pnames, updated_visited =
-        IList.fold_left
-          (fun (accu, set) call_site ->
-             let p = CallSite.pname call_site in
-             let loc = CallSite.loc call_site in
-             if Procname.Set.mem p set then (accu, set)
-             else ((p, loc) :: accu, Procname.Set.add p set))
-          ([], visited_pnames) next_calls in
+        List.fold
+          ~f:(fun (accu, set) call_site ->
+              let p = CallSite.pname call_site in
+              let loc = CallSite.loc call_site in
+              if Procname.Set.mem p set then (accu, set)
+              else ((p, loc) :: accu, Procname.Set.add p set))
+          ~init:([], visited_pnames)
+          next_calls in
       IList.iter (loop fst_call_loc updated_visited (new_trace, new_stack_str)) unseen_pnames in
   IList.iter
     (fun fst_call_site ->
@@ -259,7 +256,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   let is_unlikely pname =
     match pname with
     | Procname.Java java_pname ->
-        (Procname.java_get_method java_pname) = "unlikely"
+        String.equal (Procname.java_get_method java_pname) "unlikely"
     | _ -> false
 
   let is_tracking_exp astate = function
@@ -283,7 +280,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   (* TODO: generalize this to allow sanitizers for other annotation types, store it in [extras] so
      we can compute it just once *)
   let method_is_sanitizer annot tenv pname =
-    if annot.Annot.class_name = dummy_constructor_annot
+    if String.equal annot.Annot.class_name dummy_constructor_annot
     then method_has_ignore_allocation_annot tenv pname
     else false
 
@@ -339,11 +336,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         astate
 end
 
-module Analyzer =
-  AbstractInterpreter.Make
-    (ProcCfg.Exceptional)
-    (Scheduler.ReversePostorder)
-    (TransferFunctions)
+module Analyzer = AbstractInterpreter.Make (ProcCfg.Exceptional) (TransferFunctions)
 
 module Interprocedural = struct
   include AbstractInterpreter.Interprocedural(Summary)
@@ -372,8 +365,7 @@ module Interprocedural = struct
         Reporting.log_error proc_name ~loc exn in
 
     if expensive then
-      PatternMatch.proc_iter_overridden_methods
-        check_expensive_subtyping_rules tenv proc_name;
+      PatternMatch.override_iter check_expensive_subtyping_rules tenv proc_name;
 
     let report_src_snk_paths call_map (src_annot_list, (snk_annot: Annot.t)) =
       let extract_calls_with_annot annot call_map =
@@ -393,14 +385,15 @@ module Interprocedural = struct
             (CallSite.make proc_name loc)
             calls in
       let calls = extract_calls_with_annot snk_annot call_map in
-      if not (IList.length calls = 0)
+      if not (Int.equal (IList.length calls) 0)
       then IList.iter (report_src_snk_path calls) src_annot_list in
 
     let initial =
       let init_map =
-        IList.fold_left
-          (fun astate_acc (_, snk_annot) -> CallsDomain.add snk_annot CallSiteSet.empty astate_acc)
-          CallsDomain.empty
+        List.fold
+          ~f:(fun astate_acc (_, snk_annot) ->
+              CallsDomain.add snk_annot CallSiteSet.empty astate_acc)
+          ~init:CallsDomain.empty
           (src_snk_pairs ()) in
       Domain.NonBottom
         (init_map, Domain.TrackingVar.empty) in

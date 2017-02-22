@@ -49,7 +49,7 @@ let tests =
   let open OUnit2 in
   let cmp l1 l2 =
     let sort = IList.sort Procdesc.Node.compare in
-    IList.equal Procdesc.Node.compare (sort l1) (sort l2) in
+    List.equal ~equal:Procdesc.Node.equal (sort l1) (sort l2) in
   let pp_diff fmt (actual, expected) =
     let pp_sep fmt _ = F.pp_print_char fmt ',' in
     let pp_node_list fmt l = F.pp_print_list ~pp_sep Procdesc.Node.pp fmt l in
@@ -95,8 +95,10 @@ let tests =
         | _ -> assert_failure "Expected exactly two instructions with correct indices"
       end;
       assert_bool
-        "underlying_id should return id of underlying CFG type"
-        (BackwardInstrCfg.underlying_id n1 = BackwardCfg.id n1) in
+        "underlying_node should return node of underlying CFG type"
+        (Procdesc.Node.equal_id
+           (Procdesc.Node.get_id (BackwardInstrCfg.underlying_node n1))
+           (BackwardCfg.id n1)) in
     "instr_test">::instr_test_ in
 
   let graph_tests = [

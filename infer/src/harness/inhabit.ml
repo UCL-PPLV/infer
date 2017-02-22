@@ -60,8 +60,8 @@ let create_fresh_local_name () =
   incr local_name_cntr;
   "dummy_local" ^ string_of_int !local_name_cntr
 
-(** more forgiving variation of IList.tl that won't raise an exception on the empty list *)
-let tl_or_empty l = if l = [] then l else IList.tl l
+(** more forgiving variation of List.tl that won't raise an exception on the empty list *)
+let tl_or_empty l = if List.is_empty l then l else List.tl_exn l
 
 let get_non_receiver_formals formals = tl_or_empty formals
 
@@ -106,7 +106,7 @@ let rec inhabit_typ tenv typ cfg env =
                       && IList.for_all (fun (_, typ) ->
                           not (TypSet.mem typ env.cur_inhabiting)
                         ) (try_get_non_receiver_formals p) in
-                    IList.filter (fun p -> is_suitable_constructor p) methods
+                    List.filter ~f:(fun p -> is_suitable_constructor p) methods
                 | _ -> []
               )
             | _ -> []
@@ -153,7 +153,7 @@ and inhabit_args tenv formals cfg env =
   let inhabit_arg (_, formal_typ) (args, env) =
     let (exp, env) = inhabit_typ tenv formal_typ cfg env in
     ((exp, formal_typ) :: args, env) in
-  IList.fold_right inhabit_arg formals ([], env)
+  List.fold_right ~f:inhabit_arg formals ~init:([], env)
 
 (** create Sil that calls the constructor in constr_name on allocated_obj and inhabits the
  * remaining arguments *)
@@ -173,7 +173,7 @@ and inhabit_constructor tenv constr_name (allocated_obj, obj_type) cfg env =
 let inhabit_call_with_args procname procdesc args env =
   let retval =
     let ret_typ = Procdesc.get_ret_type procdesc in
-    let is_void = ret_typ = Typ.Tvoid in
+    let is_void = Typ.equal ret_typ Typ.Tvoid in
     if is_void then None else Some (Ident.create_fresh Ident.knormal, ret_typ) in
   let call_instr =
     let fun_exp = fun_exp_from_name procname in
@@ -272,7 +272,11 @@ let inhabit_trace tenv trace harness_name cg cfg =
         cur_inhabiting = TypSet.empty;
         harness_name = harness_name; } in
     (* invoke lifecycle methods *)
-    let env'' = IList.fold_left (fun env to_call -> inhabit_call tenv to_call cfg env) empty_env trace in
+    let env'' =
+      List.fold
+        ~f:(fun env to_call -> inhabit_call tenv to_call cfg env)
+        ~init:empty_env
+        trace in
     try
       setup_harness_cfg harness_name env'' cg cfg;
       write_harness_to_file (IList.rev env''.instrs) harness_filename

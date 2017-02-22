@@ -48,7 +48,7 @@ module ComplexExpressions = struct
     | Some proc_attributes ->
         let annotated_signature =
           Models.get_modelled_annotated_signature proc_attributes in
-        let ret_ann, _ = annotated_signature.Annotations.ret in
+        let ret_ann, _ = annotated_signature.AnnotatedSignature.ret in
         Annotations.ia_is_false_on_null ret_ann
     | None ->
         false
@@ -59,7 +59,7 @@ module ComplexExpressions = struct
       | Some proc_attributes ->
           let annotated_signature =
             Models.get_modelled_annotated_signature proc_attributes in
-          let ret_ann, _ = annotated_signature.Annotations.ret in
+          let ret_ann, _ = annotated_signature.AnnotatedSignature.ret in
           Annotations.ia_is_true_on_null ret_ann
       | None ->
           false in
@@ -170,7 +170,7 @@ let rec typecheck_expr
   | Exp.Const (Const.Cint i) when IntLit.iszero i ->
       let (typ, _, locs) = tr_default in
       if PatternMatch.type_is_class typ
-      then (typ, TypeAnnotation.const Annotations.Nullable true (TypeOrigin.Const loc), locs)
+      then (typ, TypeAnnotation.const AnnotatedSignature.Nullable true (TypeOrigin.Const loc), locs)
       else
         let t, ta, ll = tr_default in
         (t, TypeAnnotation.with_origin ta (TypeOrigin.Const loc), ll)
@@ -181,13 +181,14 @@ let rec typecheck_expr
         typestate e1 tr_default loc
   | Exp.Const _ ->
       let (typ, _, locs) = tr_default in
-      (typ, TypeAnnotation.const Annotations.Nullable false (TypeOrigin.Const loc), locs)
+      (typ, TypeAnnotation.const AnnotatedSignature.Nullable false (TypeOrigin.Const loc), locs)
   | Exp.Lfield (exp, fn, typ) ->
       let _, _, locs = tr_default in
       let (_, ta, locs') =
         typecheck_expr
           find_canonical_duplicate visited checks tenv node instr_ref curr_pdesc typestate exp
-          (typ, TypeAnnotation.const Annotations.Nullable false TypeOrigin.ONone, locs) loc in
+          (typ, TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.ONone, locs) loc
+      in
       let tr_new = match EradicateChecks.get_field_annotation tenv fn typ with
         | Some (t, ia) ->
             (
@@ -345,7 +346,7 @@ let typecheck_instr
         let is_parameter_field pvar = (* parameter.field *)
           let name = Pvar.get_name pvar in
           let filter (s, _, _) = Mangled.equal s name in
-          IList.exists filter annotated_signature.Annotations.params in
+          List.exists ~f:filter annotated_signature.AnnotatedSignature.params in
 
         let is_static_field pvar = (* static field *)
           Pvar.is_global pvar in
@@ -385,7 +386,9 @@ let typecheck_instr
   let constructor_check_calls_this calls_this pn =
     match curr_pname, pn with
     | Procname.Java curr_pname_java, Procname.Java pn_java ->
-        if Procname.java_get_class_name curr_pname_java = Procname.java_get_class_name pn_java
+        if String.equal
+            (Procname.java_get_class_name curr_pname_java)
+            (Procname.java_get_class_name pn_java)
         then calls_this := true
     | _ ->
         () in
@@ -402,7 +405,7 @@ let typecheck_instr
             (* Drop reference parameters to this and outer objects. *)
             let is_hidden_parameter (n, _) =
               let n_str = Mangled.to_string n in
-              n_str = "this" ||
+              String.equal n_str "this" ||
               Str.string_match (Str.regexp "$bcvar[0-9]+") n_str 0 in
             let rec drop_n_args ntl = match ntl with
               | fp:: tail when is_hidden_parameter fp -> 1 + drop_n_args tail
@@ -424,9 +427,9 @@ let typecheck_instr
   let drop_unchecked_signature_params proc_attributes annotated_signature =
     if Procname.is_constructor (proc_attributes.ProcAttributes.proc_name) &&
        proc_attributes.ProcAttributes.is_synthetic_method then
-      IList.drop_last 1 annotated_signature.Annotations.params
+      IList.drop_last 1 annotated_signature.AnnotatedSignature.params
     else
-      annotated_signature.Annotations.params in
+      annotated_signature.AnnotatedSignature.params in
 
   let is_return pvar =
     let ret_pvar = Procdesc.get_ret_var curr_pdesc in
@@ -458,7 +461,7 @@ let typecheck_instr
     typecheck_expr
       find_canonical_duplicate calls_this checks tenv node instr_ref
       curr_pdesc typestate1 exp1
-      (typ1, TypeAnnotation.const Annotations.Nullable false origin1, [loc1])
+      (typ1, TypeAnnotation.const AnnotatedSignature.Nullable false origin1, [loc1])
       loc1 in
 
   (* check if there are errors in exp1 *)
@@ -467,7 +470,7 @@ let typecheck_instr
 
   match instr with
   | Sil.Remove_temps (idl, _) ->
-      if remove_temps then IList.fold_right TypeState.remove_id idl typestate
+      if remove_temps then List.fold_right ~f:TypeState.remove_id idl ~init:typestate
       else typestate
   | Sil.Declare_locals _
   | Sil.Abstract _
@@ -511,7 +514,7 @@ let typecheck_instr
          Procname.equal pn BuiltinDecl.__new_array ->
       TypeState.add_id
         id
-        (typ, TypeAnnotation.const Annotations.Nullable false TypeOrigin.New, [loc])
+        (typ, TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.New, [loc])
         typestate (* new never returns null *)
   | Sil.Call (Some (id, _), Exp.Const (Const.Cfun pn), (e, typ):: _, loc, _)
     when Procname.equal pn BuiltinDecl.__cast ->
@@ -533,7 +536,7 @@ let typecheck_instr
           curr_pdesc
           typestate
           array_exp
-          (t, TypeAnnotation.const Annotations.Nullable false TypeOrigin.ONone, [loc])
+          (t, TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.ONone, [loc])
           loc in
       if checks.eradicate then
         EradicateChecks.check_array_access tenv
@@ -550,7 +553,7 @@ let typecheck_instr
         id
         (
           Typ.Tint (Typ.IInt),
-          TypeAnnotation.const Annotations.Nullable false TypeOrigin.New,
+          TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.New,
           [loc]
         )
         typestate
@@ -563,7 +566,7 @@ let typecheck_instr
        loc,
        cflags)
     ->
-      Ondemand.analyze_proc_name ~propagate_exceptions:true curr_pdesc callee_pname;
+      ignore (Ondemand.analyze_proc_name ~propagate_exceptions:true curr_pdesc callee_pname);
       let callee_attributes =
         match Specs.proc_resolve_attributes (* AttributesTable.load_attributes *) callee_pname with
         | Some proc_attributes ->
@@ -573,7 +576,7 @@ let typecheck_instr
               IList.mapi
                 (fun i (_, typ) ->
                    let arg =
-                     if i = 0 &&
+                     if Int.equal i 0 &&
                         not (Procname.java_is_static callee_pname)
                      then "this"
                      else Printf.sprintf "arg%d" i in
@@ -593,7 +596,7 @@ let typecheck_instr
           typecheck_expr_for_errors typestate e1 loc;
           let e2, typestate2 = convert_complex_exp_to_pvar node false e1 typestate1 loc in
           (((e1, e2), t1) :: etl1), typestate2 in
-        IList.fold_right handle_et etl ([], typestate) in
+        List.fold_right ~f:handle_et etl ~init:([], typestate) in
 
       let annotated_signature =
         Models.get_modelled_annotated_signature callee_attributes in
@@ -607,7 +610,7 @@ let typecheck_instr
         match ret_id with
         | None -> typestate'
         | Some (id, _) ->
-            let (ia, ret_typ) = annotated_signature.Annotations.ret in
+            let (ia, ret_typ) = annotated_signature.AnnotatedSignature.ret in
             let is_library = Specs.proc_is_library callee_attributes in
             let origin = TypeOrigin.Proc
                 {
@@ -634,7 +637,7 @@ let typecheck_instr
           | Some (t, ta, _) ->
               let should_report =
                 Config.eradicate_condition_redundant &&
-                TypeAnnotation.get_value Annotations.Nullable ta = false &&
+                not (TypeAnnotation.get_value AnnotatedSignature.Nullable ta) &&
                 not (TypeAnnotation.origin_is_fun_library ta) in
               if checks.eradicate && should_report then
                 begin
@@ -648,7 +651,7 @@ let typecheck_instr
                 end;
               TypeState.add
                 pvar
-                (t, TypeAnnotation.const Annotations.Nullable false TypeOrigin.ONone, [loc])
+                (t, TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.ONone, [loc])
                 typestate''
           | None ->
               typestate' in
@@ -666,7 +669,7 @@ let typecheck_instr
                     pvar_apply loc clear_nullable_flag ts pvar1
                 | _ -> ts in
               let vararg_values = PatternMatch.java_get_vararg_values node pvar idenv in
-              IList.fold_right do_vararg_value vararg_values typestate'
+              List.fold_right ~f:do_vararg_value vararg_values ~init:typestate'
             else
               pvar_apply loc clear_nullable_flag typestate' pvar
         | None -> typestate' in
@@ -698,7 +701,7 @@ let typecheck_instr
                 begin
                   match convert_complex_exp_to_pvar cond_node false cond_e typestate' loc with
                   | Exp.Lvar pvar', _ ->
-                      set_flag pvar' Annotations.Nullable false
+                      set_flag pvar' AnnotatedSignature.Nullable false
                   | _ -> ()
                 end
             | _ -> () in
@@ -706,7 +709,7 @@ let typecheck_instr
         let handle_optional_isPresent node' e =
           match convert_complex_exp_to_pvar node' false e typestate' loc with
           | Exp.Lvar pvar', _ ->
-              set_flag pvar' Annotations.Present true
+              set_flag pvar' AnnotatedSignature.Present true
           | _ -> () in
         match call_params with
         | ((_, Exp.Lvar pvar), _):: _ ->
@@ -824,7 +827,7 @@ let typecheck_instr
               else typestate1 in
             let has_method pn name = match pn with
               | Procname.Java pn_java ->
-                  Procname.java_get_method pn_java = name
+                  String.equal (Procname.java_get_method pn_java) name
               | _ ->
                   false in
             if Models.is_check_not_null callee_pname then
@@ -954,8 +957,8 @@ let typecheck_instr
               match from_call with
               | EradicateChecks.From_is_true_on_null ->
                   (* if f returns true on null, then false branch implies != null *)
-                  if TypeAnnotation.get_value Annotations.Nullable ta
-                  then set_flag e' Annotations.Nullable false typestate2
+                  if TypeAnnotation.get_value AnnotatedSignature.Nullable ta
+                  then set_flag e' AnnotatedSignature.Nullable false typestate2
                   else typestate2
               | _ ->
                   typestate2
@@ -997,8 +1000,8 @@ let typecheck_instr
             begin
               match from_call with
               | EradicateChecks.From_optional_isPresent ->
-                  if TypeAnnotation.get_value Annotations.Present ta = false
-                  then set_flag e' Annotations.Present true typestate2
+                  if not (TypeAnnotation.get_value AnnotatedSignature.Present ta)
+                  then set_flag e' AnnotatedSignature.Present true typestate2
                   else typestate2
               | EradicateChecks.From_is_true_on_null ->
                   typestate2
@@ -1006,8 +1009,8 @@ let typecheck_instr
               | EradicateChecks.From_containsKey
               | EradicateChecks.From_instanceof
               | EradicateChecks.From_is_false_on_null ->
-                  if TypeAnnotation.get_value Annotations.Nullable ta then
-                    set_flag e' Annotations.Nullable false typestate2
+                  if TypeAnnotation.get_value AnnotatedSignature.Nullable ta then
+                    set_flag e' AnnotatedSignature.Nullable false typestate2
                   else typestate2
             end
 
@@ -1084,7 +1087,7 @@ let typecheck_node
           typestates_exn := typestate :: !typestates_exn
     | Sil.Store (Exp.Lvar pv, _, _, _) when
         Pvar.is_return pv &&
-        Procdesc.Node.get_kind node = Procdesc.Node.throw_kind ->
+        Procdesc.Node.equal_nodekind (Procdesc.Node.get_kind node) Procdesc.Node.throw_kind ->
         (* throw instruction *)
         typestates_exn := typestate :: !typestates_exn
     | _ -> () in
@@ -1105,9 +1108,11 @@ let typecheck_node
   (* This is used to track if it is set to true for all visit to the node. *)
   TypeErr.node_reset_forall canonical_node;
 
-  let typestate_succ = IList.fold_left (do_instruction ext) typestate instrs in
+  let typestate_succ = List.fold ~f:(do_instruction ext) ~init:typestate instrs in
   let dont_propagate =
-    Procdesc.Node.get_kind node = Procdesc.Node.exn_sink_kind (* don't propagate exceptions *)
+    Procdesc.Node.equal_nodekind
+      (Procdesc.Node.get_kind node)
+      Procdesc.Node.exn_sink_kind (* don't propagate exceptions *)
     ||
     !noreturn in
   if dont_propagate

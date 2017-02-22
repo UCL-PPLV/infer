@@ -150,7 +150,7 @@ end = struct
   module Invariant = struct
     (** check whether a stats is the dummy stats *)
     let stats_is_dummy stats =
-      stats.max_length = - 1
+      Int.equal stats.max_length (-1)
 
     (** return the stats of the path, assumes that the stats are computed *)
     let get_stats = function
@@ -343,7 +343,7 @@ end = struct
       | None ->
           () in
     iter_shortest_sequence (fun _ p _ _ -> add_node (curr_node p)) None path;
-    let max_rep_node = ref (Procdesc.Node.dummy ()) in
+    let max_rep_node = ref (Procdesc.Node.dummy None) in
     let max_rep_num = ref 0 in
     Procdesc.NodeMap.iter
       (fun node num -> if num > !max_rep_num then (max_rep_node := node; max_rep_num := num))
@@ -473,7 +473,7 @@ end = struct
                   | None -> "", []
                   | Some exn_name ->
                       let exn_str = Typename.name exn_name in
-                      if exn_str = ""
+                      if String.equal exn_str ""
                       then "exception", [(Io_infer.Xml.tag_kind,"exception")]
                       else
                         "exception " ^ exn_str,
@@ -593,7 +593,7 @@ end = struct
   let filter f ps =
     let elements = ref [] in
     PropMap.iter (fun p _ -> elements := p :: !elements) ps;
-    elements := IList.filter (fun p -> not (f p)) !elements;
+    elements := List.filter ~f:(fun p -> not (f p)) !elements;
     let filtered_map = ref ps in
     IList.iter (fun p -> filtered_map := PropMap.remove p !filtered_map) !elements;
     !filtered_map
@@ -682,6 +682,6 @@ end = struct
 
   (** It's the caller's resposibility to ensure that Prop.prop_rename_primed_footprint_vars was called on the list *)
   let from_renamed_list (pl : ('a Prop.t * Path.t) list) : t =
-    IList.fold_left (fun ps (p, pa) -> add_renamed_prop p pa ps) empty pl
+    List.fold ~f:(fun ps (p, pa) -> add_renamed_prop p pa ps) ~init:empty pl
 end
 (* =============== END of the PathSet module ===============*)

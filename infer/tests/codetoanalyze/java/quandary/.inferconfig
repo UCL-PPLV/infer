@@ -1,0 +1,20 @@
+{
+  "quandary-sources": [
+    {
+      "procedure": "codetoanalyze.java.quandary.ExternalSpecs.privateData*",
+      "kind": "PrivateData"
+    }
+  ],
+  "quandary-sinks": [
+    {
+      "procedure": "codetoanalyze.java.quandary.ExternalSpecs.loggingSink1",
+      "kind": "Logging",
+      "index": "1"
+    },
+    {
+      "procedure": "codetoanalyze.java.quandary.ExternalSpecs.loggingSink2",
+      "kind": "Logging",
+      "index": "all"
+    }
+  ]
+}

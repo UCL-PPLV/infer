@@ -23,8 +23,9 @@ module type Node = sig
 
   val kind : t -> Procdesc.Node.nodekind
   val id : t -> id
+  val hash : t -> int
   val loc : t -> Location.t
-  val underlying_id : t -> Procdesc.Node.id
+  val underlying_node : t -> Procdesc.Node.t
   val compare_id : id -> id -> int
   val pp_id : F.formatter -> id -> unit
 end
@@ -35,8 +36,9 @@ module DefaultNode = struct
 
   let kind = Procdesc.Node.get_kind
   let id = Procdesc.Node.get_id
+  let hash = Procdesc.Node.hash
   let loc = Procdesc.Node.get_loc
-  let underlying_id = id
+  let underlying_node t = t
   let compare_id = Procdesc.Node.compare_id
   let pp_id = Procdesc.Node.pp_id
 end
@@ -47,9 +49,11 @@ module InstrNode = struct
 
   let kind = Procdesc.Node.get_kind
 
-  let underlying_id t = Procdesc.Node.get_id t
+  let underlying_node t = t
 
-  let id t = underlying_id t, Node_index
+  let id t = Procdesc.Node.get_id (underlying_node t), Node_index
+
+  let hash node = Hashtbl.hash (id node)
 
   let loc t = Procdesc.Node.get_loc t
 
@@ -105,6 +109,8 @@ module type S = sig
   val nodes : t -> node list
 
   val from_pdesc : Procdesc.t -> t
+
+  val is_loop_head : Procdesc.t -> node -> bool
 end
 
 (** Forward CFG with no exceptional control-flow *)
@@ -127,6 +133,7 @@ module Normal = struct
   let proc_desc t = t
   let nodes = Procdesc.get_nodes
   let from_pdesc pdesc = pdesc
+  let is_loop_head = Procdesc.is_loop_head
 end
 
 (** Forward CFG with exceptional control-flow *)
@@ -144,14 +151,14 @@ module Exceptional = struct
         let existing_exn_preds =
           try Procdesc.IdMap.find exn_succ_node_id exn_preds_acc
           with Not_found -> [] in
-        if not (IList.mem Procdesc.Node.equal n existing_exn_preds)
+        if not (List.mem ~equal:Procdesc.Node.equal existing_exn_preds n)
         then (* don't add duplicates *)
           Procdesc.IdMap.add exn_succ_node_id (n :: existing_exn_preds) exn_preds_acc
         else
           exn_preds_acc in
-      IList.fold_left add_exn_pred exn_preds_acc (Procdesc.Node.get_exn n) in
+      List.fold ~f:add_exn_pred ~init:exn_preds_acc (Procdesc.Node.get_exn n) in
     let exceptional_preds =
-      IList.fold_left add_exn_preds Procdesc.IdMap.empty (Procdesc.get_nodes pdesc) in
+      List.fold ~f:add_exn_preds ~init:Procdesc.IdMap.empty (Procdesc.get_nodes pdesc) in
     pdesc, exceptional_preds
 
   let instrs = Procdesc.Node.get_instrs
@@ -195,6 +202,7 @@ module Exceptional = struct
   let proc_desc (pdesc, _) = pdesc
   let start_node (pdesc, _) = Procdesc.get_start_node pdesc
   let exit_node (pdesc, _) = Procdesc.get_exit_node pdesc
+  let is_loop_head = Procdesc.is_loop_head
 end
 
 (** Wrapper that reverses the direction of the CFG *)

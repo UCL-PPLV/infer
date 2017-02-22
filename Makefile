@@ -13,16 +13,25 @@ ifeq ($(IS_FACEBOOK_TREE),yes)
   include $(ROOT_DIR)/facebook/Makefile.env
 endif
 
-BUILD_SYSTEMS_TESTS = \
-  assembly ck_analytics ck_imports clang_multiple_files clang_translation clang_unknown_ext \
-  delete_results_dir fail_on_issue gradle j1 javac linters make project_root_rel reactive \
-  utf8_in_procname utf8_in_pwd waf run_hidden_linters
-ifneq ($(ANT),no)
-BUILD_SYSTEMS_TESTS += ant
-endif
-ifneq ($(BUCK),no)
-BUILD_SYSTEMS_TESTS += buck genrule
-endif
+ifeq ($(BUILD_C_ANALYZERS),yes)
+BUILD_SYSTEMS_TESTS += \
+  assembly \
+  ck_analytics ck_imports \
+  clang_compilation_db_escaped clang_compilation_db_relpath \
+  clang_multiple_files \
+  clang_translation \
+  clang_unknown_ext \
+  delete_results_dir \
+  fail_on_issue \
+  j1 \
+  linters \
+  make \
+  project_root_rel \
+  reactive \
+  run_hidden_linters \
+  utf8_in_procname \
+  waf \
+
 ifneq ($(CMAKE),no)
 BUILD_SYSTEMS_TESTS += clang_compilation_db cmake
 endif
@@ -32,10 +41,30 @@ endif
 ifneq ($(PYTHON_lxml),no)
 BUILD_SYSTEMS_TESTS += results_xml
 endif
+ifneq ($(XCODE_SELECT),no)
+BUILD_SYSTEMS_TESTS += xcodebuild_no_xcpretty
+ifneq ($(XCPRETTY),no)
+BUILD_SYSTEMS_TESTS += xcodebuild
+endif
+endif # XCODE_SELECT
+endif # BUILD_C_ANALYZERS
 
-DIRECT_TESTS=
+ifeq ($(BUILD_JAVA_ANALYZERS),yes)
+BUILD_SYSTEMS_TESTS += gradle javac utf8_in_pwd
+ifneq ($(ANT),no)
+BUILD_SYSTEMS_TESTS += ant
+endif
+ifneq ($(BUCK),no)
+BUILD_SYSTEMS_TESTS += buck genrule
+endif
+ifneq ($(MVN),no)
+BUILD_SYSTEMS_TESTS += mvn
+endif
+endif
+
 ifeq ($(BUILD_C_ANALYZERS),yes)
-DIRECT_TESTS += c_errors c_frontend cpp_checkers cpp_errors cpp_frontend cpp_quandary
+DIRECT_TESTS += \
+  c_errors c_frontend c_bufferoverrun cpp_checkers cpp_errors cpp_frontend cpp_quandary
 endif
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 DIRECT_TESTS += \
@@ -43,14 +72,22 @@ DIRECT_TESTS += \
   java_crashcontext java_harness
 endif
 ifneq ($(XCODE_SELECT),no)
-DIRECT_TESTS += objc_frontend objc_errors objc_linters objc_ioslinters objcpp_frontend objcpp_linters
+DIRECT_TESTS += \
+  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters
 endif
 
 .PHONY: all
 all: infer
 
+configure: configure.ac $(wildcard m4/*.m4)
+	./autogen.sh
+
+Makefile.autoconf: configure
+#	rerun ./configure with the flags that were used last time it was run (if available)
+	./configure $(shell cat config.flags 2> /dev/null || true)
+
 .PHONY: src_build
-src_build:
+src_build: $(MAKEFILE_LIST)
 ifeq ($(IS_FACEBOOK_TREE),yes)
 	@$(MAKE) -C facebook setup
 endif
@@ -186,9 +223,15 @@ endtoend_test: print_direct_tests print_build_systems_tests
 
 .PHONY: inferTraceBugs_test
 inferTraceBugs_test: infer
+ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	$(INFER_BIN) -o __test-infer-out__ -- \
 	  javac $(EXAMPLES_DIR)/Hello.java \
 	   > /dev/null
+else
+	$(INFER_BIN) -o __test-infer-out__ -- \
+	  clang -c $(EXAMPLES_DIR)/hello.c \
+	   > /dev/null
+endif
 	@rm -f Hello.class
 	$(PYTHON_DIR)/inferTraceBugs -o __test-infer-out__ \
 	  --select 0 --max-level max > /dev/null

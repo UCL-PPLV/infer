@@ -13,10 +13,16 @@ open! IStd
 (** Configuration values: either constant, determined at compile time, or set at startup
     time by system calls, environment variables, or command line options *)
 
+type exe = Analyze | Clang | Driver | Print [@@deriving compare]
+
+val exe_name : exe -> string
 
 (** Various kind of analyzers *)
-type analyzer = Capture | Compile | Infer | Eradicate | Checkers | Tracing
-              | Crashcontext | Linters | Quandary | Threadsafety | Permsafety
+type analyzer =
+    Capture | Compile | Infer | Eradicate | Checkers | Tracing | Crashcontext | Linters | Quandary
+  | Threadsafety | Bufferoverrun | Permsafety [@@deriving compare]
+
+val equal_analyzer : analyzer -> analyzer -> bool
 
 (** Association list of analyzers and their names *)
 val string_to_analyzer : (string * analyzer) list
@@ -24,6 +30,8 @@ val string_to_analyzer : (string * analyzer) list
 val string_of_analyzer : analyzer -> string
 
 type language = Clang | Java [@@deriving compare]
+
+val equal_language : language -> language -> bool
 
 val string_of_language : language -> string
 
@@ -41,6 +49,8 @@ type dynamic_dispatch_policy = [
   | `Sound
   | `Lazy
 ]
+
+val env_inside_maven : Unix.env
 
 (** Constant configuration values *)
 
@@ -61,7 +71,6 @@ val classpath : string option
 val cpp_extra_include_dir : string
 val relative_cpp_models_dir : string
 val csl_analysis : bool
-val current_exe : CommandLineOption.exe
 val default_failure_name : string
 val default_in_zip_results_dir : string
 val dotty_output : string
@@ -121,8 +130,8 @@ val unsafe_unret : string
 val use_jar_cache : bool
 val version_string : string
 val weak : string
-val whitelisted_cpp_methods : string list list
-val whitelisted_cpp_classes : string list list
+val whitelisted_cpp_methods : string list
+val whitelisted_cpp_classes : string list
 val wrappers_dir : string
 
 
@@ -139,13 +148,18 @@ val analysis_stops : bool
 val analysis_suppress_errors : analyzer -> string list
 val analyzer : analyzer
 val angelic_execution : bool
+val annotation_reachability : Yojson.Basic.json
 val array_level : int
 val ast_file : string option
 val blacklist : string option
 val bootclasspath : string option
+val bo_debug : int
 val buck : bool
 val buck_build_args : string list
+val buck_cache_mode : bool
+val buck_compilation_database : [ `Deps | `NoDeps ] option
 val buck_out : string option
+val bufferoverrun : bool
 val bugs_csv : string option
 val bugs_json : string option
 val bugs_tests : string option
@@ -165,6 +179,7 @@ val clang_include_to_override : string option
 val cluster_cmdline : string option
 val compute_analytics : bool
 val continue_capture : bool
+val linters_ignore_clang_failures : bool
 val copy_propagation : bool
 val crashcontext : bool
 val create_harness : bool
@@ -185,7 +200,6 @@ val eradicate_optional_present : bool
 val eradicate_propagate_return_nullable : bool
 val eradicate_return_over_annotated : bool
 val eradicate_debug : bool
-val eradicate_trace : bool
 val eradicate_verbose : bool
 val err_file_cmdline : string
 val fail_on_bug : bool
@@ -203,9 +217,7 @@ val generated_classes : string option
 val headers : bool
 val icfg_dotty_outfile : string option
 val infer_cache : string option
-val init_work_dir : string
 val iphoneos_target_sdk_version : string option
-val is_originator : bool
 val iterations : int
 val java_jar_compiler : string option
 val javac_classes_out : string
@@ -216,6 +228,7 @@ val latex : string option
 val linters_def_file : string list
 val load_analysis_results : string option
 val makefile_cmdline : string
+val maven : bool
 val merge : bool
 val ml_buckets :
   [ `MLeak_all | `MLeak_arc | `MLeak_cf | `MLeak_cpp | `MLeak_no_arc | `MLeak_unknown ] list
@@ -227,6 +240,7 @@ val no_translate_libs : bool
 val objc_memory_model_on : bool
 val only_footprint : bool
 val out_file_cmdline : string
+val parse_action : CommandLineOption.parse_action
 val pmd_xml : bool
 val precondition_stats : bool
 val print_logs : bool
@@ -238,6 +252,8 @@ val procs_csv : string option
 val procs_xml : string option
 val project_root : string
 val quandary : bool
+val quandary_sources : Yojson.Basic.json
+val quandary_sinks : Yojson.Basic.json
 val quiet : bool
 val reactive_mode : bool
 val reactive_capture : bool
@@ -250,8 +266,8 @@ val save_analysis_results : string option
 val seconds_per_iteration : float option
 val show_buckets : bool
 val show_progress_bar : bool
+val siof_safe_methods : string list
 val skip_analysis_in_path : string list
-val skip_clang_analysis_in_path : string list
 val skip_translation_headers : string list
 val spec_abs_level : int
 val specs_library : string list
@@ -272,7 +288,6 @@ val trace_join : bool
 val trace_rearrange : bool
 val type_size : bool
 val unsafe_malloc : bool
-val use_compilation_database : [ `Deps | `NoDeps ] option
 val whole_seconds : bool
 val worklist_mode : int
 val write_dotty : bool
@@ -291,6 +306,8 @@ val set_reference_and_call_function : 'a ref -> 'a -> ('b -> 'c) -> 'b -> 'c
 val arc_mode : bool ref
 
 val curr_language : language ref
+
+val curr_language_is : language -> bool
 
 val footprint : bool ref
 
@@ -318,7 +335,7 @@ val run_with_abs_val_equal_zero : ('a -> 'b) -> 'a -> 'b
 
 val allow_leak : bool ref
 
-val clang_compilation_db_files : string list ref
+val clang_compilation_dbs : [ `Escaped of string | `Raw of string ] list ref
 
 (** Command Line Interface Documentation *)
 

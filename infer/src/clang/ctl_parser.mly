@@ -53,7 +53,7 @@
 %left AU, EU
 %right NOT, AX, EX, AF, EF, EG, AG, EH
 
-%start <Ctl_parser_types.ctl_checker list> checkers_list
+%start <CTL.ctl_checker list> checkers_list
 
 %%
 checkers_list:
@@ -65,8 +65,8 @@ checker:
  DEFINE_CHECKER identifier ASSIGNMENT LEFT_BRACE clause_list RIGHT_BRACE
   {
     Logging.out "\nParsed checker definition";
-    let c = { name = $2; definitions = $5 } in
-    print_checker c;
+    let c = { CTL.name = $2; CTL.definitions = $5 } in
+    CTL.print_checker c;
     c
   }
 ;
@@ -78,11 +78,11 @@ clause_list:
 
 clause:
   | SET identifier ASSIGNMENT formula
-    { Logging.out "\tParsed set clause\n"; CSet ($2, $4) }
+    { Logging.out "\tParsed set clause\n"; CTL.CSet ($2, $4) }
   | SET identifier ASSIGNMENT STRING
-    { Logging.out "\tParsed desc clause\n"; CDesc ($2, $4) }
+    { Logging.out "\tParsed desc clause\n"; CTL.CDesc ($2, $4) }
   | LET identifier ASSIGNMENT formula
-    { Logging.out "\tParsed let clause\n"; CLet ($2, $4) }
+    { Logging.out "\tParsed let clause\n"; CTL.CLet ($2, $4) }
 ;
 
 atomic_formula:
@@ -108,6 +108,7 @@ transition_label:
                   | "Body" | "body" -> Some CTL.Body
                   | "InitExpr" | "initexpr" -> Some CTL.InitExpr
                   | "Cond" | "cond" -> Some CTL.Cond
+                  | "PointerToDecl" | "pointertodecl" -> Some CTL.PointerToDecl
                   | _  -> None }
   ;
 
@@ -115,8 +116,12 @@ formula_EF:
  | LEFT_PAREN formula RIGHT_PAREN EF { $2 }
 ;
 
+formula_with_paren:
+ | LEFT_PAREN formula RIGHT_PAREN { $2 }
+;
+
 formula:
-  | LEFT_PAREN formula RIGHT_PAREN { $2 }
+  | formula_with_paren { $1 }
   | formula_id { $1 }
   | atomic_formula { Logging.out "\tParsed atomic formula\n"; $1 }
   | formula EU formula { Logging.out "\tParsed EU\n"; CTL.EU (None, $1, $3) }
@@ -134,6 +139,8 @@ formula:
      { Logging.out "\tParsed ET\n"; CTL.ET ($2, $4, $5)}
   | ETX params WITH_TRANSITION transition_label formula_EF
         { Logging.out "\tParsed ETX\n"; CTL.ETX ($2, $4, $5)}
+  | EX WITH_TRANSITION transition_label formula_with_paren
+    { Logging.out "\tParsed EX\n"; CTL.EX ($3, $4)}
   | formula AND formula { Logging.out "\tParsed AND\n"; CTL.And ($1, $3) }
   | formula OR formula { Logging.out "\tParsed OR\n"; CTL.Or ($1, $3) }
   | formula IMPLIES formula { Logging.out "\tParsed IMPLIES\n"; CTL.Implies ($1, $3) }

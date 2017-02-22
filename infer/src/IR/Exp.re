@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -57,7 +54,7 @@ and t =
       the [dynamic_length] is that of the final extensible array, if any. */
   | Sizeof Typ.t dynamic_length Subtype.t;
 
-let equal e1 e2 => compare e1 e2 == 0;
+let equal = [%compare.equal : t];
 
 let hash = Hashtbl.hash;
 
@@ -195,8 +192,10 @@ let get_vars exp => {
     | BinOp _ e1 e2
     | Lindex e1 e2 => get_vars_ e1 vars |> get_vars_ e2
     | Closure {captured_vars} =>
-      IList.fold_left
-        (fun vars_acc (captured_exp, _, _) => get_vars_ captured_exp vars_acc) vars captured_vars
+      List.fold
+        f::(fun vars_acc (captured_exp, _, _) => get_vars_ captured_exp vars_acc)
+        init::vars
+        captured_vars
     | Const (Cint _ | Cfun _ | Cstr _ | Cfloat _ | Cclass _ | Cptr_to_fld _) => vars
     /* TODO: Sizeof length expressions may contain variables, do not ignore them. */
     /* | Sizeof _ None _ => vars */

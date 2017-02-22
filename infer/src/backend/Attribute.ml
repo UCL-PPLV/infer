@@ -36,9 +36,10 @@ let attributes_in_same_category attr1 attr2 =
 let add_or_replace_check_changed tenv check_attribute_change prop atom0 =
   match atom0 with
   | Sil.Apred (att0, ((_ :: _) as exps0)) | Anpred (att0, ((_ :: _) as exps0)) ->
-      let nexps = IList.map (fun e -> Prop.exp_normalize_prop tenv prop e) exps0 in
-      let nexp = IList.hd nexps in (* len nexps = len exps0 > 0 by match *)
-      let natom = Sil.atom_replace_exp (IList.combine exps0 nexps) atom0 in
+      let pairs =
+        IList.map (fun e -> (e, Prop.exp_normalize_prop tenv prop e)) exps0 in
+      let _, nexp = List.hd_exn pairs in (* len exps0 > 0 by match *)
+      let natom = Sil.atom_replace_exp pairs atom0 in
       let atom_map = function
         | Sil.Apred (att, exp :: _) | Anpred (att, exp :: _)
           when Exp.equal nexp exp && attributes_in_same_category att att0 ->
@@ -68,7 +69,7 @@ let get_all (prop: 'a Prop.t) =
 
 (** Get all the attributes of the prop *)
 let get_for_symb prop att =
-  IList.filter (function
+  List.filter ~f:(function
       | Sil.Apred (att', _) | Anpred (att', _) -> PredSymb.equal att' att
       | _ -> false
     ) prop.Prop.pi
@@ -78,20 +79,19 @@ let get_for_exp tenv (prop: 'a Prop.t) exp =
   let nexp = Prop.exp_normalize_prop tenv prop exp in
   let atom_get_attr attributes atom =
     match atom with
-    | Sil.Apred (_, es) | Anpred (_, es) when IList.mem Exp.equal nexp es -> atom :: attributes
+    | Sil.Apred (_, es) | Anpred (_, es)
+      when List.mem ~equal:Exp.equal es nexp -> atom :: attributes
     | _ -> attributes in
-  IList.fold_left atom_get_attr [] prop.pi
+  List.fold ~f:atom_get_attr ~init:[] prop.pi
 
 let get tenv prop exp category =
   let atts = get_for_exp tenv prop exp in
-  try
-    Some
-      (IList.find (function
-           | Sil.Apred (att, _) | Anpred (att, _) ->
-               PredSymb.equal_category (PredSymb.to_category att) category
-           | _ -> false
-         ) atts)
-  with Not_found -> None
+  List.find
+    ~f:(function
+        | Sil.Apred (att, _) | Anpred (att, _) ->
+            PredSymb.equal_category (PredSymb.to_category att) category
+        | _ -> false)
+    atts
 
 let get_undef tenv prop exp =
   get tenv prop exp ACundef
@@ -119,7 +119,7 @@ let get_retval tenv prop exp =
 
 let has_dangling_uninit tenv prop exp =
   let la = get_for_exp tenv prop exp in
-  IList.exists (function
+  List.exists ~f:(function
       | Sil.Apred (a, _) -> PredSymb.equal a (Adangling DAuninit)
       | _ -> false
     ) la
@@ -204,7 +204,7 @@ let mark_vars_as_undefined tenv prop vars_to_mark callee_pname ret_annots loc pa
     match exp with
     | Exp.Var _ | Lvar _ -> add_or_replace tenv prop (Apred (att_undef, [exp]))
     | _ -> prop in
-  IList.fold_left (fun prop id -> mark_var_as_undefined id prop) prop vars_to_mark
+  List.fold ~f:(fun prop id -> mark_var_as_undefined id prop) ~init:prop vars_to_mark
 
 (** type for arithmetic problems *)
 type arith_problem =
@@ -233,7 +233,8 @@ let find_arithmetic_problem tenv proc_node_session prop exp =
         uminus_unsigned := (e, typ) :: !uminus_unsigned
     | Exp.UnOp(_, e, _) -> walk e
     | Exp.BinOp(op, e1, e2) ->
-        if op = Binop.Div || op = Binop.Mod then exps_divided := e2 :: !exps_divided;
+        if Binop.equal op Binop.Div || Binop.equal op Binop.Mod
+        then exps_divided := e2 :: !exps_divided;
         walk e1; walk e2
     | Exp.Exn _ -> ()
     | Exp.Closure _ -> ()
@@ -245,18 +246,22 @@ let find_arithmetic_problem tenv proc_node_session prop exp =
     | Exp.Sizeof (_, None, _) -> ()
     | Exp.Sizeof (_, Some len, _) -> walk len in
   walk exp;
-  try Some (Div0 (IList.find check_zero !exps_divided)), !res
-  with Not_found ->
-    (match !uminus_unsigned with
-     | (e, t):: _ -> Some (UminusUnsigned (e, t)), !res
-     | _ -> None, !res)
+  let problem_opt =
+    match (List.find ~f:check_zero !exps_divided, !uminus_unsigned) with
+    | Some e, _ ->
+        Some (Div0 e)
+    | None, (e, t):: _ ->
+        Some (UminusUnsigned (e, t))
+    | None, [] ->
+        None in
+  problem_opt, !res
 
 (** Deallocate the stack variables in [pvars], and replace them by normal variables.
     Return the list of stack variables whose address was still present after deallocation. *)
 let deallocate_stack_vars tenv (p: 'a Prop.t) pvars =
   let filter = function
     | Sil.Hpointsto (Exp.Lvar v, _, _) ->
-        IList.exists (Pvar.equal v) pvars
+        List.exists ~f:(Pvar.equal v) pvars
     | _ -> false in
   let sigma_stack, sigma_other = IList.partition filter p.sigma in
   let fresh_address_vars = ref [] in (* fresh vars substituted for the address of stack vars *)
@@ -286,16 +291,16 @@ let deallocate_stack_vars tenv (p: 'a Prop.t) pvars =
         end in
     IList.iter do_var !fresh_address_vars;
     !res in
-  !stack_vars_address_in_post, IList.fold_left (Prop.prop_atom_and tenv) p'' pi
+  !stack_vars_address_in_post, List.fold ~f:(Prop.prop_atom_and tenv) ~init:p'' pi
 
 (** Input of this method is an exp in a prop. Output is a formal variable or path from a
     formal variable that is equal to the expression,
     or the OBJC_NULL attribute of the expression. *)
 let find_equal_formal_path tenv e prop =
   let rec find_in_sigma e seen_hpreds =
-    IList.fold_right (
+    List.fold_right ~f:(
       fun hpred res ->
-        if IList.mem Sil.equal_hpred hpred seen_hpreds then None
+        if List.mem ~equal:Sil.equal_hpred seen_hpreds hpred then None
         else
           let seen_hpreds = hpred :: seen_hpreds in
           match res with
@@ -307,7 +312,7 @@ let find_equal_formal_path tenv e prop =
                      (Pvar.is_local pvar1 || Pvar.is_seed pvar1) ->
                   Some (Exp.Lvar pvar1)
               | Sil.Hpointsto (exp1, Sil.Estruct (fields, _), _) ->
-                  IList.fold_right (fun (field, strexp) res ->
+                  List.fold_right ~f:(fun (field, strexp) res ->
                       match res with
                       | Some _ -> res
                       | None ->
@@ -316,8 +321,8 @@ let find_equal_formal_path tenv e prop =
                               (match find_in_sigma exp1 seen_hpreds with
                                | Some vfs -> Some (Exp.Lfield (vfs, field, Typ.Tvoid))
                                | None -> None)
-                          | _ -> None) fields None
-              | _ -> None) prop.Prop.sigma None in
+                          | _ -> None) fields ~init:None
+              | _ -> None) prop.Prop.sigma ~init:None in
   match find_in_sigma e [] with
   | Some vfs -> Some vfs
   | None ->

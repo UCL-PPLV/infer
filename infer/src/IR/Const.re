@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -27,7 +24,7 @@ type t =
   | Cptr_to_fld Ident.fieldname Typ.t /** pointer to field constant, and type of the surrounding Csu.t type */
 [@@deriving compare];
 
-let equal c1 c2 => compare c1 c2 == 0;
+let equal = [%compare.equal : t];
 
 let kind_equal c1 c2 => {
   let const_kind_number =
@@ -38,7 +35,7 @@ let kind_equal c1 c2 => {
     | Cfloat _ => 4
     | Cclass _ => 5
     | Cptr_to_fld _ => 6;
-  const_kind_number c1 == const_kind_number c2
+  Int.equal (const_kind_number c1) (const_kind_number c2)
 };
 
 let pp pe f =>

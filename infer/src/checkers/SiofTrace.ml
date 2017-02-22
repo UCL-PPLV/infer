@@ -8,6 +8,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 module F = Format
 module L = Logging
@@ -17,7 +18,7 @@ module GlobalsAccesses = PrettyPrintable.MakePPSet (struct
     let compare (v1, l1) (v2, l2) =
       (* compare by loc first to present reports in the right order *)
       [%compare : (Location.t * Pvar.t)] (l1, v1) (l2, v2)
-    let pp_element fmt (v, _) =
+    let pp fmt (v, _) =
       F.fprintf fmt "%a" Mangled.pp (Pvar.get_name v);
       match Pvar.get_source_file v with
       | Some fname -> F.fprintf fmt "%a" SourceFile.pp fname
@@ -53,7 +54,7 @@ module TraceElem = struct
       (* type nonrec t = t [@@deriving compare]; *)
       type nonrec t = t
       let compare = compare
-      let pp_element = pp
+      let pp = pp
     end)
 
 end
@@ -92,7 +93,7 @@ let trace_of_error loc gname path =
             []
           ::err_trace in
         GlobalsAccesses.elements globals
-        |> IList.fold_left add_trace_elem_of_access rest
+        |> List.fold ~f:add_trace_elem_of_access ~init:rest
         |> IList.rev
     | _ -> trace_with_set_of_globals
   in

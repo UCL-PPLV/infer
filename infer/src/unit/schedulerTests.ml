@@ -20,10 +20,11 @@ module MockNode = struct
 
   let instrs _ = []
   let instr_ids _ = []
+  let hash = Hashtbl.hash
   let to_instr_nodes _ = assert false
   let id n = n
   let loc _ = assert false
-  let underlying_id _ = assert false
+  let underlying_node _ = assert false
   let kind _ = Procdesc.Node.Stmt_node ""
   let compare_id = Int.compare
   let pp_id fmt i =
@@ -35,23 +36,21 @@ module MockProcCfg = struct
   include (MockNode : module type of MockNode with type t := node)
   type t = (node * node list) list
 
-  let compare_id = Int.compare
+  let equal_id = Int.equal
 
   let succs t n =
-    try
-      let node_id = id n in
-      IList.find
-        (fun (node, _) -> compare_id (id node) node_id = 0)
-        t
-      |> snd
-    with Not_found -> []
+    let node_id = id n in
+    List.find
+      ~f:(fun (node, _) -> equal_id (id node) node_id)
+      t |>
+    Option.value_map ~f:snd ~default:[]
 
   let preds t n =
     try
       let node_id = id n in
-      IList.filter
-        (fun (_, succs) ->
-           IList.exists (fun node -> compare_id (id node) node_id = 0) succs)
+      List.filter
+        ~f:(fun (_, succs) ->
+           List.exists ~f:(fun node -> equal_id (id node) node_id) succs)
         t
       |> IList.map fst
     with Not_found -> []
@@ -68,6 +67,7 @@ module MockProcCfg = struct
   let exit_node _ = assert false
   let proc_desc _ = assert false
   let from_pdesc _ = assert false
+  let is_loop_head _ = assert false
 end
 
 module S = Scheduler.ReversePostorder (MockProcCfg)

@@ -9,9 +9,19 @@
 
 package codetoanalyze.java.checkers;
 
+import javax.annotation.concurrent.ThreadSafe;
+import javax.inject.Inject;
+import javax.inject.Provider;
+
 class Obj {
   Object f;
   Obj g;
+}
+
+interface CustomProvider<T> extends Provider<T> {
+
+  @Override
+  public T get();
 }
 
 @ThreadSafe
@@ -22,6 +32,18 @@ public class Ownership {
   public Ownership(Obj o) {
     field = o;
   }
+
+  // understand that ownership can be acquired via DI
+  @Inject Ownership(Provider<Obj> objProvider) {
+    Obj owned = objProvider.get();
+    owned.f = new Object(); // should not report
+  }
+
+  @Inject Ownership(CustomProvider<Obj> objProvider) {
+    Obj owned = objProvider.get();
+    owned.f = new Object(); // should not report
+  }
+
 
   native void leakToAnotherThread(Object o);
 
@@ -94,11 +116,176 @@ public class Ownership {
     alias.f = new Object();
   }
 
-  // we don't understand that ownership has been transferred from returnOwnedLocalOk to the current
-  // procedure
-  public void FP_ownershipNotInterproceduralOk() {
+  private void writeToFormal(Obj formal) {
+    formal.f = new Object();
+  }
+
+  private void callWriteToFormal(Obj formal) {
+    writeToFormal(formal);
+  }
+
+  private void setField(Obj o) {
+    this.field = o;
+  }
+
+  native Obj getMaybeUnownedObj();
+
+  // warn here even though this this is safe if `o` is owned at all call sites. because it's a
+  // public method, it's possible to use it in an unsafe way
+  public void writeToNotOwnedInCalleeBad1(Obj o) {
+    writeToFormal(o);
+  }
+
+  public void writeToNotOwnedInCalleeBad2() {
+    Obj o = getMaybeUnownedObj();
+    writeToFormal(o);
+  }
+
+  public void writeToNotOwnedInCalleeBad3(Obj o) {
+    callWriteToFormal(o);
+  }
+
+  // assuming that we can't own the `this` object
+  public void cantOwnThisBad() {
+    setField(new Obj());
+  }
+
+  public void writeToOwnedInCalleeOk1() {
+    Obj o = new Obj();
+    writeToFormal(o);
+  }
+
+  public void writeToOwnedInCalleeOk2() {
+    synchronized (this) {
+      this.field = new Obj();
+    }
+    writeToFormal(this.field);
+  }
+
+  public void writeToOwnedInCalleeIndirectOk1() {
+    Obj o = new Obj();
+    callWriteToFormal(o);
+  }
+
+  public void writeToOwnedInCalleeIndirectOk2() {
+    Obj o = new Obj();
+    o.g = new Obj();
+    callWriteToFormal(o.g);
+  }
+
+  public Obj ownershipCanBeInterproceduralOk() {
     Obj local = returnOwnedLocalOk();
     local.f = new Object();
+    return local;
+  }
+
+  public void mutateDoubleReturnOwnedOk() {
+    Obj owned = ownershipCanBeInterproceduralOk();
+    owned.g = new Obj();
+  }
+
+  Obj returnOwnedOrNull(boolean b) {
+    if (b) {
+      return null;
+    }
+    return new Obj();
+  }
+
+  public void mutateAfterNullCheckOK(boolean b) {
+    Obj o = returnOwnedOrNull(b);
+    if (o != null) {
+      o.f = new Object();
+    }
+  }
+
+  private void mutateIfNotNull(Obj o) {
+    if (o != null) {
+      o.f = new Object();
+    }
+  }
+
+  public void ownInCalleeViaNullOk() {
+    mutateIfNotNull(null);
+  }
+
+  public void notOwnedInCalleeBad(Obj o) {
+    mutateIfNotNull(o);
+  }
+
+  Obj id(Obj param) {
+    return param;
+  }
+
+  public void passOwnershipInIdFunctionOk() {
+    Obj owned = new Obj();
+    Obj shouldBeOwned = id(owned);
+    shouldBeOwned.f = new Object();
+  }
+
+  Obj id2(Obj param) {
+    return id(param);
+  }
+
+  public void passOwnershipInMultiLevelIdFunctionOk() {
+    Obj owned = new Obj();
+    Obj shouldBeOwned = id2(owned);
+    shouldBeOwned.f = new Object();
+  }
+
+  native boolean nondet();
+
+  public Obj returnConditionalOwnedInTwoBranches(Obj param) {
+    if (nondet()) {
+      return param;
+    }
+    return param;
+  }
+
+  public void returnConditionalOwnedInTwoBranchesOk() {
+    Obj owned = new Obj();
+    Obj shouldBeOwned = returnConditionalOwnedInTwoBranches(owned);
+    shouldBeOwned.f = new Object();
+  }
+
+  public Obj returnOwnedOrConditionalOwned(Obj param) {
+    if (nondet()) {
+      return param;
+    } else {
+      return new Obj();
+    }
+  }
+
+  public void ownedAfterCastOk() {
+    Object o = new Obj();
+    Obj owned = (Obj) o;
+    owned.f = new Object();
+  }
+
+  // TODO: need to handle multiple ownership attributes in order to get this one
+  public void FP_ownAndConditionalOwnOk() {
+    Obj owned = new Obj();
+    Obj shouldBeOwned = returnOwnedOrConditionalOwned(owned);
+    shouldBeOwned.f = new Object();
+  }
+
+  public Obj twoDifferentConditionalOwns(Obj param1, Obj param2) {
+    if (nondet()) {
+      return param1;
+    } else {
+      return param2;
+    }
+  }
+
+  public void threadLocalOk(ThreadLocal<Obj> threadLocal) {
+    threadLocal.get().f = new Object();
+  }
+
+  // need to handle multiple ownership attributes in order to get this one
+  public void FP_twoDifferentConditionalOwnsOk() {
+    Obj owned1 = new Obj();
+    Obj owned2 = new Obj();
+    Obj shouldBeOwned = twoDifferentConditionalOwns(owned1, owned2);
+    shouldBeOwned.f = new Object();
   }
 
   // we angelically assume that callees don't leak their arguments to another thread for now, so
@@ -109,4 +296,15 @@ public class Ownership {
     local.f = new Object();
   }
 
+  private Obj leakThenReturn() {
+    Obj local = new Obj();
+    leakToAnotherThread(local);
+    return local;
+  }
+
+  // the summary for leakThenReturn should not say that the caller owns the return value
+  public void FN_mutateReturnedBad() {
+    Obj notOwned = leakThenReturn();
+    notOwned.f = new Object(); // should warn here
+  }
 }

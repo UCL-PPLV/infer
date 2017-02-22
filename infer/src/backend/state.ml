@@ -64,7 +64,7 @@ let initial () = {
   diverging_states_node = Paths.PathSet.empty;
   diverging_states_proc = Paths.PathSet.empty;
   last_instr = None;
-  last_node = Procdesc.Node.dummy ();
+  last_node = Procdesc.Node.dummy None;
   last_path = None;
   last_prop_tenv_pdesc = None;
   last_session = 0;
@@ -149,7 +149,7 @@ let instrs_normalize instrs =
     let do_instr ids = function
       | Sil.Load (id, _, _, _) -> id :: ids
       | _ -> ids in
-    IList.fold_left do_instr [] instrs in
+    List.fold ~f:do_instr ~init:[] instrs in
   let subst =
     let count = ref Int.min_value in
     let gensym id =
@@ -214,11 +214,12 @@ let mk_find_duplicate_nodes proc_desc : (Procdesc.Node.t -> Procdesc.NodeSet.t) 
         | _ -> raise Not_found in
       let duplicates =
         let equal_normalized_instrs (_, normalized_instrs') =
-          IList.compare Sil.compare_instr node_normalized_instrs normalized_instrs' = 0 in
-        IList.filter equal_normalized_instrs elements in
-      IList.fold_left
-        (fun nset (node', _) -> Procdesc.NodeSet.add node' nset)
-        Procdesc.NodeSet.empty duplicates
+          List.equal ~equal:Sil.equal_instr node_normalized_instrs normalized_instrs' in
+        List.filter ~f:equal_normalized_instrs elements in
+      List.fold
+        ~f:(fun nset (node', _) -> Procdesc.NodeSet.add node' nset)
+        ~init:Procdesc.NodeSet.empty
+        duplicates
     with Not_found -> Procdesc.NodeSet.singleton node in
 
   find_duplicate_nodes
@@ -283,7 +284,7 @@ let mark_execution_start node =
 
 let mark_execution_end node =
   let fs = get_failure_stats node in
-  let success = fs.instr_fail = 0 in
+  let success = Int.equal fs.instr_fail 0 in
   fs.instr_ok <- 0;
   fs.instr_fail <- 0;
   if success then fs.node_ok <- fs.node_ok + 1
@@ -299,7 +300,7 @@ let mark_instr_fail exn =
   let session = get_session () in
   let loc_trace = get_loc_trace () in
   let fs = get_failure_stats (get_node ()) in
-  if fs.first_failure = None then
+  if is_none fs.first_failure then
     fs.first_failure <- Some (loc, key, (session :> int), loc_trace, exn);
   fs.instr_fail <- fs.instr_fail + 1
 

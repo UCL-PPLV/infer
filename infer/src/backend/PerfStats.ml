@@ -141,7 +141,7 @@ let stats () =
   }
 
 let register_report_at_exit file =
-  Pervasives.at_exit (fun () ->
+  Utils.register_epilogue (fun () ->
       try
         let json_stats = to_json (stats ()) in
         try
@@ -156,4 +156,4 @@ let register_report_at_exit file =
       with exc ->
         Format.eprintf "Info: failed to compute stats for %s@\n%s@\n%s@."
           file (Exn.to_string exc) (Printexc.get_backtrace ())
-    )
+    ) ("stats reporting in " ^ file)

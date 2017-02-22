@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -52,4 +49,8 @@ let pp: Format.formatter => t => unit;
 
 
 /** Set of Mangled. */
-let module MangledSet: Caml.Set.S with type elt = t;
+let module Set: Caml.Set.S with type elt = t;
+
+
+/** Map with Mangled as key */
+let module Map: Caml.Map.S with type key = t;

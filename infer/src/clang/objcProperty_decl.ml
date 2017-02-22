@@ -19,13 +19,13 @@ open! IStd
 
 let is_strong_property obj_c_property_decl_info =
   let attrs = obj_c_property_decl_info.Clang_ast_t.opdi_property_attributes in
-  IList.exists (fun a -> match a with
+  List.exists ~f:(fun a -> match a with
       | `Strong -> true
       | _ -> false) attrs
 
 let is_assign_property obj_c_property_decl_info =
   let attrs = obj_c_property_decl_info.Clang_ast_t.opdi_property_attributes in
-  IList.exists (fun a -> match a with
+  List.exists ~f:(fun a -> match a with
       | `Assign -> true
       | _ -> false) attrs
 
@@ -43,4 +43,4 @@ let get_methods curr_class decl_list =
           CGeneral_utils.mk_procname_from_objc_method class_name method_name method_kind in
         meth_name:: list_methods
     | _ -> list_methods in
-  IList.fold_right get_method decl_list []
+  List.fold_right ~f:get_method decl_list ~init:[]

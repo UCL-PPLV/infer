@@ -138,11 +138,12 @@ DEFINE-CHECKER REGISTERED_OBSERVER_BEING_DEALLOCATED = {
 DEFINE-CHECKER STRONG_DELEGATE_WARNING = {
 
   LET name_contains_delegate = property_name_contains_word(delegate);
+  LET name_does_not_contain_delegates = NOT property_name_contains_word(delegates);
   LET name_does_not_contains_queue = NOT property_name_contains_word(queue);
 
   SET report_when =
 	    WHEN
-				name_contains_delegate AND name_does_not_contains_queue AND is_strong_property()
+				name_contains_delegate AND name_does_not_contain_delegates AND name_does_not_contains_queue AND is_strong_property()
 			HOLDS-IN-NODE ObjCPropertyDecl;
 
   SET message = "Property or ivar %decl_name% declared strong";
@@ -202,20 +203,20 @@ DEFINE-CHECKER CXX_REFERENCE_CAPTURED_IN_OBJC_BLOCK = {
 
 	};
 
-//
-// ** Commented for the moment. We use the hardcoded version
-//
-//	DEFINE-CHECKER ctl_unavailable_api_in_supported_ios_sdk_error = {
-//		  SET report_when =
-//			     WHEN
-//					    WITH-TRANSITION PointerToDecl decl_unavailable_in_supported_ios_sdk
-//	         HOLDS-IN-NODE DeclRefExpr, ObjCMessageExpr;
-//
-//		  SET message =
-//		        "%decl_ref_or_selector_name% is available only starting \
-//		         from ios sdk %available_ios_sdk% but we support earlier versions from \
-//		         ios sdk %iphoneos_target_sdk_version%;
-//
-//		  SET suggestion = "This could cause a crash.";
-//
-//		};
+	// If the declaration has availability attributes, check that it's compatible with
+	// the iphoneos_target_sdk_version
+	DEFINE-CHECKER UNAVAILABLE_API_IN_SUPPORTED_IOS_SDK = {
+
+		SET report_when =
+		     WHEN HOLDS-NEXT WITH-TRANSITION PointerToDecl
+	 				 (decl_unavailable_in_supported_ios_sdk() AND
+	 				 NOT within_responds_to_selector_block())
+				 HOLDS-IN-NODE DeclRefExpr, ObjCMessageExpr;
+
+		  SET message =
+		        "%decl_ref_or_selector_name% is not available in the required iOS SDK version
+		         %iphoneos_target_sdk_version% (only available from version %available_ios_sdk%)";
+
+		  SET suggestion = "This could cause a crash.";
+			SET severity = "ERROR";
+		};

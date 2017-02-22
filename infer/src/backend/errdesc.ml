@@ -19,7 +19,7 @@ module DExp = DecompiledExp
 let vector_class = ["std"; "vector"]
 
 let is_one_of_classes class_name classes =
-  IList.exists (fun wrapper_class ->
+  List.exists ~f:(fun wrapper_class ->
       IList.for_all (fun wrapper_class_substring ->
           String.is_substring ~substring:wrapper_class_substring class_name) wrapper_class)
     classes
@@ -78,9 +78,9 @@ let find_in_node_or_preds start_node f_node_instr =
       begin
         visited := Procdesc.NodeSet.add node !visited;
         let instrs = Procdesc.Node.get_instrs node in
-        match IList.find_map_opt (f_node_instr node) (IList.rev instrs) with
+        match List.find_map ~f:(f_node_instr node) (IList.rev instrs) with
         | Some res -> Some res
-        | None -> IList.find_map_opt find (Procdesc.Node.get_preds node)
+        | None -> List.find_map ~f:find (Procdesc.Node.get_preds node)
       end in
   find start_node
 
@@ -97,10 +97,10 @@ let find_nullify_after_instr node instr pvar : bool =
   let found_instr = ref false in
   let find_nullify = function
     | Sil.Nullify (pv, _) when !found_instr -> Pvar.equal pv pvar
-    | _instr ->
-        if instr = _instr then found_instr := true;
+    | instr_ ->
+        if Sil.equal_instr instr instr_ then found_instr := true;
         false in
-  IList.exists find_nullify node_instrs
+  List.exists ~f:find_nullify node_instrs
 
 (** Find the other prune node of a conditional
     (e.g. the false branch given the true branch of a conditional) *)
@@ -142,7 +142,7 @@ let find_normal_variable_funcall
         Some (fun_exp, IList.map fst args, loc, call_flags)
     | _ -> None in
   let res = find_in_node_or_preds node find_declaration in
-  if verbose && res = None
+  if verbose && is_none res
   then
     (L.d_str
        ("find_normal_variable_funcall could not find " ^
@@ -198,7 +198,7 @@ let rec find_boolean_assignment node pvar true_branch : Procdesc.Node.t option =
       | Sil.Store (Exp.Lvar _pvar, _, Exp.Const (Const.Cint i), _) when Pvar.equal pvar _pvar ->
           IntLit.iszero i <> true_branch
       | _ -> false in
-    IList.exists filter (Procdesc.Node.get_instrs n) in
+    List.exists ~f:filter (Procdesc.Node.get_instrs n) in
   match Procdesc.Node.get_preds node with
   | [pred_node] -> find_boolean_assignment pred_node pvar true_branch
   | [n1; n2] ->
@@ -235,7 +235,7 @@ let rec _find_normal_variable_load tenv (seen : Exp.Set.t) node id : DExp.t opti
         let fun_dexp = DExp.Dconst (Const.Cfun pname) in
         let args_dexp =
           let args_dexpo = IList.map (fun (e, _) -> _exp_rv_dexp tenv seen node e) args in
-          if IList.exists (fun x -> x = None) args_dexpo
+          if List.exists ~f:is_none args_dexpo
           then []
           else
             let unNone = function Some x -> x | None -> assert false in
@@ -251,7 +251,7 @@ let rec _find_normal_variable_load tenv (seen : Exp.Set.t) node id : DExp.t opti
         Some (DExp.Dpvar pvar)
     | _ -> None in
   let res = find_in_node_or_preds node find_declaration in
-  if verbose && res = None
+  if verbose && is_none res
   then
     (L.d_str
        ("find_normal_variable_load could not find " ^
@@ -300,7 +300,7 @@ and _exp_lv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
                   | Some (fun_exp, eargs, loc, call_flags) ->
                       let fun_dexpo = _exp_rv_dexp tenv seen node' fun_exp in
                       let blame_args = IList.map (_exp_rv_dexp tenv seen node') eargs in
-                      if IList.exists (fun x -> x = None) (fun_dexpo:: blame_args) then None
+                      if List.exists ~f:is_none (fun_dexpo:: blame_args) then None
                       else
                         let unNone = function Some x -> x | None -> assert false in
                         let args = IList.map unNone blame_args in
@@ -537,11 +537,11 @@ let explain_leak tenv hpred prop alloc_att_opt bucket =
                  Pvar.d pvar; L.d_ln ());
               [pvar]
           | _ -> [] in
-        let nullify_pvars = IList.flatten (IList.map get_nullify node_instrs) in
+        let nullify_pvars = List.concat (IList.map get_nullify node_instrs) in
         let nullify_pvars_notmp =
-          IList.filter (fun pvar -> not (Pvar.is_frontend_tmp pvar)) nullify_pvars in
+          List.filter ~f:(fun pvar -> not (Pvar.is_frontend_tmp pvar)) nullify_pvars in
         value_str_from_pvars_vpath nullify_pvars_notmp vpath
-    | Some (Sil.Store (lexp, _, _, _)) when vpath = None ->
+    | Some (Sil.Store (lexp, _, _, _)) when is_none vpath ->
         if verbose
         then
           (L.d_str "explain_leak: current instruction Set for ";
@@ -581,11 +581,9 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
                let typo = match texp with
                  | Exp.Sizeof (Tstruct name, _, _) -> (
                      match Tenv.lookup tenv name with
-                     | Some {fields} -> (
-                         match IList.find (fun (f', _, _) -> Ident.equal_fieldname f' f) fields with
-                         | _, t, _ -> Some t
-                         | exception Not_found -> None
-                       )
+                     | Some {fields} ->
+                         List.find ~f:(fun (f', _, _) -> Ident.equal_fieldname f' f) fields |>
+                         Option.map ~f:snd3
                      | _ ->
                          None
                    )
@@ -631,7 +629,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
         let filter = function
           | (ni, Exp.Var id') -> Ident.is_normal ni && Ident.equal id' id
           | _ -> false in
-        IList.exists filter (Sil.sub_to_list prop.Prop.sub) in
+        List.exists ~f:filter (Sil.sub_to_list prop.Prop.sub) in
       function
       | Sil.Hpointsto (Exp.Lvar pv, sexp, texp)
         when (Pvar.is_local pv || Pvar.is_global pv || Pvar.is_seed pv) ->
@@ -768,7 +766,7 @@ let explain_dexp_access prop dexp is_nullable =
         Some (Localise.Last_accessed (n, is_nullable))
     | Some (Sil.Ireturn_from_call n) ->
         Some (Localise.Returned_from_call n)
-    | Some Sil.Ialloc when !Config.curr_language = Config.Java ->
+    | Some Sil.Ialloc when Config.curr_language_is Config.Java ->
         Some Localise.Initialized_automatically
     | Some inst ->
         if verbose
@@ -823,7 +821,7 @@ let create_dereference_desc tenv
     | _ -> access_opt in
   let desc = Localise.dereference_string deref_str value_str access_opt' loc in
   let desc =
-    if !Config.curr_language = Config.Clang && not is_premature_nil then
+    if Config.curr_language_is Config.Clang && not is_premature_nil then
       match de_opt with
       | Some (DExp.Dpvar pvar)
       | Some (DExp.Dpvaraddr pvar) ->
@@ -899,7 +897,7 @@ let _explain_access tenv
         if verbose then (L.d_str "explain_dereference Binop.Leteref "; Sil.d_exp e; L.d_ln ());
         Some e
     | Some Sil.Call (_, Exp.Const (Const.Cfun fn), [(e, _)], _, _)
-      when Procname.to_string fn = "free" ->
+      when String.equal (Procname.to_string fn) "free" ->
         if verbose then (L.d_str "explain_dereference Sil.Call "; Sil.d_exp e; L.d_ln ());
         Some e
     | Some Sil.Call (_, (Exp.Var _ as e), _, _, _) ->
@@ -983,7 +981,7 @@ let find_with_exp prop exp =
     if not (Pvar.is_abduced pv) && not (Pvar.is_this pv) then
       res := Some (pv, Fpvar) in
   let found_in_struct pv fld_lst = (* found_in_pvar has priority *)
-    if !res = None then res := Some (pv, Fstruct (IList.rev fld_lst)) in
+    if is_none !res then res := Some (pv, Fstruct (IList.rev fld_lst)) in
   let rec search_struct pv fld_lst = function
     | Sil.Eexp (e, _) ->
         if Exp.equal e exp then found_in_struct pv fld_lst

@@ -37,12 +37,10 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         let add_actual_by_ref astate_acc = function
           | actual_exp, Typ.Tptr _ -> add_address_taken_pvars actual_exp astate_acc
           | _ -> astate_acc in
-        IList.fold_left add_actual_by_ref astate actuals
+        List.fold ~f:add_actual_by_ref ~init:astate actuals
     | Sil.Store _ | Load _ | Prune _ | Nullify _ | Abstract _ | Remove_temps _
     | Declare_locals _ ->
         astate
 end
 
-module Analyzer =
-  AbstractInterpreter.Make
-    (ProcCfg.Exceptional) (Scheduler.ReversePostorder) (TransferFunctions)
+module Analyzer = AbstractInterpreter.Make (ProcCfg.Exceptional) (TransferFunctions)

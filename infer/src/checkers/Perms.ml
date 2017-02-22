@@ -7,6 +7,7 @@ open! IStd
    - static fields?
    - include only public methods in check
    - debug check of parallel compositions
+   - add locked flag and make RI adding on demand
 *)
 
 open! PermsDomain
@@ -15,13 +16,7 @@ let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
   | _ -> assert false
 
-module ClassMap =
-  PrettyPrintable.MakePPMap
-    (struct
-      include Typename
-      let pp_key = pp
-    end)
-
+module ClassMap = PrettyPrintable.MakePPMap(Typename)
 
 module Summary = struct
   include Summary.Make (struct
@@ -120,7 +115,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Sil.Load (v,_,_,_) ->
       State.remove_ref (Exp.Var v) astate
     | Sil.Remove_temps (idents, _) ->
-      IList.fold_left (fun a v -> State.remove_ref (Exp.Var v) a) astate idents
+      List.fold ~f:(fun a v -> State.remove_ref (Exp.Var v) a) ~init:astate idents
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
@@ -133,7 +128,6 @@ end
 module Analyzer =
   AbstractInterpreter.Make
     (ProcCfg.Normal)
-    (Scheduler.ReversePostorder)
     (MakeTransferFunctions)
 
 module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
@@ -178,7 +172,7 @@ let mk_inv_thetas ss =
   let vs =
     Field.Map.fold
       (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
-      ((IList.hd (IList.hd ss)).sum_inv)
+      ((List.hd_exn (List.hd_exn ss)).sum_inv)
       Field.Map.empty in
   let mk s =
     Field.Map.fold
@@ -207,12 +201,12 @@ let apply_substs thetas ss =
 
 let add_splits_and_flatten sums =
   let aux sums =
-    let s = IList.hd sums in
+    let s = List.hd_exn sums in
     let new_pre = Field.Map.map (fun _ -> Ident.mk ()) s.sum_pre in
     let constrs =
-      IList.fold_left
-        (fun acc s' -> Constr.Set.union s'.sum_constraints acc)
-        Constr.Set.empty
+      List.fold
+        ~f:(fun acc s' -> Constr.Set.union s'.sum_constraints acc)
+        ~init:Constr.Set.empty
         sums in
     let constrs =
       Field.Map.fold
@@ -253,7 +247,7 @@ let file_analysis _ _ get_proc_desc file_env =
     | [ ((_,_,p1,_), Some sum1); ((_,_,p2,_), Some sum2)] -> ([p1; p2], [sum1; sum2])
     | _ -> assert false
   in
-  
+
   (* take a list of (proc info, summary) pairs *)
   let merge (_, summaries) =
     let thetas = mk_inv_thetas summaries in
@@ -262,9 +256,9 @@ let file_analysis _ _ get_proc_desc file_env =
     let sums = apply_substs thetas summaries in
     let sums' = add_splits_and_flatten sums in
     let constraints =
-      IList.fold_left
-        (fun acc s -> Constr.Set.union s.sum_constraints acc)
-        Constr.Set.empty
+      List.fold
+        ~f:(fun acc s -> Constr.Set.union s.sum_constraints acc)
+        ~init:Constr.Set.empty
         sums' in
     Ident.Set.fold
       (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
@@ -328,22 +322,22 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   let classmap =
-    IList.fold_left
-      (fun a ((_,_,pname,_) as p) ->
+    List.fold
+      ~f:(fun a ((_,_,pname,_) as p) ->
          let c = get_class pname in
          let procs = try ClassMap.find c a with Not_found -> [] in
          ClassMap.add c (p::procs) a
       )
-      ClassMap.empty
+      ~init:ClassMap.empty
       file_env
   in
 
   let analyse_class _ procs =
-    IList.filter should_analyze procs |>
+    List.filter ~f:should_analyze procs |>
     IList.map summarise |>
     all_pairs |>
     IList.map process_case |>
-    IList.split |>
+    List.unzip |>
     merge |>
     run_check
   in

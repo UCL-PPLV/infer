@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -278,3 +275,5 @@ let to_unique_id: t => string;
 
 /** Convert a proc name to a filename. */
 let to_filename: t => string;
+
+let get_qualifiers: t => list string;

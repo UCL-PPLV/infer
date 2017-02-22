@@ -69,7 +69,7 @@ module MakeNoCFG
     | Some state -> Some state.pre
     | None -> None
 
-  let exec_node node astate_pre work_queue inv_map proc_data =
+  let exec_node node astate_pre work_queue inv_map ({ ProcData.pdesc; } as proc_data) =
     let node_id = CFG.id node in
     let update_inv_map pre visit_count =
       let compute_post (pre, inv_map) (instr, id_opt) =
@@ -81,7 +81,20 @@ module MakeNoCFG
       let instr_ids = match CFG.instr_ids node with
         | [] -> [Sil.skip_instr, None]
         | l -> l in
-      let astate_post, inv_map_post = IList.fold_left compute_post (pre, inv_map) instr_ids in
+      let underlying_node = CFG.underlying_node node in
+      NodePrinter.start_session underlying_node;
+      let astate_post, inv_map_post =
+        List.fold ~f:compute_post ~init:(pre, inv_map) instr_ids in
+      if Config.write_html
+      then
+        begin
+          let str =
+            let instrs = IList.map fst instr_ids in
+            Format.asprintf "PRE: %a@.INSTRS: %aPOST: %a@."
+              Domain.pp pre (Sil.pp_instr_list Pp.text) instrs Domain.pp astate_post in
+          L.d_strln str
+        end;
+      NodePrinter.finish_session underlying_node;
       let inv_map'' =
         InvariantMap.add node_id { pre; post=astate_post; visit_count; } inv_map_post in
       inv_map'', Scheduler.schedule_succs work_queue node in
@@ -89,7 +102,10 @@ module MakeNoCFG
     then
       let old_state = InvariantMap.find node_id inv_map in
       let widened_pre =
-        Domain.widen ~prev:old_state.pre ~next:astate_pre ~num_iters:old_state.visit_count in
+        if CFG.is_loop_head pdesc node
+        then Domain.widen ~prev:old_state.pre ~next:astate_pre ~num_iters:old_state.visit_count
+        else astate_pre
+      in
       if Domain.(<=) ~lhs:widened_pre ~rhs:old_state.pre
       then inv_map, work_queue
       else update_inv_map widened_pre (old_state.visit_count + 1)
@@ -105,9 +121,10 @@ module MakeNoCFG
       let normal_posts = IList.map extract_post_ (CFG.normal_preds cfg node) in
       (* if the [pred] -> [node] transition was exceptional, use pre([pred]) *)
       let extract_pre_f acc pred = extract_pre (CFG.id pred) inv_map :: acc in
-      let all_posts = IList.fold_left extract_pre_f normal_posts (CFG.exceptional_preds cfg node) in
+      let all_posts =
+        List.fold ~f:extract_pre_f ~init:normal_posts (CFG.exceptional_preds cfg node) in
       match IList.flatten_options all_posts with
-      | post :: posts -> Some (IList.fold_left Domain.join post posts)
+      | post :: posts -> Some (List.fold ~f:Domain.join ~init:post posts)
       | [] -> None in
     match Scheduler.pop work_queue with
     | Some (_, [], work_queue') ->
@@ -169,6 +186,8 @@ module Interprocedural (Summ : Summary.S) = struct
       Summ.read_summary proc_desc proc_name
 end
 
-
-module Make (C : ProcCfg.S) (S : Scheduler.Make) (T : TransferFunctions.Make) =
+module MakeWithScheduler (C : ProcCfg.S) (S : Scheduler.Make) (T : TransferFunctions.Make) =
   MakeNoCFG (S (C)) (T (C))
+
+module Make (C : ProcCfg.S) (T : TransferFunctions.Make) =
+  MakeWithScheduler (C) (Scheduler.ReversePostorder) (T)

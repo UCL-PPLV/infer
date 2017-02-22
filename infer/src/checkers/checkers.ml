@@ -23,7 +23,7 @@ module PP = struct
   let pp_loc_range linereader nbefore nafter fmt loc =
     let printline n =
       match Printer.LineReader.from_loc linereader { loc with Location.line = n } with
-      | Some s -> F.fprintf fmt "%s%s@\n" (if n = loc.Location.line then "-->" else "   ") s
+      | Some s -> F.fprintf fmt "%s%s@\n" (if Int.equal n loc.Location.line then "-->" else "   ") s
       | _ -> () in
     F.fprintf fmt "%a:%d@\n" SourceFile.pp loc.Location.file loc.Location.line;
     for n = loc.Location.line - nbefore to loc.Location.line + nafter do printline n done
@@ -58,10 +58,10 @@ module ST = struct
   let store_summary proc_name =
     Option.iter
       ~f:(fun summary ->
-         let summary' =
-           { summary with
-             Specs.timestamp = summary.Specs.timestamp + 1 } in
-         try Specs.store_summary proc_name summary' with Sys_error s -> L.err "%s@." s)
+          let summary' =
+            { summary with
+              Specs.timestamp = summary.Specs.timestamp + 1 } in
+          try Specs.store_summary proc_name summary' with Sys_error s -> L.err "%s@." s)
       (Specs.get_summary proc_name)
 
   let report_error tenv
@@ -98,8 +98,8 @@ module ST = struct
           String.equal (normalize s1) (normalize s2) in
 
         let is_parameter_suppressed =
-          IList.mem String.equal a.class_name [Annotations.suppressLint] &&
-          IList.mem normalized_equal kind a.parameters in
+          String.is_suffix a.class_name ~suffix:Annotations.suppress_lint &&
+          List.mem ~equal:normalized_equal a.parameters kind in
         let is_annotation_suppressed =
           String.is_suffix ~suffix:(normalize (drop_prefix kind)) (normalize a.class_name) in
 
@@ -200,7 +200,7 @@ let callback_check_write_to_parcel_java
 
   let is_write_to_parcel this_expr this_type =
     let method_match () =
-      Procname.java_get_method pname_java = "writeToParcel" in
+      String.equal (Procname.java_get_method pname_java) "writeToParcel" in
     let expr_match () = Exp.is_this this_expr in
     let type_match () =
       let class_name =
@@ -220,7 +220,7 @@ let callback_check_write_to_parcel_java
     match typ with
     | Typ.Tptr (Tstruct name, _) -> (
         match Tenv.lookup tenv name with
-        | Some { methods } -> IList.filter is_parcel_constructor methods
+        | Some { methods } -> List.filter ~f:is_parcel_constructor methods
         | None -> []
       )
     | _ -> [] in
@@ -234,10 +234,10 @@ let callback_check_write_to_parcel_java
           let class_name = Procname.java_get_class_name pname_java in
           let method_name = Procname.java_get_method pname_java in
           (try
-             class_name = "android.os.Parcel" &&
-             (String.sub method_name ~pos:0 ~len:5 = "write"
+             String.equal class_name "android.os.Parcel" &&
+             (String.equal (String.sub method_name ~pos:0 ~len:5) "write"
               ||
-              String.sub method_name ~pos:0 ~len:4 = "read")
+              String.equal (String.sub method_name ~pos:0 ~len:4) "read")
            with Invalid_argument _ -> false)
       | _ -> assert false in
 
@@ -247,8 +247,9 @@ let callback_check_write_to_parcel_java
           let wn = Procname.java_get_method wc in
           let postfix_length = String.length wn - 5 in (* covers writeList <-> readArrayList etc. *)
           (try
-             String.sub rn ~pos:(String.length rn - postfix_length) ~len:postfix_length =
-             String.sub wn ~pos:5 ~len:postfix_length
+             String.equal
+               (String.sub rn ~pos:(String.length rn - postfix_length) ~len:postfix_length)
+               (String.sub wn ~pos:5 ~len:postfix_length)
            with Invalid_argument _ -> false)
       | _ ->
           false in
@@ -260,11 +261,11 @@ let callback_check_write_to_parcel_java
 
     let r_call_descs =
       IList.map node_to_call_desc
-        (IList.filter is_serialization_node
+        (List.filter ~f:is_serialization_node
            (Procdesc.get_sliced_slope r_desc is_serialization_node)) in
     let w_call_descs =
       IList.map node_to_call_desc
-        (IList.filter is_serialization_node
+        (List.filter ~f:is_serialization_node
            (Procdesc.get_sliced_slope w_desc is_serialization_node)) in
 
     let rec check_match = function
@@ -326,12 +327,12 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
     let class_formals =
       let is_class_type (p, typ) =
         match typ with
-        | Typ.Tptr _ when Mangled.to_string p = "this" ->
+        | Typ.Tptr _ when String.equal (Mangled.to_string p) "this" ->
             false (* no need to null check 'this' *)
         | Typ.Tstruct _ -> true
         | Typ.Tptr (Typ.Tstruct _, _) -> true
         | _ -> false in
-      IList.filter is_class_type formals in
+      List.filter ~f:is_class_type formals in
     IList.map fst class_formals) in
   let equal_formal_param exp formal_name = match exp with
     | Exp.Lvar pvar ->
@@ -340,7 +341,7 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
     | _ -> false in
 
   let is_formal_param exp =
-    IList.exists (equal_formal_param exp) (Lazy.force class_formal_names) in
+    List.exists ~f:(equal_formal_param exp) (Lazy.force class_formal_names) in
 
   let is_nullcheck pn = match pn with
     | Procname.Java pn_java ->
@@ -367,7 +368,7 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
       begin
         let was_not_found formal_name =
           not (Exp.Set.exists (fun exp -> equal_formal_param exp formal_name) !checks_to_formals) in
-        let missing = IList.filter was_not_found formal_names in
+        let missing = List.filter ~f:was_not_found formal_names in
         let loc = Procdesc.get_loc proc_desc in
         let pp_file_loc fmt () =
           F.fprintf fmt "%a:%d" SourceFile.pp loc.Location.file loc.Location.line in
@@ -403,7 +404,7 @@ let callback_test_state { Callbacks.proc_name } =
 
 (** Check the uses of VisibleForTesting *)
 let callback_checkVisibleForTesting { Callbacks.proc_desc } =
-  if Annotations.pdesc_has_annot proc_desc Annotations.visibleForTesting then
+  if Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting then
     begin
       let loc = Procdesc.get_loc proc_desc in
       let linereader = Printer.LineReader.create () in
@@ -419,18 +420,15 @@ let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; p
   let reverse_find_instr f node =
     (* this is not really sound but for the moment a sufficient approximation *)
     let has_instr node =
-      try ignore(IList.find f (Procdesc.Node.get_instrs node)); true
-      with Not_found -> false in
+      List.exists ~f (Procdesc.Node.get_instrs node) in
     let preds =
       Procdesc.Node.get_generated_slope
         node
         (fun n -> Procdesc.Node.get_sliced_preds n has_instr) in
     let instrs =
-      IList.flatten
+      List.concat
         (IList.map (fun n -> IList.rev (Procdesc.Node.get_instrs n)) preds) in
-    try
-      Some (IList.find f instrs)
-    with Not_found -> None in
+    List.find ~f instrs in
 
   let get_return_const proc_name' =
     try

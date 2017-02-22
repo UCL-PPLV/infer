@@ -24,7 +24,9 @@ let rec rmtree name =
       let rec rmdir dir =
         match Unix.readdir dir with
         | entry ->
-            if not (entry = Filename.current_dir_name || entry = Filename.parent_dir_name) then (
+            if not (String.equal entry Filename.current_dir_name ||
+                    String.equal entry Filename.parent_dir_name)
+            then (
               rmtree (name ^/ entry)
             );
             rmdir dir
@@ -38,36 +40,76 @@ let rec rmtree name =
       ()
 
 
-type build_mode =
-  | Analyze | Ant | Buck | ClangCompilationDB | Gradle | Java | Javac | Make | Mvn | Ndk | Xcode
+type build_system =
+  | BAnalyze | BAnt | BBuck | BGradle | BJava | BJavac | BMake | BMvn | BNdk | BXcode
+[@@deriving compare]
 
-let build_mode_of_string path =
-  match Filename.basename path with
-  | "analyze" -> Analyze
-  | "ant" -> Ant
-  | "buck" -> Buck
-  | "gradle" | "gradlew" -> Gradle
-  | "java" -> Java
-  | "javac" -> Javac
-  | "cc" | "clang" | "clang++" | "cmake" | "configure" | "g++" | "gcc" | "make" | "waf" -> Make
-  | "mvn" -> Mvn
-  | "ndk-build" -> Ndk
-  | "xcodebuild" -> Xcode
-  | cmd -> failwithf "Unsupported build command %s" cmd
+let equal_build_system = [%compare.equal : build_system]
 
-let string_of_build_mode = function
-  | Analyze -> "analyze"
-  | Ant -> "ant"
-  | Buck -> "buck"
-  | ClangCompilationDB -> "clang compilation database"
-  | Gradle -> "gradle"
-  | Java -> "java"
-  | Javac -> "javac"
-  | Make -> "make/cc"
-  | Mvn -> "maven"
-  | Ndk -> "ndk-build"
-  | Xcode -> "xcodebuild"
+(* List of ([build system], [executable name]). Several executables may map to the same build
+   system. In that case, the first one in the list will be used for printing, eg, in which mode
+   infer is running. *)
+let build_system_exe_assoc = [
+  BAnalyze, "analyze"; BAnt, "ant"; BBuck, "buck"; BGradle, "gradle"; BGradle, "gradlew";
+  BJava, "java"; BJavac, "javac";
+  (* NOTE: "make/cc" is not a valid exe name and thus will never be matched, we only use it for
+     printing *)
+  BMake, "make/cc"; BMake, "cc"; BMake, "clang"; BMake, "clang++"; BMake, "cmake";
+  BMake, "configure"; BMake, "g++"; BMake, "gcc"; BMake, "make"; BMake, "waf";
+  BMvn, "mvn"; BMvn, "mvnw"; BNdk, "ndk-build"; BXcode, "xcodebuild";
+]
 
+let build_system_of_exe_name name =
+  try
+    List.Assoc.find_exn (List.Assoc.inverse build_system_exe_assoc) name
+  with Not_found ->
+    invalid_argf "Unsupported build command %s" name
+
+let string_of_build_system build_system =
+  List.Assoc.find_exn build_system_exe_assoc build_system
+
+(* based on the build_system and options passed to infer, we run in different driver modes *)
+type driver_mode =
+  | Analyze
+  | BuckGenrule of string
+  | BuckCompilationDB
+  | ClangCompilationDB of [ `Escaped of string | `Raw of string ] list
+  | Javac of Javac.compiler * string * string list
+  | Maven of string * string list
+  | PythonCapture of build_system * string list
+  | XcodeXcpretty
+[@@deriving compare]
+
+let equal_driver_mode = [%compare.equal : driver_mode]
+
+let pp_driver_mode fmt driver_mode =
+  let log_argfile_arg fname =
+    try
+      F.fprintf fmt "-- Contents of '%s'@\n" fname;
+      In_channel.iter_lines ~f:(F.fprintf fmt "%s@\n") (In_channel.create fname);
+      F.fprintf fmt "-- /Contents of '%s'@." fname;
+    with exn ->
+      F.fprintf fmt "  Error reading file '%s':@\n  %a@." fname Exn.pp exn in
+  match driver_mode with
+  | Analyze | BuckGenrule _ | BuckCompilationDB | ClangCompilationDB _  | PythonCapture (_,_)
+  | XcodeXcpretty ->
+      (* these are pretty boring, do not log anything *)
+      ()
+  | Javac (_, prog, args) ->
+      F.fprintf fmt "Javac driver mode:@\nprog = %s@\n" prog;
+      let log_arg arg =
+        F.fprintf fmt "Arg: %s@\n" arg;
+        (* "@fname" means that fname is an arg file containing additional arguments to pass to
+           javac. *)
+        String.chop_prefix ~prefix:"@" arg
+        |>
+        (* Sometimes these argfiles go away at the end of the build and we cannot inspect them after
+           the fact, so log them now. *)
+        Option.iter ~f:log_argfile_arg in
+      List.iter ~f:log_arg args
+  | Maven (prog, args) ->
+      F.fprintf fmt "Maven driver mode:@\nprog = %s@\n" prog;
+      List.iter ~f:(F.fprintf fmt "Arg: %s@\n") args
 
 let remove_results_dir () =
   rmtree Config.results_dir
@@ -78,18 +120,19 @@ let create_results_dir () =
   Unix.mkdir_p (Config.results_dir ^/ Config.specs_dir_name)
 
 let clean_results_dir () =
-  let dirs = ["classnames"; "filelists"; "multicore"; "sources"] in
-  let suffixes = [".cfg"; ".cg"] in
+  let dirs = ["classnames"; "filelists"; "multicore"; "sources"; "log";
+              "attributes"; "backend_stats"; "reporting_stats"; "frontend_stats"] in
+  let suffixes = [".cfg"; ".cg"; ".txt"; ".csv"; ".json"] in
   let rec clean name =
     match Unix.opendir name with
     | dir -> (
         let rec cleandir dir =
           match Unix.readdir dir with
           | entry ->
-              if (IList.exists (String.equal entry) dirs) then (
+              if (List.exists ~f:(String.equal entry) dirs) then (
                 rmtree (name ^/ entry)
-              ) else if not (entry = Filename.current_dir_name
-                             || entry = Filename.parent_dir_name) then (
+              ) else if not (String.equal entry Filename.current_dir_name
+                             || String.equal entry Filename.parent_dir_name) then (
                 clean (name ^/ entry)
               );
               cleandir dir
@@ -97,8 +140,13 @@ let clean_results_dir () =
               Unix.closedir dir in
         cleandir dir
       )
+    | exception Unix.Unix_error (Unix.ENOTDIR, _, _)
+      when String.equal (Filename.basename name) "report.json" ->
+        (* Keep the JSON report *)
+        ()
     | exception Unix.Unix_error (Unix.ENOTDIR, _, _) ->
-        if IList.exists (Filename.check_suffix name) suffixes then
+        if not (String.equal (Filename.basename name) "report.json")
+        && List.exists ~f:(Filename.check_suffix name) suffixes then
           Unix.unlink name
     | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
         () in
@@ -128,74 +176,6 @@ let run_command ~prog ~args cleanup =
   -> cleanup status
    ; ok_exn (Unix.Exit_or_signal.or_error status)
 
-let run_javac build_mode build_cmd =
-  let build_prog, build_args =
-    match build_cmd with
-    | prog :: args -> (prog, args)
-    | [] -> invalid_arg "run_java: build command cannot be empty" in
-  let prog, prog_args =
-    match build_mode, Config.java_jar_compiler with
-    | _, None -> (build_prog, ["-J-Duser.language=en"])
-    | Java, Some jar -> (build_prog, ["-jar"; jar])
-    | _, Some jar -> (* fall back to java in PATH to avoid passing -jar to javac *)
-        ("java", ["-jar"; jar]) in
-  let cli_args, file_args =
-    let rec has_classes_out = function
-      | [] -> false
-      | ("-d" | "-classes_out")::_ -> true
-      | file_arg::tl when String.is_prefix file_arg ~prefix:"@" -> (
-          let fname = String.slice file_arg 1 (String.length file_arg) in
-          match In_channel.read_lines fname with
-          | lines ->
-              (* crude but we only care about simple cases that will not involve trickiness, eg
-                 unbalanced or escaped quotes such as "ending in\"" *)
-              let lines_without_quotes =
-                List.map ~f:(String.strip ~drop:(function '"' | '\'' -> true | _ -> false)) lines in
-              has_classes_out lines_without_quotes || has_classes_out tl
-          | exception _ ->
-              has_classes_out tl)
-      | _::tl ->
-          has_classes_out tl in
-    let args =
-      "-verbose" :: "-g" ::
-      (* Ensure that some form of "-d ..." is passed to javac. It's unclear whether this is strictly
-         needed but the tests break without this for now. See discussion in D4397716. *)
-      if has_classes_out build_args then
-        build_args
-      else
-        "-d" :: Config.javac_classes_out :: build_args in
-    List.partition_tf args ~f:(fun arg ->
-        (* As mandated by javac, argument files must not contain certain arguments. *)
-        String.is_prefix ~prefix:"-J" arg || String.is_prefix ~prefix:"@" arg) in
-  (* Pass non-special args via a file to avoid exceeding the command line size limit. *)
-  let args_file =
-    let file = Filename.temp_file "args_" "" in
-    let quoted_file_args =
-      List.map file_args ~f:(fun arg ->
-          if String.contains arg '\'' then arg else F.sprintf "'%s'" arg) in
-    Out_channel.with_file file ~f:(fun oc -> Out_channel.output_lines oc quoted_file_args) ;
-    file in
-  let cli_file_args = cli_args @ ["@" ^ args_file] in
-  let args = prog_args @ cli_file_args in
-  let verbose_out_file = Filename.temp_file "javac_" ".out" in
-  Unix.with_file verbose_out_file ~mode:[Unix.O_WRONLY] ~f:(
-    fun verbose_out_fd ->
-      L.out "Logging into %s@\n" verbose_out_file;
-      L.out "Current working directory: '%s'@." (Sys.getcwd ());
-      try
-        L.out "Trying to execute: '%s' '%s'@." prog (String.concat ~sep:"' '" args);
-        Unix_.fork_redirect_exec_wait ~prog ~args ~stderr:verbose_out_fd ()
-      with exn ->
-      try
-        L.out "*** Failed!@\nTrying to execute javac instead: '%s' '%s'@\nLogging into %s@."
-          "javac" (String.concat ~sep:"' '" cli_file_args) verbose_out_file;
-        Unix_.fork_redirect_exec_wait ~prog:"javac" ~args:cli_file_args ~stderr:verbose_out_fd ()
-      with _ ->
-        L.stderr "Failed to execute: %s %s@." prog (String.concat ~sep:" " args);
-        raise exn
-  );
-  verbose_out_file
-
 let check_xcpretty () =
   match Unix.system "xcpretty --version" with
   | Ok () -> ()
@@ -208,43 +188,40 @@ let check_xcpretty () =
 
 let capture_with_compilation_database db_files =
   let root = Unix.getcwd () in
-  Config.clang_compilation_db_files := IList.map (Utils.filename_to_absolute ~root) db_files;
+  Config.clang_compilation_dbs := List.map db_files ~f:(function
+      | `Escaped fname -> `Escaped (Utils.filename_to_absolute ~root fname)
+      | `Raw fname -> `Raw (Utils.filename_to_absolute ~root fname)
+    );
   let compilation_database = CompilationDatabase.from_json_files db_files in
   CaptureCompilationDatabase.capture_files_in_database compilation_database
 
-let capture build_cmd build_mode =
-  match build_mode, Config.generated_classes with
-  | _, Some path ->
-      L.stdout "Capturing for Buck genrule compatibility...@\n";
-      JMain.main (lazy (JClasspath.load_from_arguments path))
-  | Analyze, _ ->
+let capture = function
+  | Analyze->
       ()
-  | Buck, _ when Config.use_compilation_database <> None ->
+  | BuckCompilationDB ->
       L.stdout "Capturing using Buck's compilation database...@\n";
       let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_buck () in
       capture_with_compilation_database json_cdb
-  | ClangCompilationDB, _ ->
+  | BuckGenrule path ->
+      L.stdout "Capturing for Buck genrule compatibility...@\n";
+      JMain.from_arguments path
+  | ClangCompilationDB db_files ->
       L.stdout "Capturing using compilation database...@\n";
-      capture_with_compilation_database !Config.clang_compilation_db_files
-  | (Java | Javac), _ ->
+      capture_with_compilation_database db_files
+  | Javac (compiler, prog, args) ->
       L.stdout "Capturing in javac mode...@.";
-      let verbose_out_file = run_javac build_mode build_cmd in
-      if Config.analyzer <> Config.Compile then
-        JMain.main (lazy (JClasspath.load_from_verbose_output verbose_out_file)) ;
-      if not (Config.debug_mode || Config.stats_mode) then Unix.unlink verbose_out_file;
-  | Xcode, _ when Config.xcpretty ->
-      L.stdout "Capturing using xcpretty...@\n";
-      check_xcpretty ();
-      let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_xcodebuild () in
-      capture_with_compilation_database json_cdb
-  | build_mode, _ ->
-      L.stdout "Capturing in %s mode...@." (string_of_build_mode build_mode);
-      let in_buck_mode = build_mode = Buck in
+      Javac.capture compiler ~prog ~args
+  | Maven (prog, args) ->
+      L.stdout "Capturing in maven mode...@.";
+      Maven.capture ~prog ~args
+  | PythonCapture (build_system, build_cmd) ->
+      L.stdout "Capturing in %s mode...@." (string_of_build_system build_system);
+      let in_buck_mode = equal_build_system build_system BBuck in
       let infer_py = Config.lib_dir ^/ "python" ^/ "infer.py" in
       let args =
         List.rev_append Config.anon_args (
           ["--analyzer";
-           IList.assoc (=) Config.analyzer
+           IList.assoc Config.equal_analyzer Config.analyzer
              (IList.map (fun (n,a) -> (a,n)) Config.string_to_analyzer)] @
           (match Config.blacklist with
            | Some s when in_buck_mode -> ["--blacklist-regex"; s]
@@ -257,7 +234,7 @@ let capture build_cmd build_mode =
               ["--java-jar-compiler"; p]) @
           (match IList.rev Config.buck_build_args with
            | args when in_buck_mode ->
-               IList.map (fun arg -> ["--Xbuck"; "'" ^ arg ^ "'"]) args |> IList.flatten
+               IList.map (fun arg -> ["--Xbuck"; "'" ^ arg ^ "'"]) args |> List.concat
            | _ -> []) @
           (if not Config.debug_mode then [] else
              ["--debug"]) @
@@ -284,11 +261,19 @@ let capture build_cmd build_mode =
           else build_cmd
         ) in
       run_command ~prog:infer_py ~args
-        (fun status ->
-           if status = Result.Error (`Exit_non_zero Config.infer_py_argparse_error_exit_code) then
-             (* swallow infer.py argument parsing error *)
-             Config.print_usage_exit ()
+        (function
+          | Result.Error (`Exit_non_zero exit_code) ->
+              if Int.equal exit_code Config.infer_py_argparse_error_exit_code then
+                (* swallow infer.py argument parsing error *)
+                Config.print_usage_exit ()
+          | _ ->
+              ()
         )
+  | XcodeXcpretty ->
+      L.stdout "Capturing using xcpretty...@\n";
+      check_xcpretty ();
+      let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_xcodebuild () in
+      capture_with_compilation_database json_cdb
 
 let run_parallel_analysis () =
   let multicore_dir = Config.results_dir ^/ Config.multicore_dir_name in
@@ -305,7 +290,7 @@ let run_parallel_analysis () =
   ) (fun _ -> ())
 
 let execute_analyze () =
-  if Config.jobs = 1 || Config.cluster_cmdline <> None then
+  if Int.equal Config.jobs 1 || Config.cluster_cmdline <> None then
     InferAnalyze.main ""
   else
     run_parallel_analysis ()
@@ -332,26 +317,28 @@ let report () =
         L.stderr "** Error running the reporting script:@\n**   %s %s@\n** See error above@."
           prog (String.concat ~sep:" " args)
 
-let analyze = function
-  | Buck when Config.use_compilation_database = None ->
-      (* In Buck mode when compilation db is not used, analysis is invoked either from capture or a
-         separate Analyze invocation is necessary, depending on the buck flavor used. *)
-      ()
-  | _ ->
-      let should_analyze, should_report = match Config.analyzer with
-        | Infer | Eradicate | Checkers | Tracing | Crashcontext | Quandary | Threadsafety | Permsafety ->
-            true, true
-        | Linters ->
-            false, true
-        | Capture | Compile ->
-            false, false in
-      if (should_analyze || should_report)
-      && (Sys.file_exists Config.(results_dir ^/ captured_dir_name)) <> `Yes then (
-        L.stderr "There was nothing to analyze, exiting@." ;
-        exit 1
-      );
-      if should_analyze then execute_analyze ();
-      if should_report then report ()
+let analyze driver_mode =
+  let should_analyze, should_report = match driver_mode, Config.analyzer with
+    | PythonCapture (BBuck, _), _ ->
+        (* In Buck mode when compilation db is not used, analysis is invoked either from capture or
+           a separate Analyze invocation is necessary, depending on the buck flavor used. *)
+        false, false
+    | _ when Config.maven ->
+        (* Called from Maven, only do capture. *)
+        false, false
+    | _, (Capture | Compile) ->
+        false, false
+    | _, (Infer | Eradicate | Checkers | Tracing | Crashcontext | Quandary | Threadsafety | Bufferoverrun | Permsafety) ->
+        true, true
+    | _, Linters ->
+        false, true in
+  if (should_analyze || should_report) &&
+     (Sys.file_exists Config.(results_dir ^/ captured_dir_name)) <> `Yes then (
+    L.stderr "There was nothing to analyze, exiting@." ;
+    exit 1
+  );
+  if should_analyze then execute_analyze ();
+  if should_report then report ()
 
 (** as the Config.fail_on_bug flag mandates, exit with error when an issue is reported *)
 let fail_on_issue_epilogue () =
@@ -362,56 +349,118 @@ let fail_on_issue_epilogue () =
       if issues <> [] then exit Config.fail_on_issue_exit_code
   | None -> ()
 
-let log_build_cmd build_mode build_cmd =
-  L.out "INFER_ARGS=%s@." (Option.value (Sys.getenv CLOpt.args_env_var) ~default:"<not found>");
-  L.out "Project root = %s@." Config.project_root;
-  let log_arg arg =
-    L.out "Arg: %s@\n" arg;
-    if (build_mode = Java || build_mode = Javac) && (String.is_prefix arg ~prefix:"@") then (
-      let fname = String.slice arg 1 (String.length arg) in
-      match In_channel.input_lines (In_channel.create fname) with
-      | lines ->
-          L.out "-- Contents of '%s'@\n" fname;
-          L.out "%s@\n" (String.concat ~sep:"\n" lines);
-          L.out "-- /Contents of '%s'@\n" fname;
-      | exception exn ->
-          L.out "  Error reading file '%s':@\n  %a@." fname Exn.pp exn
-    ) in
-  List.iter ~f:log_arg build_cmd
+let log_infer_args driver_mode =
+  L.out "INFER_ARGS = %s@\n" (Option.value (Sys.getenv CLOpt.args_env_var) ~default:"<not found>");
+  List.iter ~f:(L.out "anon arg: %s@\n") Config.anon_args;
+  List.iter ~f:(L.out "rest arg: %s@\n") Config.rest;
+  L.out "Project root = %s@\n" Config.project_root;
+  L.out "CWD = %s@\n" (Sys.getcwd ());
+  L.out "Driver mode:@\n%a@." pp_driver_mode driver_mode
+
+let assert_supported_mode required_analyzer requested_mode_string =
+  let analyzer_enabled = match required_analyzer with
+    | `Clang -> Version.clang_enabled
+    | `Java -> Version.java_enabled
+    | `Xcode -> Version.clang_enabled && Version.xcode_enabled in
+  if not analyzer_enabled then
+    let analyzer_string = match required_analyzer with
+      | `Clang -> "clang"
+      | `Java -> "java"
+      | `Xcode -> "clang and xcode" in
+    failwithf
+      "Unsupported build mode: %s@\nInfer was built with %s analyzers disabled.@ Please rebuild \
+       infer with %s enabled.@."
+      requested_mode_string analyzer_string analyzer_string
+
+let assert_supported_build_system build_system = match build_system with
+  | BAnt | BGradle | BJava | BJavac | BMvn ->
+      string_of_build_system build_system
+      |> assert_supported_mode `Java
+  | BMake | BNdk ->
+      string_of_build_system build_system
+      |> assert_supported_mode `Clang
+  | BXcode ->
+      string_of_build_system build_system
+      |> assert_supported_mode `Xcode
+  | BBuck ->
+      let (analyzer, build_string) = if Config.flavors then
+          (`Clang, "buck with flavors")
+        else
+          (`Java, string_of_build_system build_system) in
+      assert_supported_mode analyzer build_string
+  | BAnalyze ->
+      ()
+
+let driver_mode_of_build_cmd build_cmd =
+  match build_cmd with
+  | [] ->
+      if not (List.is_empty !Config.clang_compilation_dbs) then (
+        assert_supported_mode `Clang "clang compilation database";
+        ClangCompilationDB !Config.clang_compilation_dbs
+      ) else
+        Analyze
+  | prog :: args ->
+      let build_system = build_system_of_exe_name (Filename.basename prog) in
+      assert_supported_build_system build_system;
+      match build_system_of_exe_name (Filename.basename prog) with
+      | BAnalyze ->
+          Analyze
+      | BBuck when Option.is_some Config.buck_compilation_database ->
+          BuckCompilationDB
+      | BJava ->
+          Javac (Javac.Java, prog, args)
+      | BJavac ->
+          Javac (Javac.Javac, prog, args)
+      | BMvn ->
+          Maven (prog, args)
+      | BXcode when Config.xcpretty ->
+          XcodeXcpretty
+      | BAnt | BBuck | BGradle | BMake | BNdk | BXcode as build_system ->
+          PythonCapture (build_system, build_cmd)
+
+let get_driver_mode () =
+  match Config.generated_classes with
+  | _ when Config.maven ->
+      (* infer is pretending to be javac in the Maven integration *)
+      let build_args = match Array.to_list Sys.argv with
+        | _::args -> args
+        | [] -> [] in
+      Javac (Javac.Javac, "javac", build_args)
+  | Some path ->
+      assert_supported_mode `Java "Buck genrule";
+      BuckGenrule path
+  | None ->
+      driver_mode_of_build_cmd (IList.rev Config.rest)
 
 let () =
-  let build_cmd = IList.rev Config.rest in
-  let build_mode = match build_cmd with
-    | path :: _ ->
-        build_mode_of_string path
-    | [] ->
-        if not (List.is_empty !Config.clang_compilation_db_files) then
-          ClangCompilationDB
-        else
-          Analyze in
-  if not (build_mode = Analyze || Config.(buck || continue_capture || reactive_mode)) then
+  let driver_mode = get_driver_mode () in
+  if not (equal_driver_mode driver_mode Analyze ||
+          Config.(buck || continue_capture || maven || reactive_mode)) then
     remove_results_dir () ;
   create_results_dir () ;
   (* re-set log files, as default files were in results_dir removed above *)
-  L.set_log_file_identifier Config.current_exe None ;
+  if not Config.buck_cache_mode then L.set_log_file_identifier CLOpt.(Infer Driver) None;
   if Config.print_builtins then Builtin.print_and_exit () ;
-  if Config.is_originator then L.do_out "%s@\n" Config.version_string ;
-  if Config.debug_mode || Config.stats_mode then log_build_cmd build_mode build_cmd;
+  if CLOpt.is_originator then L.do_out "%s@\n" Config.version_string ;
+  if Config.debug_mode || Config.stats_mode then log_infer_args driver_mode ;
   (* infer might be called from a Makefile and itself uses `make` to run the analysis in parallel,
      but cannot communicate with the parent make command. Since infer won't interfere with them
      anyway, pretend that we are not called from another make to prevent make falling back to a
      mono-threaded execution. *)
   Unix.unsetenv "MAKEFLAGS";
-  register_perf_stats_report () ;
-  touch_start_file () ;
-  capture build_cmd build_mode ;
-  analyze build_mode ;
-  if Config.is_originator then (
+  if not Config.buck_cache_mode then register_perf_stats_report () ;
+  if Config.buck_cache_mode && Config.reactive_mode then
+    failwith "The reactive analysis mode is not compatible with the Buck integration for Java";
+  if not Config.buck_cache_mode then touch_start_file () ;
+  capture driver_mode ;
+  analyze driver_mode ;
+  if CLOpt.is_originator then (
+    let in_buck_mode = match driver_mode with | PythonCapture (BBuck, _) -> true | _ -> false in
     StatsAggregator.generate_files () ;
-    if Config.analyzer = Config.Crashcontext then
-      Crashcontext.crashcontext_epilogue ~in_buck_mode:(build_mode = Buck);
-    if build_mode = Buck then
-      clean_results_dir () ;
+    if Config.equal_analyzer Config.analyzer Config.Crashcontext then
+      Crashcontext.crashcontext_epilogue ~in_buck_mode;
     if Config.fail_on_bug then
       fail_on_issue_epilogue () ;
-  )
+  );
+  if Config.buck_cache_mode then
+    clean_results_dir ()

@@ -50,7 +50,7 @@ module Make (Spec : Spec) : S = struct
           struct
             type t = Spec.astate
             let compare = Spec.compare
-            let pp_element _ _ = ()
+            let pp _ _ = ()
           end)
         )
 
@@ -80,11 +80,7 @@ module Make (Spec : Spec) : S = struct
         Domain.empty
   end
 
-  module Analyzer =
-    AbstractInterpreter.Make
-      (ProcCfg.Exceptional)
-      (Scheduler.ReversePostorder)
-      (TransferFunctions)
+  module Analyzer = AbstractInterpreter.Make (ProcCfg.Exceptional) (TransferFunctions)
 
   let checker { Callbacks.proc_desc; proc_name; tenv; } =
     let nodes = Procdesc.get_nodes proc_desc in
@@ -94,8 +90,8 @@ module Make (Spec : Spec) : S = struct
       then
         (* should never fail since keys in the invariant map should always be real node id's *)
         let node =
-          IList.find
-            (fun node -> Procdesc.Node.compare_id node_id (Procdesc.Node.get_id node) = 0)
+          List.find_exn
+            ~f:(fun node -> Procdesc.Node.equal_id node_id (Procdesc.Node.get_id node))
             nodes in
         Domain.iter
           (fun astate ->

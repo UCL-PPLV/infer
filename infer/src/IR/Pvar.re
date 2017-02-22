@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -37,7 +34,7 @@ and t = {pv_hash: int, pv_name: Mangled.t, pv_kind: pvar_kind} [@@deriving compa
 let compare_alpha pv1 pv2 =>
   [%compare : (Mangled.t, pvar_kind)] (pv1.pv_name, pv1.pv_kind) (pv2.pv_name, pv2.pv_kind);
 
-let equal pvar1 pvar2 => compare pvar1 pvar2 == 0;
+let equal = [%compare.equal : t];
 
 let rec _pp f pv => {
   let name = pv.pv_name;
@@ -242,7 +239,7 @@ let is_this pvar => Mangled.equal (get_name pvar) (Mangled.from_string "this");
 
 
 /** Check if the pvar is a return var */
-let is_return pv => get_name pv == Ident.name_return;
+let is_return pv => Mangled.equal (get_name pv) Ident.name_return;
 
 
 /** something that can't be part of a legal identifier in any conceivable language */
@@ -367,5 +364,5 @@ let module Set = PrettyPrintable.MakePPCompareSet {
   type nonrec t = t;
   let compare = compare;
   let compare_pp = compare_alpha;
-  let pp_element = pp Pp.text;
+  let pp = pp Pp.text;
 };

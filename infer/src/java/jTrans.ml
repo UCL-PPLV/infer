@@ -81,7 +81,7 @@ let get_undefined_method_call ovt =
               match ot with
               | JBasics.TArray _ -> assert false
               | JBasics.TClass cn ->
-                  if JBasics.cn_name cn = JConfig.string_cl then
+                  if String.equal (JBasics.cn_name cn) JConfig.string_cl then
                     "string_undefined"
                   else
                   if JBasics.cn_equal cn JBasics.java_lang_object then
@@ -97,23 +97,23 @@ let get_undefined_method_call ovt =
 let retrieve_fieldname fieldname =
   try
     let subs = Str.split (Str.regexp (Str.quote ".")) (Ident.fieldname_to_string fieldname) in
-    if IList.length subs = 0 then
+    if Int.equal (IList.length subs) 0 then
       assert false
     else
-      IList.hd (IList.rev subs)
+      List.hd_exn (IList.rev subs)
   with _ -> assert false
 
 
 let get_field_name program static tenv cn fs =
   let { StructTyp.fields; statics; } = JTransType.get_class_struct_typ program tenv cn in
   match
-    IList.find
-      (fun (fieldname, _, _) -> retrieve_fieldname fieldname = JBasics.fs_name fs)
+    List.find
+      ~f:(fun (fieldname, _, _) -> String.equal (retrieve_fieldname fieldname) (JBasics.fs_name fs))
       (if static then statics else fields)
   with
-  | fieldname, _, _ ->
+  | Some (fieldname, _, _) ->
       fieldname
-  | exception Not_found ->
+  | None ->
       (* TODO: understand why fields cannot be found here *)
       L.do_err "cannot find %s.%s@." (JBasics.cn_name cn) (JBasics.fs_name fs);
       raise (Frontend_error "Cannot find fieldname")
@@ -133,7 +133,7 @@ let formals_from_signature program tenv cn ms kind =
   let init_arg_list = match kind with
     | Procname.Static -> []
     | Procname.Non_Static -> [(JConfig.this, JTransType.get_class_type program tenv cn)] in
-  IList.rev (IList.fold_left collect init_arg_list (JBasics.ms_args ms))
+  IList.rev (List.fold ~f:collect ~init:init_arg_list (JBasics.ms_args ms))
 
 (** Creates the list of formal variables from a procedure based on ... *)
 let translate_formals program tenv cn impl =
@@ -141,33 +141,33 @@ let translate_formals program tenv cn impl =
     let name = Mangled.from_string (JBir.var_name_g var) in
     let typ = JTransType.param_type program tenv cn var vt in
     (name, typ):: l in
-  IList.rev (IList.fold_left collect [] (JBir.params impl))
+  IList.rev (List.fold ~f:collect ~init:[] (JBir.params impl))
 
 (** Creates the list of local variables from the bytecode and add the variables from
     the JBir representation *)
 let translate_locals program tenv formals bytecode jbir_code =
   let formal_set =
-    IList.fold_left
-      (fun set (var, _) -> Mangled.MangledSet.add var set)
-      Mangled.MangledSet.empty
+    List.fold
+      ~f:(fun set (var, _) -> Mangled.Set.add var set)
+      ~init:Mangled.Set.empty
       formals in
   let collect (seen_vars, l) (var, typ) =
-    if Mangled.MangledSet.mem var seen_vars then
+    if Mangled.Set.mem var seen_vars then
       (seen_vars, l)
     else
-      (Mangled.MangledSet.add var seen_vars, (var, typ) :: l) in
+      (Mangled.Set.add var seen_vars, (var, typ) :: l) in
   let with_bytecode_vars =
     (* Do not consider parameters as local variables *)
     let init = (formal_set, []) in
     match bytecode.JCode.c_local_variable_table with
     | None -> init
     | Some variable_table ->
-        IList.fold_left
-          (fun accu (_, _, var_name, var_type, _) ->
-             let var = Mangled.from_string var_name
-             and typ = JTransType.value_type program tenv var_type in
-             collect accu (var, typ))
-          init
+        List.fold
+          ~f:(fun accu (_, _, var_name, var_type, _) ->
+              let var = Mangled.from_string var_name
+              and typ = JTransType.value_type program tenv var_type in
+              collect accu (var, typ))
+          ~init
           variable_table in
   (* TODO (#4040807): Needs to add the JBir temporary variables since other parts of the
      code are still relying on those *)
@@ -226,10 +226,10 @@ let get_test_operator op =
   | `Ne -> Binop.Ne
 
 let is_java_native cm =
-  (cm.Javalib.cm_implementation = Javalib.Native)
+  Poly.(=) cm.Javalib.cm_implementation Javalib.Native
 
 let is_clone ms =
-  JBasics.ms_name ms = JConfig.clone_name
+  String.equal (JBasics.ms_name ms) JConfig.clone_name
 
 let get_implementation cm =
   match cm.Javalib.cm_implementation with
@@ -258,7 +258,7 @@ let get_implementation cm =
       (hacked_bytecode, jbir_code)
 
 let update_constr_loc cn ms loc_start =
-  if (JBasics.ms_name ms) = JConfig.constructor_name then
+  if String.equal (JBasics.ms_name ms) JConfig.constructor_name then
     try ignore(JBasics.ClassMap.find cn !constr_loc_map)
     with Not_found -> constr_loc_map := (JBasics.ClassMap.add cn loc_start !constr_loc_map)
 
@@ -411,7 +411,7 @@ let rec expression (context : JContext.t) pc expr =
   | JBir.Const c ->
       begin
         match c with (* We use the constant <field> internally to mean a variable. *)
-        | `String s when (JBasics.jstr_pp s) = JConfig.field_cst ->
+        | `String s when String.equal (JBasics.jstr_pp s) JConfig.field_cst ->
             let varname = JConfig.field_st in
             let procname = (Procdesc.get_proc_name context.procdesc) in
             let pvar = Pvar.mk varname procname in
@@ -555,11 +555,11 @@ let method_invocation
           | _ -> [] in
         (instrs, [(sil_obj_expr, sil_obj_type)]) in
   let (instrs, call_args) =
-    IList.fold_left
-      (fun (instrs_accu, args_accu) expr ->
-         let (instrs, sil_expr, sil_expr_type) = expression context pc expr in
-         (instrs_accu @ instrs, args_accu @ [(sil_expr, sil_expr_type)]))
-      init
+    List.fold
+      ~f:(fun (instrs_accu, args_accu) expr ->
+          let (instrs, sil_expr, sil_expr_type) = expression context pc expr in
+          (instrs_accu @ instrs, args_accu @ [(sil_expr, sil_expr_type)]))
+      ~init
       expr_list in
   let callee_procname =
     let proc = Procname.from_string_c_fun (JBasics.ms_name ms) in
@@ -601,8 +601,7 @@ let method_invocation
         call_instrs @ [set_file_attr]
 
     (* remove file attribute when calling the close method of a subtype of Closeable *)
-    | (_, typ) as exp :: []
-      when Procname.java_is_close callee_procname && JTransType.is_closeable program tenv typ ->
+    | exp :: [] when Procname.java_is_close callee_procname ->
         let set_mem_attr =
           let set_builtin = Exp.Const (Const.Cfun BuiltinDecl.__set_mem_attribute) in
           Sil.Call (None, set_builtin, [exp], loc, CallFlags.default) in
@@ -620,11 +619,11 @@ let get_array_length context pc expr_list content_type =
     match other_instrs with
     | (other_instrs, other_exprs) ->
         (instrs @ other_instrs, sil_len_expr :: other_exprs) in
-  let (instrs, sil_len_exprs) = (IList.fold_right get_expr_instr expr_list ([],[])) in
+  let (instrs, sil_len_exprs) = List.fold_right ~f:get_expr_instr expr_list ~init:([],[]) in
   let get_array_type_len sil_len_expr (content_type, _) =
     (Typ.Tarray (content_type, None), Some sil_len_expr) in
   let array_type, array_len =
-    IList.fold_right get_array_type_len sil_len_exprs (content_type, None) in
+    List.fold_right ~f:get_array_type_len sil_len_exprs ~init:(content_type, None) in
   let array_size = Exp.Sizeof (array_type, array_len, Subtype.exact) in
   (instrs, array_size)
 
@@ -639,9 +638,9 @@ let detect_loop entry_pc impl =
       begin
         let visited_updated = Int.Set.add visited pc in
         match code.(pc) with
-        | JBir.Goto goto_pc when goto_pc = entry_pc -> (true, empty)
+        | JBir.Goto goto_pc when Int.equal goto_pc entry_pc -> (true, empty)
         | JBir.Goto goto_pc -> loop visited_updated goto_pc
-        | JBir.Ifd (_, if_pc) when if_pc = entry_pc -> (true, empty)
+        | JBir.Ifd (_, if_pc) when Int.equal if_pc entry_pc -> (true, empty)
         | JBir.Ifd (_, if_pc) ->
             let (loop_detected, visited_after) = loop visited_updated (pc + 1) in
             if loop_detected then
@@ -649,7 +648,7 @@ let detect_loop entry_pc impl =
             else
               loop visited_after if_pc
         | _ ->
-            if (pc + 1) = entry_pc then
+            if Int.equal (pc + 1) entry_pc then
               (true, empty)
             else
               loop visited_updated (pc + 1)
@@ -680,7 +679,7 @@ let is_this expr =
       begin
         match JBir.var_name_debug var with
         | None -> false
-        | Some name_opt -> Mangled.to_string JConfig.this = name_opt
+        | Some name_opt -> String.equal (Mangled.to_string JConfig.this) name_opt
       end
   | _ -> false
 

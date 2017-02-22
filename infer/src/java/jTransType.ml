@@ -173,7 +173,7 @@ let method_signature_names ms =
   let return_type_name =
     match JBasics.ms_rtype ms with
     | None ->
-        if JBasics.ms_name ms = JConfig.constructor_name then
+        if String.equal (JBasics.ms_name ms) JConfig.constructor_name then
           None
         else
           Some (None, JConfig.void)
@@ -215,7 +215,12 @@ let create_sil_class_field cn cf =
   let fs = cf.Javalib.cf_signature in
   let field_name = create_fieldname cn fs
   and field_type = get_named_type (JBasics.fs_type fs)
-  and annotation = JAnnotation.translate_item cf.Javalib.cf_annotations in
+  and annotation =
+    let real_annotations = JAnnotation.translate_item cf.Javalib.cf_annotations in
+    (* translate modifers like "volatile" as annotations *)
+    match cf.Javalib.cf_kind with
+    | Javalib.Volatile -> (Annot.volatile, true) :: real_annotations
+    | Javalib.NotFinal | Final -> real_annotations in
   (field_name, field_type, annotation)
 
 
@@ -260,8 +265,8 @@ let add_model_fields program classpath_fields cn =
   let statics, nonstatics = classpath_fields in
   let classpath_field_map =
     let collect_fields map =
-      IList.fold_left
-        (fun map (fn, ft, _) -> Ident.FieldMap.add fn ft map) map in
+      List.fold
+        ~f:(fun map (fn, ft, _) -> Ident.FieldMap.add fn ft map) ~init:map in
     collect_fields (collect_fields Ident.FieldMap.empty statics) nonstatics in
   try
     match JBasics.ClassMap.find cn (JClasspath.get_models program) with
@@ -379,21 +384,21 @@ let sizeof_of_object_type program tenv ot subtypes =
 
 (** return the name and type of a formal parameter, looking up the class name in case of "this" *)
 let param_type program tenv cn name vt =
-  if (JBir.var_name_g name) = Mangled.to_string JConfig.this
+  if String.equal (JBir.var_name_g name) (Mangled.to_string JConfig.this)
   then get_class_type program tenv cn
   else value_type program tenv vt
 
 
 let get_var_type_from_sig (context : JContext.t) var =
   let program = context.program in
-  try
-    let tenv = JContext.get_tenv context in
-    let vt', var' =
-      IList.find
-        (fun (_, var') -> JBir.var_equal var var')
-        (JBir.params context.impl) in
-    Some (param_type program tenv context.cn var' vt')
-  with Not_found -> None
+  let tenv = JContext.get_tenv context in
+  List.find_map ~f:(
+    fun (vt', var') ->
+      if JBir.var_equal var var'
+      then Some (param_type program tenv context.cn var' vt')
+      else None
+  )
+    (JBir.params context.impl)
 
 
 let get_var_type context var =

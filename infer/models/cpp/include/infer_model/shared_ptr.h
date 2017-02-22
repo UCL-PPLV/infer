@@ -392,9 +392,20 @@ shared_ptr<T> const_pointer_cast(shared_ptr<U> const& r) noexcept {
   return const_pointer_cast<T, U>((const std__shared_ptr<U>&)r);
 }
 
+template <class T>
+class enable_shared_from_this : public std__enable_shared_from_this<T> {
+ public:
+  shared_ptr<T> shared_from_this() {
+    return std__enable_shared_from_this<T>::shared_from_this();
+  }
+  shared_ptr<T const> shared_from_this() const {
+    return std__enable_shared_from_this<T>::shared_from_this();
+  }
+};
+
 template <class T, class... Args>
 shared_ptr<T> make_shared(Args&&... args) {
-  return shared_ptr<T>(new T(std::forward<Args>(args)...));
+  return shared_ptr<T>(::new T(std::forward<Args>(args)...));
 }
 
 #undef __cast_to_infer_ptr

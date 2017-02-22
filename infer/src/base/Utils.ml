@@ -8,6 +8,7 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
 open! IStd
+open! PVariant
 
 module F = Format
 module Hashtbl = Caml.Hashtbl
@@ -116,14 +117,14 @@ let filename_to_absolute ~root fname =
     | _ -> entry :: rev_done
   in
   let abs_fname = if Filename.is_absolute fname then fname else root ^/ fname in
-  Filename.of_parts (List.rev (List.fold_left ~f:add_entry ~init:[] (Filename.parts abs_fname)))
+  Filename.of_parts (List.rev (List.fold ~f:add_entry ~init:[] (Filename.parts abs_fname)))
 
 
 (** Convert an absolute filename to one relative to the given directory. *)
 let filename_to_relative ~root fname =
   let rec relativize_if_under origin target =
     match origin, target with
-    | x :: xs, y :: ys when x = y -> relativize_if_under xs ys
+    | x :: xs, y :: ys when String.equal x y -> relativize_if_under xs ys
     | [], [] -> Some "."
     | [], ys -> Some (Filename.of_parts ys)
     | _ -> None
@@ -241,7 +242,7 @@ let create_dir dir =
   try Unix.mkdir dir ~perm:0o700 with
     Unix.Unix_error _ ->
       let created_concurrently = (* check if another process created it meanwhile *)
-        try (Unix.stat dir).Unix.st_kind = Unix.S_DIR
+        try Polymorphic_compare.(=) ((Unix.stat dir).Unix.st_kind) Unix.S_DIR
         with Unix.Unix_error _ -> false in
       if not created_concurrently then
         failwithf "@.ERROR: cannot create directory %s@." dir
@@ -289,3 +290,24 @@ let compare_versions v1 v2 =
   let lv1  = int_list_of_version v1 in
   let lv2  = int_list_of_version v2 in
   [%compare : int list] lv1 lv2
+
+(* Run the epilogues when we get SIGINT (Control-C). We do not want to mask SIGINT unless at least
+   one epilogue has been registered, so make this value lazy. *)
+let activate_run_epilogues_on_signal = lazy (
+  let run_epilogues_on_signal s =
+    F.eprintf "*** %s: Caught %s, time to die@." (Filename.basename Sys.executable_name)
+      (Signal.to_string s);
+    (* Epilogues are registered with [at_exit] so exiting will make them run. *)
+    exit 0 in
+  Signal.Expert.handle Signal.int run_epilogues_on_signal
+)
+
+let register_epilogue f desc =
+  let f_no_exn () =
+    try f ()
+    with exn ->
+      F.eprintf "Error while running epilogue %s:@ %a.@ Powering through...@." desc Exn.pp exn in
+  (* We call `exit` in a bunch of places, so register the epilogues with [at_exit]. *)
+  Pervasives.at_exit f_no_exn;
+  (* Register signal masking. *)
+  Lazy.force activate_run_epilogues_on_signal

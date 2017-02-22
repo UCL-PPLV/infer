@@ -37,13 +37,14 @@ type kind_of_links =
   | LinkToSSL
   | LinkToDLL
   | LinkRetainCycle
+[@@deriving compare]
 
 (* coordinate identifies a node using two dimension: id is an numerical identifier of the node,*)
 (* lambda identifies in which hpred parameter id lays in*)
 type coordinate = {
   id: int;
   lambda: int;
-}
+} [@@deriving compare]
 
 (* define a link between two nodes. src_fld/trg_fld define the label of the src/trg field. It is*)
 (* useful for having nodes from within a struct and/or to inside a struct *)
@@ -53,7 +54,9 @@ type link = {
   src_fld: string;
   trg: coordinate;
   trg_fld: string;
-}
+} [@@deriving compare]
+
+let equal_link = [%compare.equal : link]
 
 (* type of the visualized boxes/nodes in the graph*)
 type dotty_node =
@@ -202,7 +205,7 @@ let rec look_up_for_back_pointer e dotnodes lambda =
   match dotnodes with
   | [] -> []
   | Dotdllseg(coo, _, _, _, e4, _, _, _):: dotnodes' ->
-      if Exp.equal e e4 && lambda = coo.lambda then [coo.id + 1]
+      if Exp.equal e e4 && Int.equal lambda coo.lambda then [coo.id + 1]
       else look_up_for_back_pointer e dotnodes' lambda
   | _:: dotnodes' -> look_up_for_back_pointer e dotnodes' lambda
 
@@ -212,7 +215,7 @@ let rec select_nodes_exp_lambda dotnodes e lambda =
   | [] -> []
   | node:: l' ->
       let (coo, e') = get_coordinate_and_exp node in
-      if (Exp.equal e e') && lambda = coo.lambda
+      if (Exp.equal e e') && Int.equal lambda coo.lambda
       then node:: select_nodes_exp_lambda l' e lambda
       else select_nodes_exp_lambda l' e lambda
 
@@ -237,7 +240,7 @@ let color_to_str (c : Pp.color) =
 
 let make_dangling_boxes pe allocated_nodes (sigma_lambda: (Sil.hpred * int) list) =
   let exp_color hpred (exp : Exp.t) =
-    if pe.Pp.cmap_norm (Obj.repr hpred) = Pp.Red then Pp.Red
+    if Pp.equal_color (pe.Pp.cmap_norm (Obj.repr hpred)) Pp.Red then Pp.Red
     else pe.Pp.cmap_norm (Obj.repr exp) in
   let get_rhs_predicate (hpred, lambda) =
     let n = !dotty_state_count in
@@ -265,7 +268,7 @@ let make_dangling_boxes pe allocated_nodes (sigma_lambda: (Sil.hpred * int) list
   let is_allocated d =
     match d with
     | Dotdangling(_, e, _) ->
-        IList.exists (fun a -> match a with
+        List.exists ~f:(fun a -> match a with
             | Dotpointsto(_, e', _)
             | Dotarray(_, _, e', _, _, _)
             | Dotlseg(_, e', _, _, _, _)
@@ -277,7 +280,7 @@ let make_dangling_boxes pe allocated_nodes (sigma_lambda: (Sil.hpred * int) list
     match l with
     | [] -> []
     | Dotdangling(coo, e, color):: l' ->
-        if (IList.exists (Exp.equal e) seen_exp) then filter_duplicate l' seen_exp
+        if (List.exists ~f:(Exp.equal e) seen_exp) then filter_duplicate l' seen_exp
         else Dotdangling(coo, e, color):: filter_duplicate l' (e:: seen_exp)
     | box:: l' -> box:: filter_duplicate l' seen_exp (* this case cannot happen*) in
   let rec subtract_allocated candidate_dangling =
@@ -286,7 +289,7 @@ let make_dangling_boxes pe allocated_nodes (sigma_lambda: (Sil.hpred * int) list
     | d:: candidates ->
         if (is_allocated d) then subtract_allocated candidates
         else d:: subtract_allocated candidates in
-  let candidate_dangling = IList.flatten (IList.map get_rhs_predicate sigma_lambda) in
+  let candidate_dangling = List.concat (IList.map get_rhs_predicate sigma_lambda) in
   let candidate_dangling = filter_duplicate candidate_dangling [] in
   let dangling = subtract_allocated candidate_dangling in
   dangling_dotboxes:= dangling
@@ -308,7 +311,7 @@ let rec dotty_mk_node pe sigma =
          Dotstruct((mk_coordinate (n + 1) lambda), e, l, e_color_str, te);]
     | (Sil.Hpointsto (e, _, _), lambda) ->
         let e_color_str = color_to_str (exp_color e) in
-        if IList.mem Exp.equal e !struct_exp_nodes then [] else
+        if List.mem ~equal:Exp.equal !struct_exp_nodes e then [] else
           [Dotpointsto((mk_coordinate n lambda), e, e_color_str)]
     | (Sil.Hlseg (k, hpara, e1, e2, _), lambda) ->
         incr dotty_state_count; (* increment once more n+1 is the box for last element of the list *)
@@ -322,7 +325,7 @@ let rec dotty_mk_node pe sigma =
   | [] -> []
   | (hpred, lambda) :: sigma' ->
       let exp_color (exp : Exp.t) =
-        if pe.Pp.cmap_norm (Obj.repr hpred) = Pp.Red then Pp.Red
+        if Pp.equal_color (pe.Pp.cmap_norm (Obj.repr hpred)) Pp.Red then Pp.Red
         else pe.Pp.cmap_norm (Obj.repr exp) in
       do_hpred_lambda exp_color (hpred, lambda) @ dotty_mk_node pe sigma'
 
@@ -335,7 +338,7 @@ let set_exps_neq_zero pi =
   IList.iter f pi
 
 let box_dangling e =
-  let entry_e = IList.filter (fun b -> match b with
+  let entry_e = List.filter ~f:(fun b -> match b with
       | Dotdangling(_, e', _) -> Exp.equal e e' | _ -> false ) !dangling_dotboxes in
   match entry_e with
   |[] -> None
@@ -354,8 +357,8 @@ let compute_fields_struct sigma =
   let rec do_strexp se in_struct =
     match se with
     | Sil.Eexp (e, _) -> if in_struct then fields_structs:= e ::!fields_structs else ()
-    | Sil.Estruct (l, _) -> IList.iter (fun e -> do_strexp e true) (snd (IList.split l))
-    | Sil.Earray (_, l, _) -> IList.iter (fun e -> do_strexp e false) (snd (IList.split l)) in
+    | Sil.Estruct (l, _) -> IList.iter (fun e -> do_strexp e true) (snd (List.unzip l))
+    | Sil.Earray (_, l, _) -> IList.iter (fun e -> do_strexp e false) (snd (List.unzip l)) in
   let rec fs s =
     match s with
     | [] -> ()
@@ -382,14 +385,16 @@ let is_nil e prop =
 let in_cycle cycle edge =
   match cycle with
   | Some cycle' ->
-      IList.mem (fun (fn, se) (_,fn',se') ->
-          Ident.equal_fieldname fn fn' && Sil.equal_strexp se se') edge cycle'
+      let (fn, se) = edge in
+      List.exists
+        ~f:(fun (_,fn',se') -> Ident.equal_fieldname fn fn' && Sil.equal_strexp se se')
+        cycle'
   | _ -> false
 
 let node_in_cycle cycle node =
   match cycle, node with
   | Some _, Dotstruct(_, _, l, _,_)  -> (* only struct nodes can be in cycle *)
-      IList.exists (in_cycle cycle) l
+      List.exists ~f:(in_cycle cycle) l
   | _ -> false
 
 
@@ -413,7 +418,7 @@ let rec compute_target_struct_fields dotnodes list_fld p f lambda cycle =
                )
            | [node] | [Dotpointsto _ ; node] | [node; Dotpointsto _] ->
                let n = get_coordinate_id node in
-               if IList.mem Exp.equal e !struct_exp_nodes then begin
+               if List.mem ~equal:Exp.equal !struct_exp_nodes e then begin
                  let e_no_special_char = strip_special_chars (Exp.to_string e) in
                  let link_kind = if (in_cycle cycle (fn, se)) && (not !print_full_prop) then
                      LinkRetainCycle
@@ -449,7 +454,7 @@ let rec compute_target_array_elements dotnodes list_elements p f lambda =
                )
            | [node] | [Dotpointsto _ ; node] | [node; Dotpointsto _] ->
                let n = get_coordinate_id node in
-               if IList.mem Exp.equal e !struct_exp_nodes then begin
+               if List.mem ~equal:Exp.equal !struct_exp_nodes e then begin
                  let e_no_special_char = strip_special_chars (Exp.to_string e) in
                  [(LinkArrayToStruct, Exp.to_string idx, n, e_no_special_char)]
                end else
@@ -472,7 +477,7 @@ let compute_target_from_eexp dotnodes e p lambda =
     [(LinkExpToExp, n', "")]
   else
     let nodes_e = select_nodes_exp_lambda dotnodes e lambda in
-    let nodes_e_no_struct = IList.filter is_not_struct nodes_e in
+    let nodes_e_no_struct = List.filter ~f:is_not_struct nodes_e in
     let trg = IList.map get_coordinate_id nodes_e_no_struct in
     (match trg with
      | [] ->
@@ -493,7 +498,7 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
         let target_list = compute_target_array_elements dotnodes lie p f lambda in
         (* below it's n+1 because n is the address, n+1 is the actual array node*)
         let ff n = IList.map (fun (k, lab_src, m, lab_trg) -> mk_link k (mk_coordinate (n + 1) lambda) (strip_special_chars lab_src) (mk_coordinate m lambda) (strip_special_chars lab_trg)) target_list in
-        let links_from_elements = IList.flatten (IList.map ff (n:: nl)) in
+        let links_from_elements = List.concat (IList.map ff (n:: nl)) in
 
         let trg_label = strip_special_chars (Exp.to_string e) in
         let lnk = mk_link (LinkToArray) (mk_coordinate n lambda) "" (mk_coordinate (n + 1) lambda) trg_label in
@@ -514,11 +519,11 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
              ) target_list in
            let nodes_e = select_nodes_exp_lambda dotnodes e lambda in
            let address_struct_id =
-             try get_coordinate_id (IList.hd (IList.filter (is_source_node_of_exp e) nodes_e))
+             try get_coordinate_id (List.hd_exn (List.filter ~f:(is_source_node_of_exp e) nodes_e))
              with exn when SymOp.exn_not_failure exn -> assert false in
            (* we need to exclude the address node from the sorce of fields. no fields should start from there*)
-           let nl'= IList.filter (fun id -> address_struct_id <> id) nl in
-           let links_from_fields = IList.flatten (IList.map ff nl') in
+           let nl'= List.filter ~f:(fun id -> address_struct_id <> id) nl in
+           let links_from_fields = List.concat (IList.map ff nl') in
            let lnk_from_address_struct = if !print_full_prop then
                let trg_label = strip_special_chars (Exp.to_string e) in
                [mk_link (LinkExpToStruct) (mk_coordinate address_struct_id lambda) ""
@@ -536,7 +541,7 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
                  mk_link k (mk_coordinate n lambda) ""
                    (mk_coordinate m lambda) (strip_special_chars lab_target)
                ) target_list in
-             let ll = IList.flatten (IList.map ff nl) in
+             let ll = List.concat (IList.map ff nl) in
              ll @ dotty_mk_set_links dotnodes sigma' p f cycle
            else dotty_mk_set_links dotnodes sigma' p f cycle)
 
@@ -545,7 +550,7 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
       (match src with
        | [] -> assert false
        | n:: _ ->
-           let (_, m, lab) = IList.hd (compute_target_from_eexp dotnodes e2 p lambda) in
+           let (_, m, lab) = List.hd_exn (compute_target_from_eexp dotnodes e2 p lambda) in
            let lnk = mk_link LinkToSSL (mk_coordinate (n + 1) lambda) "" (mk_coordinate m lambda) lab in
            lnk:: dotty_mk_set_links dotnodes sigma' p f cycle
       )
@@ -629,9 +634,12 @@ let dotty_pp_link f link =
 let filter_useless_spec_dollar_box (nodes: dotty_node list) (links: link list) =
   let tmp_nodes = ref nodes in
   let tmp_links = ref links in
-  let remove_links_from ln = IList.filter (fun n' -> not (IList.mem Pervasives.(=) n' ln)) !tmp_links in
+  let remove_links_from ln =
+    List.filter
+      ~f:(fun n' -> not (List.mem ~equal:equal_link ln n'))
+      !tmp_links in
   let remove_node n ns =
-    IList.filter (fun n' -> match n' with
+    List.filter ~f:(fun n' -> match n' with
         | Dotpointsto _ -> (get_coordinate_id n') <> (get_coordinate_id n)
         | _ -> true
       ) ns in
@@ -639,7 +647,7 @@ let filter_useless_spec_dollar_box (nodes: dotty_node list) (links: link list) =
     match lns with
     | [] -> []
     | l:: ln' -> let n_id = get_coordinate_id n in
-        if l.src.id = n_id && l.src_fld ="" then (
+        if Int.equal l.src.id n_id && String.equal l.src_fld "" then (
           (*L.out "@\n Found link (%i,%i)" l.src.id l.trg.id;*)
           l:: boxes_pointed_by n ln'
         )
@@ -648,7 +656,7 @@ let filter_useless_spec_dollar_box (nodes: dotty_node list) (links: link list) =
     match lns with
     | [] -> []
     | l:: ln' -> let n_id = get_coordinate_id n in
-        if l.trg.id = n_id && l.trg_fld ="" then (
+        if Int.equal l.trg.id n_id && String.equal l.trg_fld "" then (
           (*L.out "@\n Found link (%i,%i)" l.src.id l.trg.id;*)
           l:: boxes_pointing_at n ln' )
         else boxes_pointing_at n ln' in
@@ -665,7 +673,7 @@ let filter_useless_spec_dollar_box (nodes: dotty_node list) (links: link list) =
           let links_from_node = boxes_pointed_by node links in
           let links_to_node = boxes_pointing_at node links in
           (* L.out "@\n Size of links_from=%i links_to=%i @.@." (IList.length links_from_node) (IList.length links_to_node); *)
-          if links_to_node =[] then begin
+          if List.is_empty links_to_node then begin
             tmp_links:= remove_links_from links_from_node ;
             tmp_nodes:= remove_node node !tmp_nodes;
           end
@@ -766,7 +774,7 @@ and dotty_pp_state f pe cycle dotnode =
   | Dotpointsto(coo, e1, c) when !print_full_prop -> dotty_exp coo e1 c false
   | Dotstruct(coo, e1, l, c,te) ->
       let l' = if !print_full_prop then l
-        else IList.filter (fun edge -> in_cycle cycle edge) l in
+        else List.filter ~f:(fun edge -> in_cycle cycle edge) l in
       print_struct f pe e1 te l' coo c
   | Dotarray(coo, e1, e2, l, _, c) when !print_full_prop -> print_array f pe e1 e2 l coo c
   | Dotlseg(coo, e1, _, Sil.Lseg_NE, nesting, _) when !print_full_prop ->
@@ -950,13 +958,18 @@ let pp_cfgnodelabel pdesc fmt (n : Procdesc.Node.t) =
   let pp_label fmt n =
     match Procdesc.Node.get_kind n with
     | Procdesc.Node.Start_node pname ->
+        let pname_string = Procname.to_string pname in
         Format.fprintf fmt "Start %s\\nFormals: %a\\nLocals: %a"
-          (Procname.to_string pname)
+          pname_string
           pp_etlist (Procdesc.get_formals pdesc)
           pp_local_list (Procdesc.get_locals pdesc);
         if IList.length (Procdesc.get_captured pdesc) <> 0 then
           Format.fprintf fmt "\\nCaptured: %a"
-            pp_local_list (Procdesc.get_captured pdesc)
+            pp_local_list (Procdesc.get_captured pdesc);
+        let attributes = Procdesc.get_attributes pdesc in
+        let method_annotation = attributes.ProcAttributes.method_annotation in
+        if not (Annot.Method.is_empty method_annotation) then
+          Format.fprintf fmt "\\nAnnotation: %a" (Annot.Method.pp pname_string) method_annotation
     | Procdesc.Node.Exit_node pname ->
         Format.fprintf fmt "Exit %s" (Procname.to_string pname)
     | Procdesc.Node.Join_node ->
@@ -993,7 +1006,7 @@ let pp_cfgnode pdesc fmt (n: Procdesc.Node.t) =
     let color = if is_exn then "[color=\"red\" ]" else "" in
     match Procdesc.Node.get_kind n2 with
     | Procdesc.Node.Exit_node _
-      when is_exn = true -> (* don't print exception edges to the exit node *)
+      when is_exn -> (* don't print exception edges to the exit node *)
         ()
     | _ ->
         F.fprintf fmt "\n\t %a -> %a %s;"
@@ -1033,7 +1046,7 @@ let print_icfg_dotty source cfg =
   let fname =
     match Config.icfg_dotty_outfile with
     | Some file -> file
-    | None when Config.frontend_tests = true ->
+    | None when Config.frontend_tests ->
         (SourceFile.to_abs_path source) ^ ".test.dot"
     | None ->
         DB.filename_to_string
@@ -1111,7 +1124,7 @@ let atom_to_xml_string a =
 
 (* return the dangling node corresponding to an expression it exists or None *)
 let exp_dangling_node e =
-  let entry_e = IList.filter (fun b -> match b with
+  let entry_e = List.filter ~f:(fun b -> match b with
       | VH_dangling(_, e') -> Exp.equal e e' | _ -> false ) !set_dangling_nodes in
   match entry_e with
   |[] -> None
@@ -1182,7 +1195,7 @@ let make_set_dangling_nodes allocated_nodes (sigma: Sil.hpred list) =
      | _ -> [] (* arrays and struct do not give danglings. CHECK THIS!*)
     ) in
   let is_not_allocated e =
-    let allocated = IList.exists (fun a -> match a with
+    let allocated = List.exists ~f:(fun a -> match a with
         | VH_pointsto(_, e', _, _)
         | VH_lseg(_, e', _ , _)
         | VH_dllseg(_, e', _, _, _, _) -> Exp.equal e e'
@@ -1192,12 +1205,12 @@ let make_set_dangling_nodes allocated_nodes (sigma: Sil.hpred list) =
     match l with
     | [] -> []
     | e:: l' ->
-        if (IList.exists (Exp.equal e) seen_exp) then filter_duplicate l' seen_exp
+        if (List.exists ~f:(Exp.equal e) seen_exp) then filter_duplicate l' seen_exp
         else e:: filter_duplicate l' (e:: seen_exp) in
-  let rhs_exp_list = IList.flatten (IList.map get_rhs_predicate sigma) in
+  let rhs_exp_list = List.concat (IList.map get_rhs_predicate sigma) in
   let candidate_dangling_exps = filter_duplicate rhs_exp_list [] in
   (* get rid of allocated ones*)
-  let dangling_exps = IList.filter is_not_allocated candidate_dangling_exps in
+  let dangling_exps = List.filter ~f:is_not_allocated candidate_dangling_exps in
   IList.map make_new_dangling dangling_exps
 
 (* return a list of pairs (n,field_lab) where n is a target node*)
@@ -1279,8 +1292,8 @@ let prop_to_set_of_visual_heaps prop =
   incr global_node_counter;
   while (!working_list <> []) do
     set_dangling_nodes:=[];
-    let (n, h) = IList.hd !working_list in
-    working_list:= IList.tl !working_list;
+    let (n, h) = List.hd_exn !working_list in
+    working_list:= List.tl_exn !working_list;
     let nodes = make_visual_heap_nodes h in
     set_dangling_nodes:= make_set_dangling_nodes nodes h;
     let edges = make_visual_heap_edges nodes h prop in
@@ -1405,54 +1418,3 @@ let print_specs_xml signature specs loc fmt =
        ("line", string_of_int loc.Location.line)]
       [xml_signature; xml_specifications] in
   Io_infer.Xml.pp_document true fmt proc_summary
-
-(*
-let exp_is_neq_zero e =
-  IList.exists (fun e' -> Exp.equal e e') !exps_neq_zero
-
-let rec get_contents_range_single pe coo f range_se =
-  let (e1, e2), se = range_se in
-  let e1_no_special_char = strip_special_chars (Exp.to_string e1) in
-  F.fprintf f "{ <%s> [%a,%a] : %a }"
-    e1_no_special_char (Sil.pp_exp_printenv pe) e1 (Sil.pp_exp_printenv pe) e2 (get_contents_sexp pe coo) se
-
-and get_contents_range pe coo f = function
-  | [] -> ()
-  | [range_se] ->
-      F.fprintf f "%a" (get_contents_range_single pe coo) range_se
-  | range_se:: l ->
-      F.fprintf f "%a | %a"
-        (get_contents_range_single pe coo) range_se (get_contents_range pe coo) l
-
-let pp_nesting fmt nesting =
-  if nesting > 1 then F.fprintf fmt "%d" nesting
-
-let max_map f l =
-  let curr_max = ref 0 in
-  IList.iter (fun x -> curr_max := max !curr_max (f x)) l;
-  ! curr_max
-
-let rec sigma_nesting_level sigma =
-  max_map (function
-      | Sil.Hpointsto _ -> 0
-      | Sil.Hlseg (_, hpara, _, _, _) -> hpara_nesting_level hpara
-      | Sil.Hdllseg (_, hpara_dll, _, _, _, _, _) -> hpara_dll_nesting_level hpara_dll) sigma
-
-and hpara_nesting_level hpara =
-  1 + sigma_nesting_level hpara.Sil.body
-
-and hpara_dll_nesting_level hpara_dll =
-  1 + sigma_nesting_level hpara_dll.Sil.body_dll
-
-let rec get_color_exp dot_nodes e =
-  match dot_nodes with
-  | [] ->""
-  | Dotnil(_):: l' -> get_color_exp l' e
-  | Dotpointsto(_, e', c):: l'
-  | Dotdangling(_, e', c):: l'
-  | Dotarray(_, _, e', _, _, c):: l'
-  | Dotlseg(_, e', _, _, _, c):: l'
-  | Dotstruct(_, e', _, c, _):: l'
-  | Dotdllseg(_, e', _, _, _, _, _, c):: l' ->
-      if (Exp.equal e e') then c else get_color_exp l' e
-*)

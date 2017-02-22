@@ -29,8 +29,8 @@ let callback_sql { Callbacks.proc_desc; proc_name; tenv } =
   (* Check for SQL string concatenations *)
   let do_instr const_map node instr =
     let do_call pn_java i1 i2 l =
-      if Procname.java_get_class_name pn_java = "java.lang.StringBuilder"
-      && Procname.java_get_method pn_java = "append"
+      if String.equal (Procname.java_get_class_name pn_java) "java.lang.StringBuilder"
+      && String.equal (Procname.java_get_method pn_java) "append"
       then
         begin
           let rvar1 = Exp.Var i1 in
@@ -39,7 +39,7 @@ let callback_sql { Callbacks.proc_desc; proc_name; tenv } =
             let matches s r = Str.string_match r s 0 in
             match const_map node rvar1, const_map node rvar2 with
             | Some (Const.Cstr ""), Some (Const.Cstr s2) ->
-                if IList.exists (matches s2) sql_start then
+                if List.exists ~f:(matches s2) sql_start then
                   begin
                     L.stdout
                       "%s%s@."

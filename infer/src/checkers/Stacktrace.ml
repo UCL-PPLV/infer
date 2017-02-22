@@ -47,7 +47,7 @@ let frame_matches_location frame_obj loc =
   let matches_file = String.is_suffix ~suffix:frame_obj.file_str lfname in
   let matches_line = match frame_obj.line_num with
     | None -> false
-    | Some line -> line = loc.Location.line in
+    | Some line -> Int.equal line loc.Location.line in
   matches_file && matches_line
 
 let parse_stack_frame frame_str =
@@ -101,7 +101,7 @@ let of_json filename json =
     Yojson.Basic.Util.to_list (extract_json_member frames_key)
     |> IList.map Yojson.Basic.Util.to_string
     |> IList.map String.strip
-    |> IList.filter (fun s -> s <> "")
+    |> List.filter ~f:(fun s -> s <> "")
     |> IList.map parse_stack_frame in
   make exception_name frames
 

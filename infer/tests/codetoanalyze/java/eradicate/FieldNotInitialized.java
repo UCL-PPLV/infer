@@ -44,4 +44,98 @@ public class FieldNotInitialized {
     f = null; // OK  the framework could write null into the field
     g = null; // OK  the framework could write null into the field
   }
+
+
+  class OnlyRead {
+    Object o;
+
+    OnlyRead() {
+      Object x = o; // not initialized
+    }
+  }
+
+  class WriteItself {
+    Object o;
+
+    WriteItself() {
+      o = o; // not initialized
+    }
+  }
+
+  class Swap {
+    Object o1;
+    Object o2;
+
+    Swap() {
+      o1 = o2; // not initialized
+      o2 = new Object();
+    }
+  }
+
+  class SwapOK {
+    Object o1;
+    Object o2;
+
+    SwapOK() {
+      o1 = new Object();
+      o2 = o1;
+    }
+  }
+
+
+  class OnlyReadIndirect {
+    Object o1;
+    Object o2;
+
+    private void indirect() {
+      Object x = o1; // not initialized
+      o2 = new Object();
+    }
+
+    OnlyReadIndirect() {
+      indirect();
+    }
+  }
+
+  class ConditionalFieldInit {
+    Object o1;
+    @Nullable Object o2 = null;
+    public ConditionalFieldInit() {
+        if (o2 != null) {
+            o1 = new Object(); // Not always initialized
+        }
+    }
+  }
+
+  class InitIfNull {
+    Object o;
+
+    public InitIfNull() {
+      if (o == null)
+        o = new Object();
+    }
+  }
+
+  class InitIfNull2 {
+    Object o;
+
+    public InitIfNull2(Object x) {
+      if (o == null)
+        o = x;
+    }
+  }
+
+  class InitIfNull3 {
+    Object o;
+
+    Object getNotNull() {
+      return new Object();
+    }
+
+    public InitIfNull3() {
+      if (o == null)
+        o = getNotNull();
+    }
+  }
+
 }

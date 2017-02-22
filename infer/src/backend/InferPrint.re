@@ -33,13 +33,13 @@ let load_specfiles () => {
       | Sys_error _ => []
       };
     let all_filepaths = IList.map (fun fname => Filename.concat dir fname) all_filenames;
-    IList.filter is_specs_file all_filepaths
+    List.filter f::is_specs_file all_filepaths
   };
   let specs_dirs = {
     let result_specs_dir = DB.filename_to_string DB.Results_dir.specs_dir;
     [result_specs_dir, ...Config.specs_library]
   };
-  IList.flatten (IList.map specs_files_in_dir specs_dirs)
+  List.concat (IList.map specs_files_in_dir specs_dirs)
 };
 
 
@@ -134,7 +134,6 @@ type summary_val = {
   vfile: string,
   vflags: ProcAttributes.proc_flags,
   vline: int,
-  vtop: string,
   vsignature: string,
   vweight: int,
   vproof_coverage: string,
@@ -146,12 +145,11 @@ type summary_val = {
 
 
 /** compute values from summary data to export to csv and xml format */
-let summary_values top_proc_set summary => {
+let summary_values summary => {
   let stats = summary.Specs.stats;
   let attributes = summary.Specs.attributes;
   let err_log = attributes.ProcAttributes.err_log;
   let proc_name = Specs.get_proc_name summary;
-  let is_top = Procname.Set.mem proc_name top_proc_set;
   let signature = Specs.get_signature summary;
   let nodes_nr = IList.length summary.Specs.nodes;
   let specs = Specs.get_specs_from_payload summary;
@@ -171,7 +169,7 @@ let summary_values top_proc_set summary => {
     F.asprintf "%t" pp
   };
   let node_coverage =
-    if (nodes_nr == 0) {
+    if (Int.equal nodes_nr 0) {
       0.0
     } else {
       float_of_int nr_nodes_visited /. float_of_int nodes_nr
@@ -195,11 +193,15 @@ let summary_values top_proc_set summary => {
     vto: Option.value_map f::pp_failure default::"NONE" stats.Specs.stats_failure,
     vsymop: stats.Specs.symops,
     verr:
-      Errlog.size (fun ekind in_footprint => ekind == Exceptions.Kerror && in_footprint) err_log,
+      Errlog.size
+        (
+          fun ekind in_footprint =>
+            Exceptions.equal_err_kind ekind Exceptions.Kerror && in_footprint
+        )
+        err_log,
     vflags: attributes.ProcAttributes.proc_flags,
     vfile: SourceFile.to_string attributes.ProcAttributes.loc.Location.file,
     vline: attributes.ProcAttributes.loc.Location.line,
-    vtop: if is_top {"Y"} else {"N"},
     vsignature: signature,
     vweight: nodes_nr,
     vproof_coverage: Printf.sprintf "%2.2f" node_coverage,
@@ -237,9 +239,9 @@ let module ProcsCsv = {
       Io_infer.Xml.tag_proof_trace;
 
   /** Write proc summary stats in csv format */
-  let pp_summary fmt top_proc_set summary => {
+  let pp_summary fmt summary => {
     let pp x => F.fprintf fmt x;
-    let sv = summary_values top_proc_set summary;
+    let sv = summary_values summary;
     pp "\"%s\"," (Escape.escape_csv sv.vname);
     pp "\"%s\"," (Escape.escape_csv sv.vname_id);
     pp "%d," sv.vspecs;
@@ -249,7 +251,6 @@ let module ProcsCsv = {
     pp "%d," sv.verr;
     pp "%s," sv.vfile;
     pp "%d," sv.vline;
-    pp "%s," sv.vtop;
     pp "\"%s\"," (Escape.escape_csv sv.vsignature);
     pp "%d," sv.vweight;
     pp "%s," sv.vproof_coverage;
@@ -264,8 +265,8 @@ let module ProcsXml = {
   let xml_procs_id = ref 0;
 
   /** print proc in xml */
-  let pp_proc fmt top_proc_set summary => {
-    let sv = summary_values top_proc_set summary;
+  let pp_proc fmt summary => {
+    let sv = summary_values summary;
     let subtree label contents => Io_infer.Xml.create_tree label [] [Io_infer.Xml.String contents];
     let tree = {
       incr xml_procs_id;
@@ -280,7 +281,6 @@ let module ProcsXml = {
         subtree Io_infer.Xml.tag_err (string_of_int sv.verr),
         subtree Io_infer.Xml.tag_file sv.vfile,
         subtree Io_infer.Xml.tag_line (string_of_int sv.vline),
-        subtree Io_infer.Xml.tag_top sv.vtop,
         subtree Io_infer.Xml.tag_signature (Escape.escape_xml sv.vsignature),
         subtree Io_infer.Xml.tag_weight (string_of_int sv.vweight),
         subtree Io_infer.Xml.tag_proof_coverage sv.vproof_coverage,
@@ -303,7 +303,7 @@ let module ProcsXml = {
 };
 
 let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc eclass =>
-  if (not Config.filtering || eclass == Exceptions.Linters) {
+  if (not Config.filtering || Exceptions.equal_err_class eclass Exceptions.Linters) {
     true
   } else {
     let analyzer_is_whitelisted =
@@ -311,6 +311,7 @@ let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc eclass
       | Checkers
       | Eradicate
       | Tracing => true
+      | Bufferoverrun
       | Capture
       | Compile
       | Crashcontext
@@ -339,20 +340,18 @@ let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc eclass
               field_not_null_checked,
               null_dereference,
               parameter_not_null_checked,
-              premature_nil_termination
+              premature_nil_termination,
+              empty_vector_access
             ];
-          IList.mem Localise.equal issue_type null_deref_issue_types
+          List.mem equal::Localise.equal null_deref_issue_types issue_type
         };
-        if issue_type_is_null_deref {
+        let issue_type_is_buffer_overrun = Localise.equal issue_type Localise.buffer_overrun;
+        if (issue_type_is_null_deref || issue_type_is_buffer_overrun) {
           let issue_bucket_is_high = {
             let issue_bucket = Localise.error_desc_get_bucket error_desc;
             let high_buckets = Localise.BucketLevel.[b1, b2];
-            let eq o y =>
-              switch (o, y) {
-              | (None, _) => false
-              | (Some x, y) => String.equal x y
-              };
-            IList.mem eq issue_bucket high_buckets
+            Option.value_map
+              issue_bucket default::false f::(fun b => List.mem equal::String.equal high_buckets b)
           };
           issue_bucket_is_high
         } else {
@@ -371,7 +370,7 @@ let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc eclass
                 thread_safety_violation,
                 unsafe_guarded_by_access
               ];
-            IList.mem Localise.equal issue_type reportable_issue_types
+            List.mem equal::Localise.equal reportable_issue_types issue_type
           };
           issue_type_is_reportable
         }
@@ -502,7 +501,7 @@ let module IssuesJson = {
             Some Jsonbug_j.{file, lnum, cnum, enum}
           | _ => None
           };
-        let visibility = Exceptions.string_of_exception_visibility visibility;
+        let visibility = Exceptions.string_of_visibility visibility;
         let bug = {
           Jsonbug_j.bug_class: Exceptions.err_class_string eclass,
           kind,
@@ -540,7 +539,8 @@ let pp_tests_of_report fmt report => {
   let pp_trace_elem fmt {description} => F.fprintf fmt "%s" description;
   let pp_trace fmt trace =>
     if Config.print_traces_in_tests {
-      let trace_without_empty_descs = IList.filter (fun {description} => description != "") trace;
+      let trace_without_empty_descs =
+        List.filter f::(fun {description} => description != "") trace;
       F.fprintf fmt ", [%a]" (Pp.comma_seq pp_trace_elem) trace_without_empty_descs
     };
   let pp_row jsonbug =>
@@ -704,30 +704,6 @@ let module CallsCsv = {
       pp "%a@\n" Specs.CallStats.pp_trace trace
     };
     Specs.CallStats.iter do_call stats.Specs.call_stats
-  };
-};
-
-
-/** Module to compute the top procedures.
-    A procedure is top if it has specs and any procedure calling it has no specs */
-let module TopProcedures: {
-  type t;
-  let create: unit => t;
-  let process_summary: t => (string, Specs.summary) => unit;
-  let top_set: t => Procname.Set.t;
-} = {
-  type t = {mutable possible: Procname.Set.t, mutable impossible: Procname.Set.t};
-  let create () => {possible: Procname.Set.empty, impossible: Procname.Set.empty};
-  let mark_possible x pname => x.possible = Procname.Set.add pname x.possible;
-  let mark_impossible x pname => x.impossible = Procname.Set.add pname x.impossible;
-  let top_set x => Procname.Set.diff x.possible x.impossible;
-  let process_summary x (_, summary) => {
-    let proc_name = Specs.get_proc_name summary;
-    let nspecs = IList.length (Specs.get_specs_from_payload summary);
-    if (nspecs > 0) {
-      mark_possible x proc_name;
-      Procname.Map.iter (fun p _ => mark_impossible x p) summary.Specs.dependency_map
-    }
   };
 };
 
@@ -990,7 +966,7 @@ let module PreconditionStats = {
 
 let error_filter filters proc_name file error_desc error_name => {
   let always_report () =>
-    Localise.error_desc_extract_tag_value error_desc "always_report" == "true";
+    String.equal (Localise.error_desc_extract_tag_value error_desc "always_report") "true";
   (Config.write_html || not (Localise.equal error_name Localise.skip_function)) &&
   (filters.Inferconfig.path_filter file || always_report ()) &&
   filters.Inferconfig.error_filter error_name && filters.Inferconfig.proc_filter proc_name
@@ -1001,7 +977,8 @@ type report_kind =
   | Procs
   | Stats
   | Calls
-  | Summary;
+  | Summary
+[@@deriving compare];
 
 type bug_format_kind =
   | Json
@@ -1009,7 +986,8 @@ type bug_format_kind =
   | Tests
   | Text
   | Xml
-  | Latex;
+  | Latex
+[@@deriving compare];
 
 let pp_issues_in_format (format_kind, outf: Utils.outfile) =>
   switch format_kind {
@@ -1074,10 +1052,10 @@ let pp_issues error_filter linereader summary bug_format_list => {
   pp_issues_of_error_log error_filter linereader (Some loc) procname err_log bug_format_list
 };
 
-let pp_procs top_proc_set summary procs_format_list => {
+let pp_procs summary procs_format_list => {
   let pp_procs_in_format format => {
     let pp_procs = pp_procs_in_format format;
-    pp_procs top_proc_set summary
+    pp_procs summary
   };
   IList.iter pp_procs_in_format procs_format_list
 };
@@ -1112,7 +1090,6 @@ let pp_summary summary fname summary_format_list => {
 let pp_summary_by_report_kind
     formats_by_report_kind
     summary
-    top_proc_set
     fname
     error_filter
     linereader
@@ -1121,7 +1098,7 @@ let pp_summary_by_report_kind
   let pp_summary_by_report_kind (report_kind, format_list) =>
     switch (report_kind, format_list) {
     | (Issues, [_, ..._]) => pp_issues error_filter linereader summary format_list
-    | (Procs, [_, ..._]) => pp_procs top_proc_set summary format_list
+    | (Procs, [_, ..._]) => pp_procs summary format_list
     | (Stats, [_, ..._]) => pp_stats (error_filter file) linereader summary stats format_list
     | (Calls, [_, ..._]) => pp_calls summary format_list
     | (Summary, _) => pp_summary summary fname format_list
@@ -1177,14 +1154,14 @@ let pp_lint_issues filters formats_by_report_kind linereader procname error_log 
 
 
 /** Process a summary */
-let process_summary filters formats_by_report_kind linereader stats top_proc_set (fname, summary) => {
+let process_summary filters formats_by_report_kind linereader stats (fname, summary) => {
   let file = summary.Specs.attributes.ProcAttributes.loc.Location.file;
   let proc_name = Specs.get_proc_name summary;
   let error_filter = error_filter filters proc_name;
   let pp_simple_saved = !Config.pp_simple;
   Config.pp_simple := true;
   pp_summary_by_report_kind
-    formats_by_report_kind summary top_proc_set fname error_filter linereader stats file;
+    formats_by_report_kind summary fname error_filter linereader stats file;
   if Config.precondition_stats {
     PreconditionStats.do_summary proc_name summary
   };
@@ -1194,7 +1171,7 @@ let process_summary filters formats_by_report_kind linereader stats top_proc_set
 let module AnalysisResults = {
   type t = list (string, Specs.summary);
   let spec_files_from_cmdline () =>
-    if (Config.current_exe == CLOpt.Print) {
+    if CLOpt.is_originator {
       /* Find spec files specified by command-line arguments.  Not run at init time since the specs
          files may be generated between init and report time. */
       IList.iter
@@ -1209,7 +1186,7 @@ let module AnalysisResults = {
         Inferconfig.test ();
         exit 0
       };
-      if (Config.anon_args == []) {
+      if (List.is_empty Config.anon_args) {
         load_specfiles ()
       } else {
         List.rev Config.anon_args
@@ -1305,9 +1282,6 @@ let module AnalysisResults = {
   };
 };
 
-/* warning: computing top procedures iterates over summaries twice */
-let compute_top_procedures = ref false;
-
 let register_perf_stats_report () => {
   let stats_dir = Filename.concat Config.results_dir Config.reporting_stats_dir_name;
   let stats_file = Filename.concat stats_dir (Config.perf_stats_prefix ^ ".json");
@@ -1378,7 +1352,11 @@ let finalize_and_close_files format_list_by_kind stats pdflatex => {
       | (Csv | Latex | Tests | Text | Xml | Json, _) => ()
       };
       Utils.close_outf outfile;
-      if ((format_kind, report_kind) == (Latex, Summary)) {
+      /* bug_format_kind report_kind */
+      if (
+        [%compare.equal : (bug_format_kind, report_kind)]
+          (format_kind, report_kind) (Latex, Summary)
+      ) {
         pdflatex outfile.fname;
         let pdf_name = Filename.chop_extension outfile.fname ^ ".pdf";
         ignore (Sys.command ("open " ^ pdf_name))
@@ -1396,12 +1374,7 @@ let pp_summary_and_issues formats_by_report_kind => {
   let linereader = Printer.LineReader.create ();
   let filters = Inferconfig.create_filters Config.analyzer;
   let iterate_summaries = AnalysisResults.get_summary_iterator ();
-  let top_proc = TopProcedures.create ();
-  let top_proc_set = TopProcedures.top_set top_proc;
-  if (!compute_top_procedures && (Config.procs_csv != None || Config.procs_xml != None)) {
-    iterate_summaries (TopProcedures.process_summary top_proc)
-  };
-  iterate_summaries (process_summary filters formats_by_report_kind linereader stats top_proc_set);
+  iterate_summaries (process_summary filters formats_by_report_kind linereader stats);
   if Config.precondition_stats {
     PreconditionStats.pp_stats ()
   };
@@ -1429,6 +1402,8 @@ let main report_csv::report_csv report_json::report_json => {
     (Stats, init_stats_format_list ()),
     (Summary, init_summary_format_list ())
   ];
-  register_perf_stats_report ();
+  if (not Config.buck_cache_mode) {
+    register_perf_stats_report ()
+  };
   print_issues formats_by_report_kind
 };

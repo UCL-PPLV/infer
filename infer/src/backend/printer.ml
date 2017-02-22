@@ -34,7 +34,7 @@ struct
         let line_raw = input_line cin in
         let line =
           let len = String.length line_raw in
-          if len > 0 && String.get line_raw (len -1) = '\013' then
+          if len > 0 && Char.equal (String.get line_raw (len -1)) '\013' then
             String.sub line_raw ~pos:0 ~len:(len -1)
           else line_raw in
         lines := line :: !lines
@@ -74,8 +74,8 @@ end
 let curr_html_formatter = ref F.std_formatter
 
 (** Return true if the node was visited during footprint and during re-execution*)
-let node_is_visited proc_name node =
-  match Specs.get_summary proc_name with
+let node_is_visited node =
+  match Specs.get_summary (Procdesc.Node.get_proc_name node) with
   | None ->
       false, false
   | Some summary ->
@@ -87,8 +87,8 @@ let node_is_visited proc_name node =
       is_visited_fp, is_visited_re
 
 (** Return true if the node was visited during analysis *)
-let is_visited proc_name node =
-  let visited_fp, visited_re = node_is_visited proc_name node in
+let is_visited node =
+  let visited_fp, visited_re = node_is_visited node in
   visited_fp || visited_re
 
 (* =============== START of module NodesHtml =============== *)
@@ -134,7 +134,7 @@ end = struct
              ~preds:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_preds node) :> int list)
              ~succs:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_succs node) :> int list)
              ~exn:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_exn node) :> int list)
-             ~isvisited:(is_visited proc_name node)
+             ~isvisited:(is_visited node)
              ~isproof:false
              fmt (Procdesc.Node.get_id node :> int)) preds;
        F.fprintf fmt "<br>SUCCS: @\n";
@@ -146,7 +146,7 @@ end = struct
              ~preds:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_preds node) :> int list)
              ~succs:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_succs node) :> int list)
              ~exn:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_exn node) :> int list)
-             ~isvisited:(is_visited proc_name node)
+             ~isvisited:(is_visited node)
              ~isproof:false
              fmt (Procdesc.Node.get_id node :> int)) succs;
        F.fprintf fmt "<br>EXN: @\n";
@@ -158,7 +158,7 @@ end = struct
              ~preds:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_preds node) :> int list)
              ~succs:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_succs node) :> int list)
              ~exn:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_exn node) :> int list)
-             ~isvisited:(is_visited proc_name node)
+             ~isvisited:(is_visited node)
              ~isproof:false
              fmt (Procdesc.Node.get_id node :> int)) exns;
        F.fprintf fmt "<br>@\n";
@@ -393,13 +393,15 @@ let start_session node (loc: Location.t) proc_name session source =
   F.fprintf !curr_html_formatter "<LISTING>%a"
     Io_infer.Html.pp_start_color Pp.Black
 
-let node_start_session node loc proc_name session source =
+let node_start_session node session source =
   if Config.write_html then
-    start_session node loc proc_name session source
+    let loc = Procdesc.Node.get_loc node in
+    let pname = Procdesc.Node.get_proc_name node in
+    start_session node loc pname session source
 
 (** Finish a session, and perform delayed print actions if required *)
 let node_finish_session node source =
-  if Config.test = false then force_delayed_prints ()
+  if not Config.test then force_delayed_prints ()
   else L.reset_delayed_prints ();
   if Config.write_html then begin
     F.fprintf !curr_html_formatter "</LISTING>%a"
@@ -417,7 +419,7 @@ let write_proc_html source whole_seconds pdesc =
     begin
       let pname = Procdesc.get_proc_name pdesc in
       let nodes = IList.sort Procdesc.Node.compare (Procdesc.get_nodes pdesc) in
-      let linenum = (Procdesc.Node.get_loc (IList.hd nodes)).Location.line in
+      let linenum = (Procdesc.Node.get_loc (List.hd_exn nodes)).Location.line in
       let fd, fmt =
         Io_infer.Html.create
           (DB.Results_dir.Abs_source_dir source)
@@ -436,7 +438,7 @@ let write_proc_html source whole_seconds pdesc =
              ~preds:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_preds n) :> int list)
              ~succs:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_succs n) :> int list)
              ~exn:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_exn n) :> int list)
-             ~isvisited:(is_visited pname n)
+             ~isvisited:(is_visited n)
              ~isproof:false
              fmt (Procdesc.Node.get_id n :> int))
         nodes;
@@ -475,7 +477,7 @@ let write_html_proc source proof_cover table_nodes_at_linenum global_err_log pro
     let curr_nodes =
       try Hashtbl.find table_nodes_at_linenum lnum
       with Not_found -> [] in
-    Hashtbl.replace table_nodes_at_linenum lnum ((n, proc_desc) :: curr_nodes) in
+    Hashtbl.replace table_nodes_at_linenum lnum (n :: curr_nodes) in
   let proc_loc = Procdesc.get_loc proc_desc in
   let process_proc =
     Procdesc.is_defined proc_desc &&
@@ -534,7 +536,7 @@ let write_html_file linereader filename procs =
       line_html in
     F.fprintf fmt "%s" str;
     IList.iter
-      (fun (n, pdesc) ->
+      (fun n ->
          let isproof =
            Specs.Visitedset.mem (Procdesc.Node.get_id n, []) !proof_cover in
          Io_infer.Html.pp_node_link
@@ -544,12 +546,12 @@ let write_html_file linereader filename procs =
            ~preds:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_preds n) :> int list)
            ~succs:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_succs n) :> int list)
            ~exn:(IList.map Procdesc.Node.get_id (Procdesc.Node.get_exn n) :> int list)
-           ~isvisited:(is_visited (Procdesc.get_proc_name pdesc) n)
+           ~isvisited:(is_visited n)
            ~isproof
            fmt (Procdesc.Node.get_id n :> int))
       nodes_at_linenum;
     IList.iter
-      (fun (n, _) ->
+      (fun n ->
          match Procdesc.Node.get_kind n with
          | Procdesc.Node.Start_node proc_name ->
              let num_specs = IList.length (Specs.get_specs proc_name) in

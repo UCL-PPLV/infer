@@ -18,8 +18,7 @@ type t =
   }
 [@@deriving compare]
 
-let equal t1 t2 =
-  compare t1 t2 = 0
+let equal = [%compare.equal : t]
 
 let pname t =
   t.pname
@@ -39,5 +38,5 @@ let pp fmt t =
 module Set = PrettyPrintable.MakePPSet(struct
     type nonrec t = t
     let compare = compare
-    let pp_element = pp
+    let pp = pp
   end)

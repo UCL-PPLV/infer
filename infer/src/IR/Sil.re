@@ -1,7 +1,4 @@
 /*
- * vim: set ft=rust:
- * vim: set ft=reason:
- *
  * Copyright (c) 2009 - 2013 Monoidics ltd.
  * Copyright (c) 2013 - present Facebook, Inc.
  * All rights reserved.
@@ -63,6 +60,8 @@ type instr =
   | Declare_locals (list (Pvar.t, Typ.t)) Location.t /** declare local variables */
 [@@deriving compare];
 
+let equal_instr = [%compare.equal : instr];
+
 let skip_instr = Remove_temps [] Location.dummy;
 
 
@@ -95,7 +94,7 @@ type atom =
   | Anpred PredSymb.t (list Exp.t) /** negated predicate symbol applied to exps */
 [@@deriving compare];
 
-let equal_atom x y => compare_atom x y == 0;
+let equal_atom = [%compare.equal : atom];
 
 
 /** kind of lseg or dllseg predicates */
@@ -104,7 +103,7 @@ type lseg_kind =
   | Lseg_PE /** possibly empty (possibly circular) listseg */
 [@@deriving compare];
 
-let equal_lseg_kind k1 k2 => compare_lseg_kind k1 k2 == 0;
+let equal_lseg_kind = [%compare.equal : lseg_kind];
 
 
 /** The boolean is true when the pointer was dereferenced without testing for zero. */
@@ -131,6 +130,8 @@ type inst =
   | Ireturn_from_call int
 [@@deriving compare];
 
+let equal_inst = [%compare.equal : inst];
+
 
 /** structured expressions represent a value of structured type, such as an array or a struct. */
 type strexp0 'inst =
@@ -151,7 +152,7 @@ type strexp = strexp0 inst;
 let compare_strexp inst::inst=false se1 se2 =>
   compare_strexp0 (inst ? compare_inst : (fun _ _ => 0)) se1 se2;
 
-let equal_strexp inst::inst=false se1 se2 => compare_strexp inst::inst se1 se2 == 0;
+let equal_strexp inst::inst=false se1 se2 => Int.equal (compare_strexp inst::inst se1 se2) 0;
 
 
 /** an atomic heap predicate */
@@ -201,19 +202,20 @@ type hpred = hpred0 inst;
 let compare_hpred inst::inst=false hpred1 hpred2 =>
   compare_hpred0 (inst ? compare_inst : (fun _ _ => 0)) hpred1 hpred2;
 
-let equal_hpred inst::inst=false hpred1 hpred2 => compare_hpred inst::inst hpred1 hpred2 == 0;
+let equal_hpred inst::inst=false hpred1 hpred2 =>
+  Int.equal (compare_hpred inst::inst hpred1 hpred2) 0;
 
 type hpara = hpara0 inst;
 
 let compare_hpara = compare_hpara0 (fun _ _ => 0);
 
-let equal_hpara hpara1 hpara2 => compare_hpara hpara1 hpara2 == 0;
+let equal_hpara = [%compare.equal : hpara];
 
 type hpara_dll = hpara_dll0 inst;
 
 let compare_hpara_dll = compare_hpara_dll0 (fun _ _ => 0);
 
-let equal_hpara_dll hpara1 hpara2 => compare_hpara_dll hpara1 hpara2 == 0;
+let equal_hpara_dll = [%compare.equal : hpara_dll];
 
 
 /** Return the lhs expression of a hpred */
@@ -230,7 +232,7 @@ let has_objc_ref_counter tenv hpred =>
   switch hpred {
   | Hpointsto _ _ (Sizeof (Tstruct name) _ _) =>
     switch (Tenv.lookup tenv name) {
-    | Some {fields} => IList.exists StructTyp.is_objc_ref_counter_field fields
+    | Some {fields} => List.exists f::StructTyp.is_objc_ref_counter_field fields
     | _ => false
     }
   | _ => false
@@ -267,7 +269,7 @@ let is_static_local_name pname pvar => {
 
 
 /** {2 Sets of expressions} */
-let elist_to_eset es => IList.fold_left (fun set e => Exp.Set.add e set) Exp.Set.empty es;
+let elist_to_eset es => List.fold f::(fun set e => Exp.Set.add e set) init::Exp.Set.empty es;
 
 
 /** {2 Sets of heap predicates} */
@@ -285,14 +287,14 @@ let color_pre_wrapper pe f x =>
     let color = pe.Pp.cmap_norm (Obj.repr x);
     if (color != pe.Pp.color) {
       (
-        if (pe.Pp.kind == Pp.HTML) {
+        if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
           Io_infer.Html.pp_start_color
         } else {
           Latex.pp_color
         }
       )
         f color;
-      if (color == Pp.Red) {
+      if (Pp.equal_color color Pp.Red) {
         (
           Pp.{
             /** All subexpressiona red */
@@ -316,7 +318,7 @@ let color_pre_wrapper pe f x =>
 /** Close color annotation if changed */
 let color_post_wrapper changed pe f =>
   if changed {
-    if (pe.Pp.kind == Pp.HTML) {
+    if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
       Io_infer.Html.pp_end_color f ()
     } else {
       Latex.pp_color f pe.Pp.color
@@ -630,7 +632,7 @@ let module Predicates: {
   };
 
   /** return true if the environment is empty */
-  let is_empty env => env.num == 0;
+  let is_empty env => Int.equal env.num 0;
 
   /** return the id of the hpara */
   let get_hpara_id env hpara => fst (HparaHash.find env.hash hpara);
@@ -690,21 +692,22 @@ let module Predicates: {
       Can be applied only once, as it destroys the todo list */
   let iter (env: env) f f_dll =>
     while (env.todo != [] || env.todo_dll != []) {
-      if (env.todo != []) {
-        let hpara = IList.hd env.todo;
-        let () = env.todo = IList.tl env.todo;
+      switch env.todo {
+      | [hpara, ...todo'] =>
+        env.todo = todo';
         let (n, emitted) = HparaHash.find env.hash hpara;
         if (not emitted) {
           f n hpara
         }
-      } else if (
-        env.todo_dll != []
-      ) {
-        let hpara_dll = IList.hd env.todo_dll;
-        let () = env.todo_dll = IList.tl env.todo_dll;
-        let (n, emitted) = HparaDllHash.find env.hash_dll hpara_dll;
-        if (not emitted) {
-          f_dll n hpara_dll
+      | [] =>
+        switch env.todo_dll {
+        | [hpara_dll, ...todo_dll'] =>
+          env.todo_dll = todo_dll';
+          let (n, emitted) = HparaDllHash.find env.hash_dll hpara_dll;
+          if (not emitted) {
+            f_dll n hpara_dll
+          }
+        | [] => ()
         }
       }
     };
@@ -791,7 +794,7 @@ let inst_partial_join inst1 inst2 => {
     L.d_strln ("inst_partial_join failed on " ^ inst_to_string inst1 ^ " " ^ inst_to_string inst2);
     raise IList.Fail
   };
-  if (inst1 == inst2) {
+  if (equal_inst inst1 inst2) {
     inst1
   } else {
     switch (inst1, inst2) {
@@ -811,7 +814,7 @@ let inst_partial_join inst1 inst2 => {
 
 /** meet of instrumentations */
 let inst_partial_meet inst1 inst2 =>
-  if (inst1 == inst2) {
+  if (equal_inst inst1 inst2) {
     inst1
   } else {
     inst_none
@@ -886,7 +889,7 @@ let update_inst inst_old inst_new => {
 /** describe an instrumentation with a string */
 let pp_inst pe f inst => {
   let str = inst_to_string inst;
-  if (pe.Pp.kind == Pp.HTML) {
+  if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
     F.fprintf f " %a%s%a" Io_infer.Html.pp_start_color Pp.Orange str Io_infer.Html.pp_end_color ()
   } else {
     F.fprintf f "%s%s%s" (Binop.str pe Lt) str (Binop.str pe Gt)
@@ -1220,8 +1223,8 @@ let hpred_get_lexp acc =>
   | Hdllseg _ _ e1 _ _ e2 _ => [e1, e2, ...acc];
 
 let hpred_list_get_lexps (filter: Exp.t => bool) (hlist: list hpred) :list Exp.t => {
-  let lexps = IList.fold_left hpred_get_lexp [] hlist;
-  IList.filter filter lexps
+  let lexps = List.fold f::hpred_get_lexp init::[] hlist;
+  List.filter f::filter lexps
 };
 
 
@@ -1244,26 +1247,26 @@ let rec exp_fpv e =>
   | Sizeof _ _ _ => []
   };
 
-let exp_list_fpv el => IList.flatten (IList.map exp_fpv el);
+let exp_list_fpv el => List.concat (IList.map exp_fpv el);
 
 let atom_fpv =
   fun
   | Aeq e1 e2 => exp_fpv e1 @ exp_fpv e2
   | Aneq e1 e2 => exp_fpv e1 @ exp_fpv e2
   | Apred _ es
-  | Anpred _ es => IList.fold_left (fun fpv e => IList.rev_append (exp_fpv e) fpv) [] es;
+  | Anpred _ es => List.fold f::(fun fpv e => IList.rev_append (exp_fpv e) fpv) init::[] es;
 
 let rec strexp_fpv =
   fun
   | Eexp e _ => exp_fpv e
   | Estruct fld_se_list _ => {
       let f (_, se) => strexp_fpv se;
-      IList.flatten (IList.map f fld_se_list)
+      List.concat (IList.map f fld_se_list)
     }
   | Earray len idx_se_list _ => {
       let fpv_in_len = exp_fpv len;
       let f (idx, se) => exp_fpv idx @ strexp_fpv se;
-      fpv_in_len @ IList.flatten (IList.map f idx_se_list)
+      fpv_in_len @ List.concat (IList.map f idx_se_list)
     };
 
 let rec hpred_fpv =
@@ -1284,7 +1287,7 @@ let rec hpred_fpv =
     analysis. In interprocedural analysis, we should consider the issue
     of scopes of program variables. */
 and hpara_fpv para => {
-  let fpvars_in_body = IList.flatten (IList.map hpred_fpv para.body);
+  let fpvars_in_body = List.concat (IList.map hpred_fpv para.body);
   switch fpvars_in_body {
   | [] => []
   | _ => assert false
@@ -1295,7 +1298,7 @@ and hpara_fpv para => {
     analysis. In interprocedural analysis, we should consider the issue
     of scopes of program variables. */
 and hpara_dll_fpv para => {
-  let fpvars_in_body = IList.flatten (IList.map hpred_fpv para.body_dll);
+  let fpvars_in_body = List.concat (IList.map hpred_fpv para.body_dll);
   switch fpvars_in_body {
   | [] => []
   | _ => assert false
@@ -1325,7 +1328,7 @@ let fav_for_all fav predicate => IList.for_all predicate !fav;
 
 
 /** Check whether a predicate holds for some elements. */
-let fav_exists fav predicate => IList.exists predicate !fav;
+let fav_exists fav predicate => List.exists f::predicate !fav;
 
 
 /** flag to indicate whether fav's are stored in duplicate form.
@@ -1335,7 +1338,7 @@ let fav_duplicates = ref false;
 
 /** extend [fav] with a [id] */
 let (++) fav id =>
-  if (!fav_duplicates || not (IList.exists (Ident.equal id) !fav)) {
+  if (!fav_duplicates || not (List.exists f::(Ident.equal id) !fav)) {
     fav := [id, ...!fav]
   };
 
@@ -1389,11 +1392,11 @@ let fav_imperative_to_functional f x => {
 
 
 /** [fav_filter_ident fav f] only keeps [id] if [f id] is true. */
-let fav_filter_ident fav filter => fav := IList.filter filter !fav;
+let fav_filter_ident fav filter => fav := List.filter f::filter !fav;
 
 
 /** Like [fav_filter_ident] but return a copy. */
-let fav_copy_filter_ident fav filter => ref (IList.filter filter !fav);
+let fav_copy_filter_ident fav filter => ref (List.filter f::filter !fav);
 
 
 /** checks whether every element in l1 appears l2 **/
@@ -1403,7 +1406,7 @@ let rec ident_sorted_list_subset l1 l2 =>
   | ([_, ..._], []) => false
   | ([id1, ...l1], [id2, ...l2]) =>
     let n = Ident.compare id1 id2;
-    if (n == 0) {
+    if (Int.equal n 0) {
       ident_sorted_list_subset l1 [id2, ...l2]
     } else if (n > 0) {
       ident_sorted_list_subset [id1, ...l1] l2
@@ -1417,7 +1420,7 @@ let rec ident_sorted_list_subset l1 l2 =>
     is in [fav2].*/
 let fav_subset_ident fav1 fav2 => ident_sorted_list_subset (fav_to_list fav1) (fav_to_list fav2);
 
-let fav_mem fav id => IList.exists (Ident.equal id) !fav;
+let fav_mem fav id => List.exists f::(Ident.equal id) !fav;
 
 let rec exp_fav_add fav e =>
   switch (e: Exp.t) {
@@ -1634,13 +1637,13 @@ let rec sorted_list_check_consecutives f =>
 /** substitution */
 type ident_exp = (Ident.t, Exp.t) [@@deriving compare];
 
-let equal_ident_exp ide1 ide2 => compare_ident_exp ide1 ide2 == 0;
+let equal_ident_exp = [%compare.equal : ident_exp];
 
 type subst = list ident_exp [@@deriving compare];
 
 
 /** Equality for substitutions. */
-let equal_subst sub1 sub2 => compare_subst sub1 sub2 == 0;
+let equal_subst = [%compare.equal : subst];
 
 let sub_check_duplicated_ids sub => {
   let f (id1, _) (id2, _) => Ident.equal id1 id2;
@@ -1712,9 +1715,11 @@ let sub_symmetric_difference sub1_in sub2_in => {
       (sub_common, sub1_only', sub2_only')
     | ([id_e1, ...sub1'], [id_e2, ...sub2']) =>
       let n = compare_ident_exp id_e1 id_e2;
-      if (n == 0) {
+      if (Int.equal n 0) {
         diff [id_e1, ...sub_common] sub1_only sub2_only sub1' sub2'
-      } else if (n < 0) {
+      } else if (
+        n < 0
+      ) {
         diff sub_common [id_e1, ...sub1_only] sub2_only sub1' sub2
       } else {
         diff sub_common sub1_only [id_e2, ...sub2_only] sub1 sub2'
@@ -1726,17 +1731,17 @@ let sub_symmetric_difference sub1_in sub2_in => {
 
 /** [sub_find filter sub] returns the expression associated to the first identifier
     that satisfies [filter]. Raise [Not_found] if there isn't one. */
-let sub_find filter (sub: subst) => snd (IList.find (fun (i, _) => filter i) sub);
+let sub_find filter (sub: subst) => snd (List.find_exn f::(fun (i, _) => filter i) sub);
 
 
 /** [sub_filter filter sub] restricts the domain of [sub] to the
     identifiers satisfying [filter]. */
-let sub_filter filter (sub: subst) => IList.filter (fun (i, _) => filter i) sub;
+let sub_filter filter (sub: subst) => List.filter f::(fun (i, _) => filter i) sub;
 
 
 /** [sub_filter_pair filter sub] restricts the domain of [sub] to the
     identifiers satisfying [filter(id, sub(id))]. */
-let sub_filter_pair = IList.filter;
+let sub_filter_pair = List.filter;
 
 
 /** [sub_range_partition filter sub] partitions [sub] according to
@@ -1765,7 +1770,7 @@ let sub_range_map f sub => sub_of_list (IList.map (fun (i, e) => (i, f e)) sub);
     of [sub] and the substitution [g] to the expressions in the range of [sub]. */
 let sub_map f g sub => sub_of_list (IList.map (fun (i, e) => (f i, g e)) sub);
 
-let mem_sub id sub => IList.exists (fun (id1, _) => Ident.equal id id1) sub;
+let mem_sub id sub => List.exists f::(fun (id1, _) => Ident.equal id id1) sub;
 
 
 /** Extend substitution and return [None] if not possible. */
@@ -1791,7 +1796,7 @@ let sub_fav_add fav (sub: subst) =>
     )
     sub;
 
-let sub_fpv (sub: subst) => IList.flatten (IList.map (fun (_, e) => exp_fpv e) sub);
+let sub_fpv (sub: subst) => List.concat (IList.map (fun (_, e) => exp_fpv e) sub);
 
 
 /** Substitutions do not contain binders */
@@ -2090,12 +2095,12 @@ let compare_structural_instr instr1 instr2 exp_map => {
     }
   };
   let id_list_compare_structural ids1 ids2 exp_map => {
-    let n = Pervasives.compare (IList.length ids1) (IList.length ids2);
+    let n = Int.compare (IList.length ids1) (IList.length ids2);
     if (n != 0) {
       (n, exp_map)
     } else {
-      IList.fold_left2
-        (
+      List.fold2_exn
+        f::(
           fun (n, exp_map) id1 id2 =>
             if (n != 0) {
               (n, exp_map)
@@ -2103,7 +2108,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
               exp_compare_structural (Var id1) (Var id2) exp_map
             }
         )
-        (0, exp_map)
+        init::(0, exp_map)
         ids1
         ids2
     }
@@ -2146,19 +2151,19 @@ let compare_structural_instr instr1 instr2 exp_map => {
         if (n != 0) {
           n
         } else {
-          Pervasives.compare ik1 ik2
+          compare_if_kind ik1 ik2
         }
       },
       exp_map
     )
   | (Call ret_id1 e1 arg_ts1 _ cf1, Call ret_id2 e2 arg_ts2 _ cf2) =>
     let args_compare_structural args1 args2 exp_map => {
-      let n = Pervasives.compare (IList.length args1) (IList.length args2);
+      let n = Int.compare (IList.length args1) (IList.length args2);
       if (n != 0) {
         (n, exp_map)
       } else {
-        IList.fold_left2
-          (
+        List.fold2_exn
+          f::(
             fun (n, exp_map) arg1 arg2 =>
               if (n != 0) {
                 (n, exp_map)
@@ -2166,7 +2171,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
                 exp_typ_compare_structural arg1 arg2 exp_map
               }
           )
-          (0, exp_map)
+          init::(0, exp_map)
           args1
           args2
       }
@@ -2195,12 +2200,12 @@ let compare_structural_instr instr1 instr2 exp_map => {
   | (Remove_temps temps1 _, Remove_temps temps2 _) =>
     id_list_compare_structural temps1 temps2 exp_map
   | (Declare_locals ptl1 _, Declare_locals ptl2 _) =>
-    let n = Pervasives.compare (IList.length ptl1) (IList.length ptl2);
+    let n = Int.compare (IList.length ptl1) (IList.length ptl2);
     if (n != 0) {
       (n, exp_map)
     } else {
-      IList.fold_left2
-        (
+      List.fold2_exn
+        f::(
           fun (n, exp_map) (pv1, t1) (pv2, t2) =>
             if (n != 0) {
               (n, exp_map)
@@ -2213,7 +2218,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
               }
             }
         )
-        (0, exp_map)
+        init::(0, exp_map)
         ptl1
         ptl2
     }
@@ -2231,12 +2236,7 @@ let hpred_sub subst => {
 
 /** {2 Functions for replacing occurrences of expressions.} */
 let exp_replace_exp epairs e =>
-  try {
-    let (_, e') = IList.find (fun (e1, _) => Exp.equal e e1) epairs;
-    e'
-  } {
-  | Not_found => e
-  };
+  List.find f::(fun (e1, _) => Exp.equal e e1) epairs |> Option.value_map f::snd default::e;
 
 let atom_replace_exp epairs atom => atom_expmap (fun e => exp_replace_exp epairs e) atom;
 
@@ -2378,15 +2378,15 @@ let sigma_to_sigma_ne sigma :list (list atom, list hpred) =>
           ([Aeq e1 e2, ...eqs], sigma),
           (eqs, [Hlseg Lseg_NE para e1 e2 el, ...sigma])
         ];
-        IList.flatten (IList.map g eqs_sigma_list)
+        List.concat (IList.map g eqs_sigma_list)
       | Hdllseg Lseg_PE para_dll e1 e2 e3 e4 el =>
         let g (eqs, sigma) => [
           ([Aeq e1 e3, Aeq e2 e4, ...eqs], sigma),
           (eqs, [Hdllseg Lseg_NE para_dll e1 e2 e3 e4 el, ...sigma])
         ];
-        IList.flatten (IList.map g eqs_sigma_list)
+        List.concat (IList.map g eqs_sigma_list)
       };
-    IList.fold_left f [([], [])] sigma
+    List.fold f::f init::[([], [])] sigma
   } else {
     [([], sigma)]
   };
