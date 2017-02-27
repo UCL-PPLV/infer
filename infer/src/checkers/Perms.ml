@@ -1,4 +1,8 @@
 open! IStd
+open! PermsDomain
+
+module F = Format
+module L = Logging
 
 (* TODO
    (increasing importance)
@@ -9,8 +13,6 @@ open! IStd
    - debug check of parallel compositions
    - add locked flag and make RI adding on demand
 *)
-
-open! PermsDomain
 
 let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
@@ -29,24 +31,27 @@ module Summary = struct
       payload.Specs.permsafety
     end)
 
-  let of_state { pre; inv; constraints } =
+  let of_state { pre; inv; constraints; locked } =
     {
       sum_pre = pre;
       sum_inv = inv;
-      sum_constraints = constraints
+      sum_constraints = constraints;
+      sum_locked = locked;
     }
 
-  let subst theta { sum_pre; sum_inv; sum_constraints } =
+  let subst theta { sum_pre; sum_inv; sum_locked; sum_constraints } =
     {
       sum_pre = Field.Map.map (Ident.subst theta) sum_pre;
       sum_inv = Field.Map.map (Ident.subst theta) sum_inv;
+      sum_locked;
       sum_constraints = Constr.Set.map (Constr.subst theta) sum_constraints
     }
 
-  let pp fmt { sum_pre; sum_inv; sum_constraints } =
-    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_constraints=%a }"
+  let pp fmt { sum_pre; sum_inv; sum_locked; sum_constraints } =
+    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_locked=%a sum_constraints=%a }"
       (Field.Map.pp ~pp_value:Ident.pp) sum_pre
       (Field.Map.pp ~pp_value:Ident.pp) sum_inv
+      F.pp_print_bool sum_locked
       Constr.Set.pp sum_constraints
 
 end
@@ -72,7 +77,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module TSTF = ThreadSafety.TransferFunctions(CFG)
 
   (* add or remove permissions from invariant *)
-  let hale mk_constr a =
+  let hale mk_constr lk a =
     Field.Map.fold
       (fun f lvar acc ->
          let v = Ident.mk () in
@@ -80,11 +85,11 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
          acc |> State.add_fld f v |> State.add_constr cn
       )
       a.curr
-      { a with curr = Field.Map.empty }
+      { a with curr = Field.Map.empty; locked = lk }
 
   let do_sync pn args astate =
-    let exhale = hale Constr.mk_minus in
-    let inhale = hale Constr.mk_add in
+    let exhale = hale Constr.mk_minus false in
+    let inhale = hale Constr.mk_add true in
     (* decide if a lock statement is about "this" *)
     let lock_effect_on_this pn args astate =
       (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) Ident.Set.pp astate.this_refs; *)
@@ -98,7 +103,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | TSTF.NoEffect -> astate
 
   (* actual transfer function *)
-  let exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
+  let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
     let classname = get_class (Procdesc.get_proc_name pdesc) in
     L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
     match cmd with
@@ -123,13 +128,15 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Sil.Call (_, Const (Cfun pn), args, _, _) ->
       do_sync pn args astate
     | _ -> astate
+
+  let exec_instr astate pdata x cmd =
+    match astate with
+    | Domain.Bottom -> Domain.Bottom
+    | Domain.NonBottom astate' -> Domain.NonBottom (_exec_instr astate' pdata x cmd)
+
 end
 
-module Analyzer =
-  AbstractInterpreter.Make
-    (ProcCfg.Normal)
-    (MakeTransferFunctions)
-
+module Analyzer = AbstractInterpreter.Make(ProcCfg.Normal)(MakeTransferFunctions)
 module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 
 (* compute the summary of a method *)
@@ -145,12 +152,14 @@ let compute_and_store_post callback =
     let fields = get_fields pdesc in
     let initial =
       let m = Field.Map.mk fields in
-      { State.empty with pre = m; curr = m; inv = Field.Map.mk fields } in
+      Domain.NonBottom { State.empty with pre = m; curr = m; inv = Field.Map.mk fields } in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
     match Analyzer.compute_post ~initial pdata with
-    | None -> None
-    | Some a -> L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
-      Some (Summary.of_state a) in
+    | None -> L.out "No spec found@." ; None
+    | Some Domain.Bottom -> L.out "Bottom spec found@." ; None
+    | Some ((Domain.NonBottom s) as a) ->
+        L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
+        Some (Summary.of_state s) in
   Interprocedural.compute_and_store_post
     ~compute_post
     ~make_extras:ProcData.make_empty_extras
@@ -222,6 +231,7 @@ let add_splits_and_flatten sums =
     {
       sum_inv = s.sum_inv;
       sum_pre = new_pre;
+      sum_locked = false;
       sum_constraints = constrs
     } in
   IList.map aux sums

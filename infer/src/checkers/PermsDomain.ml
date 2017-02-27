@@ -9,8 +9,6 @@ module Ident = struct
   module I = struct
     include Ident
     let pp = pp Pp.text
-    let pp_element = pp
-    let pp_key = pp_element
   end
   include I
 
@@ -44,9 +42,7 @@ module Field = struct
   module F = struct
     type t = Ident.fieldname
     let compare = Ident.compare_fieldname
-    let pp_key = Ident.pp_fieldname
-    let pp_element = pp_key
-    let pp = pp_element
+    let pp = Ident.pp_fieldname
   end
   include F
 
@@ -143,6 +139,9 @@ type astate = {
   (* permission vars for the current abstract state *)
   curr: perms_t;
 
+  (* is the lock taken in the current state *)
+  locked: bool;
+
   (* permission vars for the class invariant -- never changes during analysis of a method *)
   inv: perms_t;
 
@@ -160,6 +159,7 @@ module State = struct
     {
       pre = Field.Map.empty;
       curr = Field.Map.empty;
+      locked = false;
       inv = Field.Map.empty;
       this_refs = ExpSet.empty;
       constraints = Constr.Set.empty;
@@ -174,33 +174,33 @@ module State = struct
   let add_fld f v a =
     { a with curr = Field.Map.add f v a.curr }
 
-  let pp fmt { pre; inv; curr; this_refs; constraints } =
-    F.fprintf fmt "{ pre=%a; inv=%a; curr=%a; this_refs=%a; constraints=%a }"
+  let pp fmt { pre; inv; curr; locked; this_refs; constraints } =
+    F.fprintf fmt "{ pre=%a; inv=%a; curr=%a; locked=%a; this_refs=%a; constraints=%a }"
       (Field.Map.pp ~pp_value:Ident.pp) pre
       (Field.Map.pp ~pp_value:Ident.pp) inv
       (Field.Map.pp ~pp_value:Ident.pp) curr
+      Format.pp_print_bool locked
       ExpSet.pp this_refs
       Constr.Set.pp constraints
 end
-
-
 
 (* summary type, omit transient parts of astate *)
 type summary =
   {
     sum_pre: perms_t;
     sum_inv: perms_t;
-    sum_constraints: Constr.Set.t
+    sum_constraints: Constr.Set.t;
+    sum_locked: bool;
   }
 
 (* Abstract domain *)
-module Domain = struct
+module WithoutBottomDomain = struct
   type nonrec astate = astate
 
   (* join unions the constraints.  When the permission variable for a field
      differs in the two abstract states, then a new variable is introduced plus
      constraints that force this variable to be bound by the minimum of the two
-     joined permissions. *)
+     joined permissions. The lock state is and-ed together. *)
   let join a1 a2 =
     assert (Field.Map.equal Ident.equal a1.pre a2.pre) ;
     assert (Field.Map.equal Ident.equal a1.inv a2.inv) ;
@@ -218,6 +218,7 @@ module Domain = struct
       )
       a1.curr
       { a1 with
+        locked = a1.locked && a2.locked;
         curr = Field.Map.empty;
         this_refs = ExpSet.inter a1.this_refs a2.this_refs;
         (* FIXME following assumes disjointness of all vars except pre and inv *)
@@ -232,3 +233,5 @@ module Domain = struct
 
   let pp = State.pp
 end
+
+module Domain = AbstractDomain.BottomLifted(WithoutBottomDomain)
