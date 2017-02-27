@@ -60,13 +60,14 @@ end
 module Constr = struct
   type t = Exp.t
 
+  let rec sum = function
+    | [p] -> Exp.Var p
+    | p::ps -> Exp.BinOp (Binop.PlusA, Exp.Var p, sum ps)
+    | _ -> assert false
+
   let mk_add p q r =
     Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Var r))
   let mk_sum q ps =
-    let rec sum = function
-      | [p] -> Exp.Var p
-      | p::ps -> Exp.BinOp (Binop.PlusA, Exp.Var p, sum ps)
-      | _ -> assert false in
     Exp.eq (Exp.Var q) (sum ps)
   let mk_lb p =
     Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
@@ -74,8 +75,12 @@ module Constr = struct
     Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
   let mk_eq_one p =
     Exp.eq (Exp.Var p) (Exp.one)
+  let mk_2eq_one p q =
+    Exp.eq (sum [p;q]) (Exp.one)
   let mk_gt_zero p =
     Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero)
+  let mk_2gt_zero p q =
+    Exp.BinOp (Binop.Gt, sum [p;q], Exp.zero)
   let mk_minus p q r =
     Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r))
   let mk_le p q =

@@ -63,21 +63,27 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
-  let do_mem mk_constr fieldname astate =
+  let do_mem mk_constr mk_constr2 fieldname astate =
     if not (Field.Map.mem fieldname astate.curr) then
       L.out "%a not present in %a@." Field.pp fieldname State.pp astate;
+    let mk =
+      if astate.locked
+      then
+        mk_constr2 (Field.Map.find fieldname astate.inv)
+      else
+        mk_constr in
     let fld_var = Field.Map.find fieldname astate.curr in
-    State.add_constr (mk_constr fld_var) astate
+    Domain.NonBottom (State.add_constr (mk fld_var) astate)
   let do_store fieldname astate =
-    do_mem Constr.mk_eq_one fieldname astate
+    do_mem Constr.mk_eq_one Constr.mk_2eq_one fieldname astate
   let do_load fieldname astate =
-    do_mem Constr.mk_gt_zero fieldname astate
+    do_mem Constr.mk_gt_zero Constr.mk_2gt_zero fieldname astate
 
   (* stolen from ThreadSafety *)
   module TSTF = ThreadSafety.TransferFunctions(CFG)
 
   (* add or remove permissions from invariant *)
-  let hale mk_constr lk a =
+  (* let hale mk_constr lk a =
     Field.Map.fold
       (fun f lvar acc ->
          let v = Ident.mk () in
@@ -85,11 +91,11 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
          acc |> State.add_fld f v |> State.add_constr cn
       )
       a.curr
-      { a with curr = Field.Map.empty; locked = lk }
+      { a with curr = Field.Map.empty; locked = lk } *)
 
   let do_sync pn args astate =
-    let exhale = hale Constr.mk_minus false in
-    let inhale = hale Constr.mk_add true in
+    (* let exhale = hale Constr.mk_minus false in
+    let inhale = hale Constr.mk_add true in *)
     (* decide if a lock statement is about "this" *)
     let lock_effect_on_this pn args astate =
       (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) Ident.Set.pp astate.this_refs; *)
@@ -98,9 +104,17 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         | _ -> false in
       if this_arg then TSTF.get_lock_model pn else TSTF.NoEffect in
     match lock_effect_on_this pn args astate with
-    | TSTF.Lock ->     inhale astate
-    | TSTF.Unlock ->   exhale astate
-    | TSTF.NoEffect -> astate
+    | TSTF.Lock ->
+        if astate.locked then
+          Domain.Bottom
+        else
+          Domain.NonBottom { astate with locked = true }
+    | TSTF.Unlock ->
+        if astate.locked then
+          Domain.NonBottom { astate with locked = false }
+        else
+          Domain.Bottom
+    | TSTF.NoEffect -> Domain.NonBottom astate
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -111,28 +125,29 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       when PatternMatch.is_subtype tenv classname tname ->
       do_store fieldname astate
     | Sil.Store (l', _, l, _) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-      State.add_ref l' astate
+      Domain.NonBottom (State.add_ref l' astate)
     | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _)
       when PatternMatch.is_subtype tenv classname tname ->
-      do_load fieldname astate
+        do_load fieldname astate
     | Sil.Load (v,l,_,_) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-      State.add_ref (Exp.Var v) astate
+      Domain.NonBottom (State.add_ref (Exp.Var v) astate)
     | Sil.Load (v,_,_,_) ->
-      State.remove_ref (Exp.Var v) astate
+      Domain.NonBottom (State.remove_ref (Exp.Var v) astate)
     | Sil.Remove_temps (idents, _) ->
-      List.fold ~f:(fun a v -> State.remove_ref (Exp.Var v) a) ~init:astate idents
+        Domain.NonBottom
+          (List.fold ~f:(fun a v -> State.remove_ref (Exp.Var v) a) ~init:astate idents)
     (* | Sil.Load (_,l,_,_) ->
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
       astate *)
     | Sil.Call (_, Const (Cfun pn), args, _, _) ->
       do_sync pn args astate
-    | _ -> astate
+    | _ -> Domain.NonBottom astate
 
   let exec_instr astate pdata x cmd =
     match astate with
     | Domain.Bottom -> Domain.Bottom
-    | Domain.NonBottom astate' -> Domain.NonBottom (_exec_instr astate' pdata x cmd)
+    | Domain.NonBottom astate' -> _exec_instr astate' pdata x cmd
 
 end
 

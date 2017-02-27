@@ -49,7 +49,9 @@ module Constr : sig
   val mk_lb : Ident.t -> t
   val mk_ub : Ident.t -> t
   val mk_eq_one : Ident.t -> t
+  val mk_2eq_one : Ident.t -> Ident.t -> t
   val mk_gt_zero : Ident.t -> t
+  val mk_2gt_zero : Ident.t -> Ident.t -> t
   val mk_minus : Ident.t -> Ident.t -> Ident.t -> t
   val mk_le : Ident.t -> Ident.t -> t
 
