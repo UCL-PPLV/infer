@@ -49,6 +49,7 @@ let get_lock_model = function
 
 let should_analyze_proc pdesc _ =
   let pn = Procdesc.get_proc_name pdesc in
+  not (Procname.is_constructor pn) &&
   not (Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn)
   (* not (is_call_to_builder_class_method pn) &&
