@@ -1,18 +1,65 @@
+(* TODO
+   (decreasing importance)
+   - Interprocedural
+   - track breaking of soundness assumptions eg reentrancy
+   - static fields?
+   - include only public methods in check
+*)
+
+
 open! IStd
 open! PermsDomain
 
 module F = Format
 module L = Logging
 
-(* TODO
-   (increasing importance)
-   - Interprocedural
-   - track breaking of soundness assumptions eg reentrancy
-   - static fields?
-   - include only public methods in check
-   - debug check of parallel compositions
-   - add locked flag and make RI adding on demand
-*)
+(* stuff stolen from ThreadSafety due to mli *)
+type lock_model =
+  | Lock
+  | Unlock
+  | NoEffect
+
+let get_lock_model = function
+  | Procname.Java java_pname ->
+      begin
+        match Procname.java_get_class_name java_pname, Procname.java_get_method java_pname with
+        | "java.util.concurrent.locks.Lock", "lock" ->
+            Lock
+        | ("java.util.concurrent.locks.ReentrantLock"
+          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
+          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
+          ("lock" | "tryLock" | "lockInterruptibly") ->
+            Lock
+        | ("java.util.concurrent.locks.Lock"
+          |"java.util.concurrent.locks.ReentrantLock"
+          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
+          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
+          "unlock" ->
+            Unlock
+        | _ ->
+            NoEffect
+      end
+  | pname when Procname.equal pname BuiltinDecl.__set_locked_attribute ->
+      Lock
+  | pname when Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
+      Unlock
+  | _ ->
+      NoEffect
+
+let should_analyze_proc pdesc _ =
+  let pn = Procdesc.get_proc_name pdesc in
+  not (Procname.is_class_initializer pn) &&
+  not (FbThreadSafety.is_logging_method pn)
+  (* not (is_call_to_builder_class_method pn) &&
+  not (is_call_to_immutable_collection_method tenv pn) &&
+  not (runs_on_ui_thread pdesc) &&
+  not (is_thread_confined_method tenv pdesc) &&
+  not (pdesc_is_assumed_thread_safe pdesc tenv) *)
+
+let should_report_on_proc (_, _, proc_name, proc_desc) =
+  not (Procname.java_is_autogen_method proc_name) &&
+  Procdesc.get_access proc_desc <> PredSymb.Private &&
+  not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting)
 
 let get_class = function
   | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
@@ -79,9 +126,6 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   let do_load fieldname astate =
     do_mem Constr.mk_gt_zero Constr.mk_2gt_zero fieldname astate
 
-  (* stolen from ThreadSafety *)
-  module TSTF = ThreadSafety.TransferFunctions(CFG)
-
   (* add or remove permissions from invariant *)
   (* let hale mk_constr lk a =
     Field.Map.fold
@@ -102,19 +146,19 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       let this_arg = match args with
         | (l, _)::_ -> ExpSet.mem l astate.this_refs
         | _ -> false in
-      if this_arg then TSTF.get_lock_model pn else TSTF.NoEffect in
+      if this_arg then get_lock_model pn else NoEffect in
     match lock_effect_on_this pn args astate with
-    | TSTF.Lock ->
+    | Lock ->
         if astate.locked then
           Domain.Bottom
         else
           Domain.NonBottom { astate with locked = true }
-    | TSTF.Unlock ->
+    | Unlock ->
         if astate.locked then
           Domain.NonBottom { astate with locked = false }
         else
           Domain.Bottom
-    | TSTF.NoEffect -> Domain.NonBottom astate
+    | NoEffect -> Domain.NonBottom astate
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -162,7 +206,7 @@ let compute_and_store_post callback =
     match Tenv.lookup pdesc.ProcData.tenv (get_class callback.Callbacks.proc_name) with
     | None -> assert false
     | Some { StructTyp.fields } ->
-      Field.Set.of_list (IList.map (fun (fld, _, _) -> fld) fields) in
+      Field.Set.of_list (List.map ~f:(fun (fld, _, _) -> fld) fields) in
   let compute_post pdesc =
     let fields = get_fields pdesc in
     let initial =
@@ -185,7 +229,7 @@ let all_pairs =
   let rec aux = function
     | [] -> []
     | (x::xs) as all ->
-      let with_x = IList.map (fun y -> [x;y]) all in
+      let with_x = List.map ~f:(fun y -> [x;y]) all in
       with_x @ (aux xs) in
   aux
 
@@ -203,7 +247,7 @@ let mk_inv_thetas ss =
       (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
       s.sum_inv
       Ident.Map.empty in
-  IList.map mk ss
+  List.map ~f:mk ss
 
 let extend_with_pres thetas ss =
   let extend_with_pre theta sum =
@@ -211,17 +255,17 @@ let extend_with_pres thetas ss =
       (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
       sum.sum_pre
       theta in
-  IList.map2 extend_with_pre thetas ss
+  List.map2_exn ~f:extend_with_pre thetas ss
 
 let extend_with_exists thetas ss =
   let extend_with_exist theta sum =
     let vars = Constr.Set.vars sum.sum_constraints in
     let evars = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta)) vars in
     Ident.Set.fold (fun v acc -> Ident.Map.add v (Ident.mk ()) acc) evars theta in
-  IList.map2 extend_with_exist thetas ss
+  List.map2_exn ~f:extend_with_exist thetas ss
 
 let apply_substs thetas ss =
-  IList.map2 Summary.subst thetas ss
+  List.map2_exn ~f:Summary.subst thetas ss
 
 let add_splits_and_flatten sums =
   let aux sums =
@@ -235,7 +279,7 @@ let add_splits_and_flatten sums =
     let constrs =
       Field.Map.fold
         (fun f v acc ->
-           let vs = IList.map (fun s' -> Field.Map.find f s'.sum_pre) sums in
+           let vs = List.map ~f:(fun s' -> Field.Map.find f s'.sum_pre) sums in
            (* add all pre variables plus the resource invariant *)
            let i = Field.Map.find f s.sum_inv in
            let c = Constr.mk_sum v (i::vs) in
@@ -255,7 +299,7 @@ let add_splits_and_flatten sums =
 let file_analysis _ _ get_proc_desc file_env =
   (* outsource checks for ctrs/public etc to ThreadSafety *)
   let should_analyze ((_,tenv,_,pdesc) as p) =
-    ThreadSafety.should_analyze_proc pdesc tenv && ThreadSafety.should_report_on_proc p
+    should_analyze_proc pdesc tenv && should_report_on_proc p
   in
 
   (* run actual analysis, remembering proc info *)
@@ -300,7 +344,7 @@ let file_analysis _ _ get_proc_desc file_env =
         | None -> acc
         | Some l -> aux (l::acc)
       in
-      IList.rev (aux [])
+      List.rev (aux [])
     in
 
     let in_ch,out_ch = Unix.open_process "z3 -in" in
@@ -321,7 +365,7 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   let run_check (pinfos, merged) =
-    L.out "Analysing case: %a@." (Pp.seq Procname.pp) pinfos ;
+    L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pinfos ;
     (* parse a z3 model (without the enclosing braces and model statement) *)
     let parse_z3_model varmap =
       let rec aux acc = function
@@ -360,7 +404,7 @@ let file_analysis _ _ get_proc_desc file_env =
     let procs = List.filter ~f:should_analyze procs in
     let proc_sums = List.map ~f:summarise procs in
     let pairs = all_pairs proc_sums in
-    let cases = IList.map process_case pairs in
+    let cases = List.map ~f:process_case pairs in
     let merged_cases = List.map ~f:merge cases in
     List.iter ~f:run_check merged_cases
   in
