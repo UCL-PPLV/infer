@@ -223,7 +223,7 @@ let rec select_nodes_exp_lambda dotnodes e lambda =
 (* this is written in this strange way for legacy reason. It should be changed a bit*)
 let look_up dotnodes e lambda =
   let r = select_nodes_exp_lambda dotnodes e lambda in
-  let r'= IList.map get_coordinate_id r in
+  let r'= List.map ~f:get_coordinate_id r in
   r' @ look_up_for_back_pointer e dotnodes lambda
 
 let reset_proposition_counter () = proposition_counter:= 0
@@ -289,7 +289,7 @@ let make_dangling_boxes pe allocated_nodes (sigma_lambda: (Sil.hpred * int) list
     | d:: candidates ->
         if (is_allocated d) then subtract_allocated candidates
         else d:: subtract_allocated candidates in
-  let candidate_dangling = List.concat (IList.map get_rhs_predicate sigma_lambda) in
+  let candidate_dangling = List.concat_map ~f:get_rhs_predicate sigma_lambda in
   let candidate_dangling = filter_duplicate candidate_dangling [] in
   let dangling = subtract_allocated candidate_dangling in
   dangling_dotboxes:= dangling
@@ -335,7 +335,7 @@ let set_exps_neq_zero pi =
         exps_neq_zero := e :: !exps_neq_zero
     | _ -> () in
   exps_neq_zero := [];
-  IList.iter f pi
+  List.iter ~f pi
 
 let box_dangling e =
   let entry_e = List.filter ~f:(fun b -> match b with
@@ -357,8 +357,8 @@ let compute_fields_struct sigma =
   let rec do_strexp se in_struct =
     match se with
     | Sil.Eexp (e, _) -> if in_struct then fields_structs:= e ::!fields_structs else ()
-    | Sil.Estruct (l, _) -> IList.iter (fun e -> do_strexp e true) (snd (List.unzip l))
-    | Sil.Earray (_, l, _) -> IList.iter (fun e -> do_strexp e false) (snd (List.unzip l)) in
+    | Sil.Estruct (l, _) -> List.iter ~f:(fun e -> do_strexp e true) (snd (List.unzip l))
+    | Sil.Earray (_, l, _) -> List.iter ~f:(fun e -> do_strexp e false) (snd (List.unzip l)) in
   let rec fs s =
     match s with
     | [] -> ()
@@ -478,14 +478,14 @@ let compute_target_from_eexp dotnodes e p lambda =
   else
     let nodes_e = select_nodes_exp_lambda dotnodes e lambda in
     let nodes_e_no_struct = List.filter ~f:is_not_struct nodes_e in
-    let trg = IList.map get_coordinate_id nodes_e_no_struct in
+    let trg = List.map ~f:get_coordinate_id nodes_e_no_struct in
     (match trg with
      | [] ->
          (match box_dangling e with
           | None -> []
           | Some n -> [(LinkExpToExp, n, "")]
          )
-     | _ -> IList.map (fun n -> (LinkExpToExp, n, "")) trg
+     | _ -> List.map ~f:(fun n -> (LinkExpToExp, n, "")) trg
     )
 
 (* build the set of edges between nodes *)
@@ -497,8 +497,17 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
     | n:: nl ->
         let target_list = compute_target_array_elements dotnodes lie p f lambda in
         (* below it's n+1 because n is the address, n+1 is the actual array node*)
-        let ff n = IList.map (fun (k, lab_src, m, lab_trg) -> mk_link k (mk_coordinate (n + 1) lambda) (strip_special_chars lab_src) (mk_coordinate m lambda) (strip_special_chars lab_trg)) target_list in
-        let links_from_elements = List.concat (IList.map ff (n:: nl)) in
+        let ff n =
+          List.map
+            ~f:(fun (k, lab_src, m, lab_trg) ->
+                mk_link
+                  k
+                  (mk_coordinate (n + 1) lambda)
+                  (strip_special_chars lab_src)
+                  (mk_coordinate m lambda)
+                  (strip_special_chars lab_trg))
+            target_list in
+        let links_from_elements = List.concat_map ~f:ff (n:: nl) in
 
         let trg_label = strip_special_chars (Exp.to_string e) in
         let lnk = mk_link (LinkToArray) (mk_coordinate n lambda) "" (mk_coordinate (n + 1) lambda) trg_label in
@@ -512,9 +521,9 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
       (match src with
        | [] -> assert false
        | nl ->
-           (* L.out "@\n@\n List of nl= "; IList.iter (L.out " %i ") nl; L.out "@.@.@."; *)
+           (* L.out "@\n@\n List of nl= "; List.iter ~f:(L.out " %i ") nl; L.out "@.@.@."; *)
            let target_list = compute_target_struct_fields dotnodes lfld p f lambda cycle in
-           let ff n = IList.map (fun (k, lab_src, m, lab_trg) ->
+           let ff n = List.map ~f:(fun (k, lab_src, m, lab_trg) ->
                mk_link k (mk_coordinate n lambda) lab_src (mk_coordinate m lambda) lab_trg
              ) target_list in
            let nodes_e = select_nodes_exp_lambda dotnodes e lambda in
@@ -523,7 +532,7 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
              with exn when SymOp.exn_not_failure exn -> assert false in
            (* we need to exclude the address node from the sorce of fields. no fields should start from there*)
            let nl'= List.filter ~f:(fun id -> address_struct_id <> id) nl in
-           let links_from_fields = List.concat (IList.map ff nl') in
+           let links_from_fields = List.concat_map ~f:ff nl' in
            let lnk_from_address_struct = if !print_full_prop then
                let trg_label = strip_special_chars (Exp.to_string e) in
                [mk_link (LinkExpToStruct) (mk_coordinate address_struct_id lambda) ""
@@ -537,11 +546,11 @@ let rec dotty_mk_set_links dotnodes sigma p f cycle =
        | [] -> assert false
        | nl -> if !print_full_prop then
              let target_list = compute_target_from_eexp dotnodes e' p lambda in
-             let ff n = IList.map (fun (k, m, lab_target) ->
+             let ff n = List.map ~f:(fun (k, m, lab_target) ->
                  mk_link k (mk_coordinate n lambda) ""
                    (mk_coordinate m lambda) (strip_special_chars lab_target)
                ) target_list in
-             let ll = List.concat (IList.map ff nl) in
+             let ll = List.concat_map ~f:ff nl in
              ll @ dotty_mk_set_links dotnodes sigma' p f cycle
            else dotty_mk_set_links dotnodes sigma' p f cycle)
 
@@ -669,17 +678,15 @@ let filter_useless_spec_dollar_box (nodes: dotty_node list) (links: link list) =
     | Dotpointsto _ ->
         let e = get_node_exp node in
         if is_spec_variable e then begin
-          (*L.out "@\n Found a spec expression = %s @.@." (Exp.to_string e); *)
           let links_from_node = boxes_pointed_by node links in
           let links_to_node = boxes_pointing_at node links in
-          (* L.out "@\n Size of links_from=%i links_to=%i @.@." (IList.length links_from_node) (IList.length links_to_node); *)
           if List.is_empty links_to_node then begin
             tmp_links:= remove_links_from links_from_node ;
             tmp_nodes:= remove_node node !tmp_nodes;
           end
         end
     | _ -> () in
-  IList.iter handle_one_node nodes;
+  List.iter ~f:handle_one_node nodes;
   (!tmp_nodes,!tmp_links)
 
 (* print a struct node *)
@@ -793,12 +800,12 @@ and build_visual_graph f pe p cycle =
   compute_fields_struct sigma;
   compute_struct_exp_nodes sigma;
   (* L.out "@\n@\n Computed fields structs: ";
-     IList.iter (fun e -> L.out " %a " (Sil.pp_exp_printenv pe) e) !fields_structs;
+     List.iter ~f:(fun e -> L.out " %a " (Sil.pp_exp_printenv pe) e) !fields_structs;
      L.out "@\n@.";
      L.out "@\n@\n Computed exp structs nodes: ";
-     IList.iter (fun e -> L.out " %a " (Sil.pp_exp_printenv pe) e) !struct_exp_nodes;
+     List.iter ~f:(fun e -> L.out " %a " (Sil.pp_exp_printenv pe) e) !struct_exp_nodes;
      L.out "@\n@."; *)
-  let sigma_lambda = IList.map (fun hp -> (hp,!lambda_counter)) sigma in
+  let sigma_lambda = List.map ~f:(fun hp -> (hp,!lambda_counter)) sigma in
   let nodes = (dotty_mk_node pe) sigma_lambda in
   if !print_full_prop then make_dangling_boxes pe nodes sigma_lambda;
   let links = dotty_mk_set_links nodes sigma_lambda p f cycle in
@@ -853,11 +860,11 @@ and pp_dotty f kind (_prop: Prop.normal Prop.t) cycle =
   let (nodes, links) = build_visual_graph f pe prop cycle in
   let all_nodes = (nodes @ !dangling_dotboxes @ !nil_dotboxes) in
   if !print_full_prop then
-    IList.iter ((dotty_pp_state f pe) cycle) all_nodes
+    List.iter ~f:((dotty_pp_state f pe) cycle) all_nodes
   else
-    IList.iter (fun node ->
+    List.iter ~f:(fun node ->
         if node_in_cycle cycle node then (dotty_pp_state f pe) cycle node) all_nodes;
-  IList.iter (dotty_pp_link f) links;
+  List.iter ~f:(dotty_pp_link f) links;
   (* F.fprintf f "\n } \n"; *)
   F.fprintf f "\n } \n"
 
@@ -873,16 +880,16 @@ let pp_dotty_one_spec f pre posts =
   invisible_arrows:= true;
   pp_dotty f Spec_precondition pre None;
   invisible_arrows:= false;
-  IList.iter (fun (po, _) -> incr post_counter ; pp_dotty f (Spec_postcondition pre) po None;
-               for j = 1 to 4 do
-                 F.fprintf f "  inv_%i%i%i%i -> state_pi_%i [style=invis]\n"
-                   !spec_counter
-                   j
-                   j
-                   j
-                   !target_invisible_arrow_pre;
-               done
-             ) posts;
+  List.iter ~f:(fun (po, _) -> incr post_counter ; pp_dotty f (Spec_postcondition pre) po None;
+                 for j = 1 to 4 do
+                   F.fprintf f "  inv_%i%i%i%i -> state_pi_%i [style=invis]\n"
+                     !spec_counter
+                     j
+                     j
+                     j
+                     !target_invisible_arrow_pre;
+                 done
+               ) posts;
   F.fprintf f "\n } \n"
 
 (* this is used to print a list of proposition when considered in a path of nodes *)
@@ -893,8 +900,8 @@ let pp_dotty_prop_list_in_path f plist prev_n curr_n =
     F.fprintf f "\n subgraph cluster_%i { color=blue \n" !dotty_state_count;
     incr dotty_state_count;
     F.fprintf f "\n state%iN [label=\"NODE %i \",  style=filled, color= lightblue]\n" curr_n curr_n;
-    IList.iter (fun po -> incr proposition_counter ;
-                 pp_dotty f Generic_proposition po None) plist;
+    List.iter ~f:(fun po -> incr proposition_counter ;
+                   pp_dotty f Generic_proposition po None) plist;
     if prev_n <> - 1 then F.fprintf f "\n state%iN ->state%iN\n" prev_n curr_n;
     F.fprintf f "\n } \n"
   with exn when SymOp.exn_not_failure exn ->
@@ -930,7 +937,7 @@ let pp_proplist_parsed2dotty_file filename plist =
       F.fprintf f "\n\n\ndigraph main { \nnode [shape=box];\n";
       F.fprintf f "\n compound = true; \n";
       F.fprintf f "\n /* size=\"12,7\"; ratio=fill;*/ \n";
-      ignore (IList.map (pp_dotty f Generic_proposition) plist);
+      ignore (List.map ~f:(pp_dotty f Generic_proposition) plist);
       F.fprintf f "\n}" in
     let outc = open_out filename in
     let fmt = F.formatter_of_out_channel outc in
@@ -947,11 +954,11 @@ let pp_cfgnodename pname fmt (n : Procdesc.Node.t) =
   F.fprintf fmt "\"%s_%d\"" (Procname.to_filename pname) (Procdesc.Node.get_id n :> int)
 
 let pp_etlist fmt etl =
-  IList.iter (fun (id, ty) ->
+  List.iter ~f:(fun (id, ty) ->
       Format.fprintf fmt " %a:%a" Mangled.pp id (Typ.pp_full Pp.text) ty) etl
 
 let pp_local_list fmt etl =
-  IList.iter (fun (id, ty) ->
+  List.iter ~f:(fun (id, ty) ->
       Format.fprintf fmt " %a:%a" Mangled.pp id (Typ.pp_full Pp.text) ty) etl
 
 let pp_cfgnodelabel pdesc fmt (n : Procdesc.Node.t) =
@@ -963,7 +970,7 @@ let pp_cfgnodelabel pdesc fmt (n : Procdesc.Node.t) =
           pname_string
           pp_etlist (Procdesc.get_formals pdesc)
           pp_local_list (Procdesc.get_locals pdesc);
-        if IList.length (Procdesc.get_captured pdesc) <> 0 then
+        if List.length (Procdesc.get_captured pdesc) <> 0 then
           Format.fprintf fmt "\\nCaptured: %a"
             pp_local_list (Procdesc.get_captured pdesc);
         let attributes = Procdesc.get_attributes pdesc in
@@ -983,7 +990,7 @@ let pp_cfgnodelabel pdesc fmt (n : Procdesc.Node.t) =
     let str = F.asprintf "%t" pp in
     Escape.escape_dotty str in
   let pp_instrs fmt instrs =
-    IList.iter (fun i -> F.fprintf fmt " %s\\n " (instr_string i)) instrs in
+    List.iter ~f:(fun i -> F.fprintf fmt " %s\\n " (instr_string i)) instrs in
   let instrs = Procdesc.Node.get_instrs n in
   F.fprintf fmt "%d: %a \\n  %a" (Procdesc.Node.get_id n :> int) pp_label n pp_instrs instrs
 
@@ -1013,8 +1020,8 @@ let pp_cfgnode pdesc fmt (n: Procdesc.Node.t) =
           (pp_cfgnodename pname) n1
           (pp_cfgnodename pname) n2
           color in
-  IList.iter (fun n' -> print_edge n n' false) (Procdesc.Node.get_succs n);
-  IList.iter (fun n' -> print_edge n n' true) (Procdesc.Node.get_exn n)
+  List.iter ~f:(fun n' -> print_edge n n' false) (Procdesc.Node.get_succs n);
+  List.iter ~f:(fun n' -> print_edge n n' true) (Procdesc.Node.get_exn n)
 
 (* * print control flow graph (in dot form) for fundec to channel let      *)
 (* print_cfg_channel (chan : out_channel) (fd : fundec) = let pnode (s:    *)
@@ -1066,7 +1073,9 @@ let pp_speclist_dotty f (splist: Prop.normal Specs.spec list) =
   F.fprintf f "@\n@\n\ndigraph main { \nnode [shape=box]; @\n";
   F.fprintf f "@\n compound = true; @\n";
   (*  F.fprintf f "\n size=\"12,7\"; ratio=fill; \n"; *)
-  IList.iter (fun s -> pp_dotty_one_spec f (Specs.Jprop.to_prop s.Specs.pre) s.Specs.posts) splist;
+  List.iter
+    ~f:(fun s -> pp_dotty_one_spec f (Specs.Jprop.to_prop s.Specs.pre) s.Specs.posts)
+    splist;
   F.fprintf f "@\n}";
   Config.pp_simple := pp_simple_saved
 
@@ -1174,7 +1183,7 @@ let rec select_node_at_address nodes e =
 
 (* look-up the ids in the list of nodes corresponding to expression e*)
 (* let look_up_nodes_ids nodes e =
-   IList.map get_node_id (select_nodes_exp nodes e) *)
+   List.map ~f:get_node_id (select_nodes_exp nodes e) *)
 
 (* create a list of dangling nodes *)
 let make_set_dangling_nodes allocated_nodes (sigma: Sil.hpred list) =
@@ -1207,11 +1216,11 @@ let make_set_dangling_nodes allocated_nodes (sigma: Sil.hpred list) =
     | e:: l' ->
         if (List.exists ~f:(Exp.equal e) seen_exp) then filter_duplicate l' seen_exp
         else e:: filter_duplicate l' (e:: seen_exp) in
-  let rhs_exp_list = List.concat (IList.map get_rhs_predicate sigma) in
+  let rhs_exp_list = List.concat_map ~f:get_rhs_predicate sigma in
   let candidate_dangling_exps = filter_duplicate rhs_exp_list [] in
   (* get rid of allocated ones*)
   let dangling_exps = List.filter ~f:is_not_allocated candidate_dangling_exps in
-  IList.map make_new_dangling dangling_exps
+  List.map ~f:make_new_dangling dangling_exps
 
 (* return a list of pairs (n,field_lab) where n is a target node*)
 (* corresponding to se and is going to be used a target for and edge*)
@@ -1260,7 +1269,7 @@ let rec make_visual_heap_edges nodes sigma prop =
        | None -> assert false
        | Some n ->
            let target_nodes = compute_target_nodes_from_sexp nodes se prop "" in
-           let ll = IList.map (combine_source_target_label n) target_nodes in
+           let ll = List.map ~f:(combine_source_target_label n) target_nodes in
            ll @ make_visual_heap_edges nodes sigma' prop
       )
   | Sil.Hlseg (_, _, e1, e2, _):: sigma' ->
@@ -1269,7 +1278,7 @@ let rec make_visual_heap_edges nodes sigma prop =
        | None -> assert false
        | Some n ->
            let target_nodes = compute_target_nodes_from_sexp nodes (Sil.Eexp (e2, Sil.inst_none)) prop "" in
-           let ll = IList.map (combine_source_target_label n) target_nodes in
+           let ll = List.map ~f:(combine_source_target_label n) target_nodes in
            ll @ make_visual_heap_edges nodes sigma' prop
       )
 
@@ -1280,8 +1289,8 @@ let rec make_visual_heap_edges nodes sigma prop =
        | Some n ->
            let target_nodesF = compute_target_nodes_from_sexp nodes (Sil.Eexp (e3, Sil.inst_none)) prop "" in
            let target_nodesB = compute_target_nodes_from_sexp nodes (Sil.Eexp (e2, Sil.inst_none)) prop "" in
-           let llF = IList.map (combine_source_target_label n) target_nodesF in
-           let llB = IList.map (combine_source_target_label n) target_nodesB in
+           let llF = List.map ~f:(combine_source_target_label n) target_nodesF in
+           let llB = List.map ~f:(combine_source_target_label n) target_nodesB in
            llF @ llB @ make_visual_heap_edges nodes sigma' prop
       )
 
@@ -1307,10 +1316,10 @@ let rec pointsto_contents_to_xml (co: Sil.strexp) : Io_infer.Xml.node =
       Io_infer.Xml.create_tree "cell" [("content-value", exp_to_xml_string e)] []
   | Sil.Estruct (fel, _) ->
       let f (fld, exp) = Io_infer.Xml.create_tree "struct-field" [("id", Ident.fieldname_to_string fld)] [(pointsto_contents_to_xml exp)] in
-      Io_infer.Xml.create_tree "struct" [] (IList.map f fel)
+      Io_infer.Xml.create_tree "struct" [] (List.map ~f fel)
   | Sil.Earray (len, nel, _) ->
       let f (e, se) = Io_infer.Xml.create_tree "array-element" [("index", exp_to_xml_string e)] [pointsto_contents_to_xml se] in
-      Io_infer.Xml.create_tree "array" [("size", exp_to_xml_string len)] (IList.map f nel)
+      Io_infer.Xml.create_tree "array" [("size", exp_to_xml_string len)] (List.map ~f nel)
 
 (* Convert an atom to xml in a light version. Namely, the expressions are not fully blown-up into *)
 (* xml tree but visualized as strings *)
@@ -1330,7 +1339,7 @@ let atom_to_xml_light (a: Sil.atom) : Io_infer.Xml.node =
 
 let xml_pure_info prop =
   let pure = Prop.get_pure prop in
-  let xml_atom_list = IList.map atom_to_xml_light pure in
+  let xml_atom_list = List.map ~f:atom_to_xml_light pure in
   Io_infer.Xml.create_tree "stack" [] xml_atom_list
 
 (** Return a string describing the kind of a pointsto address *)
@@ -1372,14 +1381,14 @@ let heap_edge_to_xml edge =
 
 let visual_heap_to_xml heap =
   let (n, nodes, edges) = heap in
-  let xml_heap_nodes = IList.map heap_node_to_xml nodes in
-  let xml_heap_edges = IList.map heap_edge_to_xml edges in
+  let xml_heap_nodes = List.map ~f:heap_node_to_xml nodes in
+  let xml_heap_edges = List.map ~f:heap_edge_to_xml edges in
   Io_infer.Xml.create_tree "heap" [("id", string_of_int n)] (xml_heap_nodes @ xml_heap_edges)
 
 (** convert a proposition to xml with the given tag and id *)
 let prop_to_xml prop tag_name id =
   let visual_heaps = prop_to_set_of_visual_heaps prop in
-  let xml_visual_heaps = IList.map visual_heap_to_xml visual_heaps in
+  let xml_visual_heaps = List.map ~f:visual_heap_to_xml visual_heaps in
   let xml_pure_part = xml_pure_info prop in
   let xml_graph = Io_infer.Xml.create_tree tag_name [("id", string_of_int id)] (xml_visual_heaps @ [xml_pure_part]) in
   xml_graph
@@ -1400,14 +1409,14 @@ let print_specs_xml signature specs loc fmt =
     let xml_pre = prop_to_xml pre "precondition" !jj in
     let xml_spec =
       xml_pre ::
-      (IList.map (fun (po, _) ->
+      (List.map ~f:(fun (po, _) ->
            jj := !jj + 1; prop_to_xml (add_stack_to_prop po) "postcondition" !jj
          ) posts) in
     Io_infer.Xml.create_tree "specification" [("id", string_of_int n)] xml_spec in
   let j = ref 0 in
   let list_of_specs_xml =
-    IList.map
-      (fun s ->
+    List.map
+      ~f:(fun s ->
          j:=!j + 1;
          do_one_spec (Specs.Jprop.to_prop s.Specs.pre) s.Specs.posts !j)
       specs in

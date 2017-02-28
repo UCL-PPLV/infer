@@ -68,7 +68,7 @@ let iterate_procedure_callbacks exe_env caller_pname =
   let get_procs_in_file proc_name =
     match Exe_env.get_cfg exe_env proc_name with
     | Some cfg->
-        IList.map Procdesc.get_proc_name (Cfg.get_defined_procs cfg)
+        List.map ~f:Procdesc.get_proc_name (Cfg.get_defined_procs cfg)
     | None ->
         [] in
 
@@ -83,26 +83,26 @@ let iterate_procedure_callbacks exe_env caller_pname =
 
   Option.iter
     ~f:(fun (idenv, tenv, proc_name, proc_desc, _) ->
-        IList.iter
-          (fun (language_opt, proc_callback) ->
-             let language_matches = match language_opt with
-               | Some language -> Config.equal_language language procedure_language
-               | None -> true in
-             if language_matches then
-               begin
-                 let init_time = Unix.gettimeofday () in
-                 proc_callback
-                   {
-                     get_proc_desc;
-                     get_procs_in_file;
-                     idenv;
-                     tenv;
-                     proc_name;
-                     proc_desc;
-                   };
-                 let elapsed = Unix.gettimeofday () -. init_time in
-                 update_time proc_name elapsed
-               end)
+        List.iter
+          ~f:(fun (language_opt, proc_callback) ->
+              let language_matches = match language_opt with
+                | Some language -> Config.equal_language language procedure_language
+                | None -> true in
+              if language_matches then
+                begin
+                  let init_time = Unix.gettimeofday () in
+                  proc_callback
+                    {
+                      get_proc_desc;
+                      get_procs_in_file;
+                      idenv;
+                      tenv;
+                      proc_name;
+                      proc_desc;
+                    };
+                  let elapsed = Unix.gettimeofday () -. init_time in
+                  update_time proc_name elapsed
+                end)
           !procedure_callbacks)
     (get_procedure_definition exe_env caller_pname)
 
@@ -111,12 +111,11 @@ let iterate_cluster_callbacks all_procs exe_env proc_names =
   let get_procdesc = Exe_env.get_proc_desc exe_env in
 
   let procedure_definitions =
-    IList.map (get_procedure_definition exe_env) proc_names
-    |> IList.flatten_options in
+    List.filter_map ~f:(get_procedure_definition exe_env) proc_names in
 
   let environment =
-    IList.map
-      (fun (idenv, tenv, proc_name, proc_desc, _) -> (idenv, tenv, proc_name, proc_desc))
+    List.map
+      ~f:(fun (idenv, tenv, proc_name, proc_desc, _) -> (idenv, tenv, proc_name, proc_desc))
       procedure_definitions in
 
   (* Procedures matching the given language or all if no language is specified. *)
@@ -126,15 +125,15 @@ let iterate_cluster_callbacks all_procs exe_env proc_names =
       ~default:proc_names
       language_opt in
 
-  IList.iter
-    (fun (language_opt, cluster_callback) ->
-       let proc_names = relevant_procedures language_opt in
-       if IList.length proc_names > 0 then
-         cluster_callback exe_env all_procs get_procdesc environment)
+  List.iter
+    ~f:(fun (language_opt, cluster_callback) ->
+        let proc_names = relevant_procedures language_opt in
+        if List.length proc_names > 0 then
+          cluster_callback exe_env all_procs get_procdesc environment)
     !cluster_callbacks
 
 (** Invoke all procedure and cluster callbacks on a given environment. *)
-let iterate_callbacks store_summary call_graph exe_env =
+let iterate_callbacks call_graph exe_env =
   let procs_to_analyze =
     (* analyze all the currently defined procedures *)
     Cg.get_defined_nodes call_graph in
@@ -168,17 +167,23 @@ let iterate_callbacks store_summary call_graph exe_env =
     then Specs.reset_summary call_graph proc_name attributes_opt None in
 
   (* Make sure summaries exists. *)
-  IList.iter reset_summary procs_to_analyze;
+  List.iter ~f:reset_summary procs_to_analyze;
 
   (* Invoke callbacks. *)
-  IList.iter
-    (iterate_procedure_callbacks exe_env)
+  List.iter
+    ~f:(iterate_procedure_callbacks exe_env)
     procs_to_analyze;
 
-  IList.iter
-    (iterate_cluster_callbacks originally_defined_procs exe_env)
+  List.iter
+    ~f:(iterate_cluster_callbacks originally_defined_procs exe_env)
     (cluster procs_to_analyze);
 
-  IList.iter store_summary procs_to_analyze;
+  (* Store all the summaries to disk *)
+  List.iter
+    ~f:(fun pname ->
+        let updated_summary_opt =
+          Option.map (Specs.get_summary pname) ~f:Specs.increment_timestamp in
+        Option.iter ~f:(Specs.store_summary pname) updated_summary_opt)
+    procs_to_analyze;
 
   Config.curr_language := saved_language

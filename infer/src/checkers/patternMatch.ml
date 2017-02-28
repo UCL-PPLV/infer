@@ -205,13 +205,13 @@ let get_vararg_type_names tenv
           | None -> type_names n)
       | _ -> raise Not_found in
 
-  IList.rev (type_names call_node)
+  List.rev (type_names call_node)
 
 let has_formal_proc_argument_type_names proc_desc argument_type_names =
   let formals = Procdesc.get_formals proc_desc in
   let equal_formal_arg (_, typ) arg_type_name = String.equal (get_type_name typ) arg_type_name in
-  Int.equal (IList.length formals) (IList.length argument_type_names)
-  && IList.for_all2 equal_formal_arg formals argument_type_names
+  Int.equal (List.length formals) (List.length argument_type_names)
+  && List.for_all2_exn ~f:equal_formal_arg formals argument_type_names
 
 let has_formal_method_argument_type_names cfg pname_java argument_type_names =
   has_formal_proc_argument_type_names
@@ -235,7 +235,7 @@ let get_java_method_call_formal_signature = function
   | Sil.Call (_, Exp.Const (Const.Cfun pn), (_, tt):: args, _, _) ->
       (match pn with
        | Procname.Java pn_java ->
-           let arg_names = IList.map (function | _, t -> get_type_name t) args in
+           let arg_names = List.map ~f:(function | _, t -> get_type_name t) args in
            let rt_name = Procname.java_get_return_type pn_java in
            let m_name = Procname.java_get_method pn_java in
            Some (get_type_name tt, m_name, arg_names, rt_name)
@@ -252,8 +252,8 @@ let type_is_class typ =
   | _ -> false
 
 let initializer_classes =
-  IList.map
-    (fun name -> Typename.TN_csu (Csu.Class Csu.Java, Mangled.from_string name))
+  List.map
+    ~f:(fun name -> Typename.TN_csu (Csu.Class Csu.Java, Mangled.from_string name))
     [
       "android.app.Activity";
       "android.app.Application";
@@ -305,7 +305,7 @@ let java_get_vararg_values node pvar idenv =
         values := content_exp :: !values
     | _ -> () in
   let do_node n =
-    IList.iter do_instr (Procdesc.Node.get_instrs n) in
+    List.iter ~f:do_instr (Procdesc.Node.get_instrs n) in
   let () = match Errdesc.find_program_variable_assignment node pvar with
     | Some (node', _) ->
         Procdesc.iter_slope_range do_node node' node
@@ -326,10 +326,10 @@ let proc_calls resolve_attributes pdesc filter : (Procname.t * ProcAttributes.t)
     | _ -> () in
   let do_node node =
     let instrs = Procdesc.Node.get_instrs node in
-    IList.iter (do_instruction node) instrs in
+    List.iter ~f:(do_instruction node) instrs in
   let nodes = Procdesc.get_nodes pdesc in
-  IList.iter do_node nodes;
-  IList.rev !res
+  List.iter ~f:do_node nodes;
+  List.rev !res
 
 let override_exists f tenv proc_name =
   let rec super_type_exists tenv super_class_name =
@@ -410,7 +410,7 @@ let rec find_superclasses_with_attributes check tenv tname =
   match Tenv.lookup tenv tname with
   | Some (struct_typ) ->
       let result_from_supers = List.concat
-          (IList.map (find_superclasses_with_attributes check tenv) struct_typ.supers)
+          (List.map ~f:(find_superclasses_with_attributes check tenv) struct_typ.supers)
       in
       if check struct_typ.annots then
         tname ::result_from_supers

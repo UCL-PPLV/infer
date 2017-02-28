@@ -258,7 +258,7 @@ let java_get_parameters j => j.parameters;
 
 /** Return the parameters of a java procname as strings. */
 let java_get_parameters_as_strings j =>
-  IList.map (fun param => java_type_to_string param) j.parameters;
+  List.map f::(fun param => java_type_to_string param) j.parameters;
 
 
 /** Return true if the java procedure is static */
@@ -343,10 +343,10 @@ let java_is_anonymous_inner_class =
 let java_remove_hidden_inner_class_parameter =
   fun
   | Java js =>
-    switch (IList.rev js.parameters) {
+    switch (List.rev js.parameters) {
     | [(_, s), ...par'] =>
       if (is_anonymous_inner_class_name s) {
-        Some (Java {...js, parameters: IList.rev par'})
+        Some (Java {...js, parameters: List.rev par'})
       } else {
         None
       }
@@ -397,7 +397,7 @@ let java_is_autogen_method =
 let java_is_vararg =
   fun
   | Java js =>
-    switch (IList.rev js.parameters) {
+    switch (List.rev js.parameters) {
     | [(_, "java.lang.Object[]"), ..._] => true
     | _ => false
     }

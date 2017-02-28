@@ -112,9 +112,9 @@ struct
       let fname = CGeneral_utils.mk_class_field_name qual_name in
       let item_annot = Annot.Item.empty in
       fname, typ, item_annot in
-    let fields = IList.map mk_field_from_captured_var captured_vars in
+    let fields = List.map ~f:mk_field_from_captured_var captured_vars in
     Logging.out_debug "Block %s field:\n" block_name;
-    IList.iter (fun (fn, _, _) ->
+    List.iter ~f:(fun (fn, _, _) ->
         Logging.out_debug "-----> field: '%s'\n" (Ident.fieldname_to_string fn)) fields;
     let mblock = Mangled.from_string block_name in
     let block_name = Typename.TN_csu (Csu.Class Csu.Objc, mblock) in
@@ -133,9 +133,9 @@ struct
     let create_field_exp (var, typ) =
       let id = Ident.create_fresh Ident.knormal in
       id, Sil.Load (id, Exp.Lvar var, typ, loc) in
-    let ids, captured_instrs = List.unzip (IList.map create_field_exp captured_vars) in
+    let ids, captured_instrs = List.unzip (List.map ~f:create_field_exp captured_vars) in
     let fields_ids = List.zip_exn fields ids in
-    let set_fields = IList.map (fun ((f, t, _), id) ->
+    let set_fields = List.map ~f:(fun ((f, t, _), id) ->
         Sil.Store (Exp.Lfield (Exp.Var id_block, f, block_type), t, Exp.Var id, loc)) fields_ids in
     (declare_block_local :: trans_res.instrs) @
     [set_instr] @
@@ -161,17 +161,17 @@ struct
          (Typ.Tptr((Typ.Tfun _), _ ) as t)) :: es' ->
           let app =
             let function_name = make_function_name t name in
-            let args = IList.map (make_arg t) captured_vars in
+            let args = List.map ~f:(make_arg t) captured_vars in
             function_name :: args in
           app @ (f es')
       | e :: es' -> e :: f es' in
     (f exps, !insts)
 
   let collect_exprs res_trans_list =
-    List.concat (IList.map (fun res_trans -> res_trans.exps) res_trans_list)
+    List.concat_map ~f:(fun res_trans -> res_trans.exps) res_trans_list
 
   let collect_initid_exprs res_trans_list =
-    List.concat (IList.map (fun res_trans -> res_trans.initd_exps) res_trans_list)
+    List.concat_map ~f:(fun res_trans -> res_trans.initd_exps) res_trans_list
 
   (* If e is a block and the calling node has the priority then *)
   (* we need to release the priority to allow*)
@@ -763,8 +763,8 @@ struct
 
     if res_trans_idx.root_nodes <> []
     then
-      IList.iter
-        (fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans_idx.root_nodes [])
+      List.iter
+        ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans_idx.root_nodes [])
         res_trans_a.leaf_nodes;
 
     (* Note the order of res_trans_idx.ids @ res_trans_a.ids is important. *)
@@ -816,7 +816,7 @@ struct
             (* Create a node if the priority if free and there are instructions *)
             let creating_node =
               (PriorityNode.own_priority_node trans_state_pri.priority stmt_info) &&
-              (IList.length instr_bin >0) in
+              (List.length instr_bin >0) in
             let extra_instrs, exp_to_parent =
               if (is_binary_assign_op binary_operator_info)
               (* assignment operator result is lvalue in CPP, rvalue in C, *)
@@ -877,7 +877,7 @@ struct
       { trans_state_pri with succ_nodes = []; var_exp_typ = None  } in
     let result_trans_subexprs =
       let instruction' = exec_with_self_exception (exec_with_glvalue_as_reference instruction) in
-      let res_trans_p = IList.map (instruction' trans_state_param) params_stmt in
+      let res_trans_p = List.map ~f:(instruction' trans_state_param) params_stmt in
       res_trans_callee :: res_trans_p in
     match Option.bind callee_pname_opt
             (CTrans_utils.builtin_trans
@@ -889,7 +889,7 @@ struct
             ~f:CTrans_models.is_cf_retain_release ~default:false callee_pname_opt in
         let act_params =
           let params = List.tl_exn (collect_exprs result_trans_subexprs) in
-          if Int.equal (IList.length params) (IList.length params_stmt) then
+          if Int.equal (List.length params) (List.length params_stmt) then
             params
           else (Logging.err_debug
                   "WARNING: stmt_list and res_trans_par.exps must have same size. \
@@ -928,7 +928,7 @@ struct
     let procname = Procdesc.get_proc_name context.procdesc in
     let sil_loc = CLocation.get_sil_location si context in
     (* first for method address, second for 'this' expression *)
-    assert (Int.equal (IList.length result_trans_callee.exps) 2);
+    assert (Int.equal (List.length result_trans_callee.exps) 2);
     let (sil_method, _) = List.hd_exn result_trans_callee.exps in
     let callee_pname =
       match sil_method with
@@ -941,7 +941,7 @@ struct
       let trans_state_param =
         { trans_state_pri with succ_nodes = []; var_exp_typ = None } in
       let instruction' = exec_with_self_exception (exec_with_glvalue_as_reference instruction) in
-      let res_trans_p = IList.map (instruction' trans_state_param) params_stmt in
+      let res_trans_p = List.map ~f:(instruction' trans_state_param) params_stmt in
       result_trans_callee :: res_trans_p in
     (* first expr is method address, rest are params including 'this' parameter *)
     let actual_params = List.tl_exn (collect_exprs result_trans_subexprs) in
@@ -1064,7 +1064,7 @@ struct
             obj_c_message_expr_info, empty_res_trans in
         let instruction' =
           exec_with_self_exception (exec_with_glvalue_as_reference instruction) in
-        let l = IList.map (instruction' trans_state_param) rest in
+        let l = List.map ~f:(instruction' trans_state_param) rest in
         obj_c_message_expr_info, fst_res_trans :: l
     | [] -> obj_c_message_expr_info, [empty_res_trans]
 
@@ -1147,10 +1147,10 @@ struct
       let all_res_trans = [res_trans_b; tmp_var_res_trans] in
       let res_trans = PriorityNode.compute_results_to_parent trans_state'' sil_loc
           "ConditinalStmt Branch" stmt_info all_res_trans in
-      let prune_nodes_t, prune_nodes_f = IList.partition is_true_prune_node prune_nodes in
+      let prune_nodes_t, prune_nodes_f = List.partition_tf ~f:is_true_prune_node prune_nodes in
       let prune_nodes' = if branch then prune_nodes_t else prune_nodes_f in
-      IList.iter
-        (fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans.root_nodes [])
+      List.iter
+        ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans.root_nodes [])
         prune_nodes' in
     (match stmt_list with
      | [cond; exp1; exp2] ->
@@ -1231,10 +1231,10 @@ struct
         define_condition_side_effects res_trans_cond.exps res_trans_cond.instrs sil_loc in
       let prune_t = mk_prune_node true e' instrs' in
       let prune_f = mk_prune_node false e' instrs' in
-      IList.iter
-        (fun n' -> Procdesc.node_set_succs_exn context.procdesc n' [prune_t; prune_f] [])
+      List.iter
+        ~f:(fun n' -> Procdesc.node_set_succs_exn context.procdesc n' [prune_t; prune_f] [])
         res_trans_cond.leaf_nodes;
-      let rnodes = if Int.equal (IList.length res_trans_cond.root_nodes) 0 then
+      let rnodes = if Int.equal (List.length res_trans_cond.root_nodes) 0 then
           [prune_t; prune_f]
         else res_trans_cond.root_nodes in
       { empty_res_trans with
@@ -1254,7 +1254,7 @@ struct
     let short_circuit binop s1 s2 =
       let res_trans_s1 = cond_trans trans_state s1 in
       let prune_nodes_t, prune_nodes_f =
-        IList.partition is_true_prune_node res_trans_s1.leaf_nodes in
+        List.partition_tf ~f:is_true_prune_node res_trans_s1.leaf_nodes in
       let res_trans_s2 = cond_trans trans_state s2 in
       (* prune_to_s2 is the prune node that is connected with the root node of the *)
       (* translation of s2.*)
@@ -1264,11 +1264,11 @@ struct
           | Binop.LAnd -> prune_nodes_t, prune_nodes_f
           | Binop.LOr -> prune_nodes_f, prune_nodes_t
           | _ -> assert false) in
-      IList.iter
-        (fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans_s2.root_nodes [])
+      List.iter
+        ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n res_trans_s2.root_nodes [])
         prune_to_s2;
       let root_nodes_to_parent =
-        if Int.equal (IList.length res_trans_s1.root_nodes) 0
+        if Int.equal (List.length res_trans_s1.root_nodes) 0
         then res_trans_s1.leaf_nodes
         else res_trans_s1.root_nodes in
       let (exp1, typ1) = extract_exp res_trans_s1.exps in
@@ -1318,10 +1318,10 @@ struct
                 (Procdesc.Node.Stmt_node "IfStmt Branch") res_trans_b.instrs sil_loc context]
          | _ ->
              res_trans_b.root_nodes) in
-      let prune_nodes_t, prune_nodes_f = IList.partition is_true_prune_node prune_nodes in
+      let prune_nodes_t, prune_nodes_f = List.partition_tf ~f:is_true_prune_node prune_nodes in
       let prune_nodes' = if branch then prune_nodes_t else prune_nodes_f in
-      IList.iter
-        (fun n -> Procdesc.node_set_succs_exn context.procdesc n nodes_branch [])
+      List.iter
+        ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n nodes_branch [])
         prune_nodes' in
     (match stmt_list with
      | [_; decl_stmt; cond; stmt1; stmt2] ->
@@ -1357,9 +1357,9 @@ struct
         let switch_special_cond_node =
           let node_kind = Procdesc.Node.Stmt_node "Switch_stmt" in
           create_node node_kind res_trans_cond_tmp.instrs sil_loc context in
-        IList.iter
-          (fun n' ->
-             Procdesc.node_set_succs_exn context.procdesc n' [switch_special_cond_node] [])
+        List.iter
+          ~f:(fun n' ->
+              Procdesc.node_set_succs_exn context.procdesc n' [switch_special_cond_node] [])
           res_trans_cond_tmp.leaf_nodes;
         let root_nodes =
           if res_trans_cond_tmp.root_nodes <> [] then res_trans_cond_tmp.root_nodes
@@ -1416,7 +1416,7 @@ struct
                  aux rest (x :: acc) cases
              | [] ->
                  cases, acc) in
-          aux (IList.rev stmt_list) [] [] in
+          aux (List.rev stmt_list) [] [] in
         let list_of_cases, pre_case_stmts = merge_into_cases stmt_list in
         let rec connected_instruction rev_instr_list successor_nodes =
           (* returns the entry point of the translated set of instr *)
@@ -1454,7 +1454,7 @@ struct
           | CaseStmt(_, _ :: _ :: case_content) as case :: rest ->
               let last_nodes, last_prune_nodes =
                 translate_and_connect_cases rest next_nodes next_prune_nodes in
-              let case_entry_point = connected_instruction (IList.rev case_content) last_nodes in
+              let case_entry_point = connected_instruction (List.rev case_content) last_nodes in
               (* connects between cases, then continuation has priority about breaks *)
               let prune_node_t, prune_node_f = create_prune_nodes_for_case case in
               Procdesc.node_set_succs_exn context.procdesc prune_node_t case_entry_point [];
@@ -1468,19 +1468,19 @@ struct
               let last_nodes, last_prune_nodes =
                 translate_and_connect_cases rest next_nodes [placeholder_entry_point] in
               let default_entry_point =
-                connected_instruction (IList.rev default_content) last_nodes in
+                connected_instruction (List.rev default_content) last_nodes in
               Procdesc.node_set_succs_exn
                 context.procdesc placeholder_entry_point default_entry_point [];
               default_entry_point, last_prune_nodes
           | _ -> assert false in
         let top_entry_point, top_prune_nodes =
           translate_and_connect_cases list_of_cases succ_nodes succ_nodes in
-        let _ = connected_instruction (IList.rev pre_case_stmts) top_entry_point in
+        let _ = connected_instruction (List.rev pre_case_stmts) top_entry_point in
         Procdesc.node_set_succs_exn
           context.procdesc switch_special_cond_node top_prune_nodes [];
         let top_nodes = res_trans_decl.root_nodes in
-        IList.iter
-          (fun n' -> Procdesc.Node.append_instrs n' []) succ_nodes;
+        List.iter
+          ~f:(fun n' -> Procdesc.Node.append_instrs n' []) succ_nodes;
         (* succ_nodes will remove the temps *)
         { empty_res_trans with root_nodes = top_nodes; leaf_nodes = succ_nodes }
     | _ -> assert false
@@ -1489,7 +1489,7 @@ struct
     let stmt =
       extract_stmt_from_singleton stmt_list "ERROR: StmtExpr should have only one statement.\n" in
     let res_trans_stmt = instruction trans_state stmt in
-    let exps' = IList.rev res_trans_stmt.exps in
+    let exps' = List.rev res_trans_stmt.exps in
     match exps' with
     | last_exp :: _ ->
         { res_trans_stmt with exps = [last_exp]; }
@@ -1553,17 +1553,17 @@ struct
       | Loops.DoWhile _ -> res_trans_body.root_nodes in
     (* Note: prune nodes are by contruction the res_trans_cond.leaf_nodes *)
     let prune_nodes_t, prune_nodes_f =
-      IList.partition is_true_prune_node res_trans_cond.leaf_nodes in
+      List.partition_tf ~f:is_true_prune_node res_trans_cond.leaf_nodes in
     let prune_t_succ_nodes =
       match loop_kind with
       | Loops.For _ | Loops.While _ -> res_trans_body.root_nodes
       | Loops.DoWhile _ -> [join_node] in
     Procdesc.node_set_succs_exn context.procdesc join_node join_succ_nodes [];
-    IList.iter
-      (fun n -> Procdesc.node_set_succs_exn context.procdesc n prune_t_succ_nodes [])
+    List.iter
+      ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n prune_t_succ_nodes [])
       prune_nodes_t;
-    IList.iter
-      (fun n -> Procdesc.node_set_succs_exn context.procdesc n succ_nodes [])
+    List.iter
+      ~f:(fun n -> Procdesc.node_set_succs_exn context.procdesc n succ_nodes [])
       prune_nodes_f;
     let root_nodes =
       match loop_kind with
@@ -1647,7 +1647,7 @@ struct
     let res_trans_subexpr_list =
       initListExpr_initializers_trans trans_state var_exp 0 stmts typ false stmt_info in
     let rh_exps = collect_exprs res_trans_subexpr_list in
-    if Int.equal (IList.length rh_exps) 0 then
+    if Int.equal (List.length rh_exps) 0 then
       let exps =
         match Sil.zero_value_of_numerical_type_option var_type with
         | Some zero_exp -> [(zero_exp, typ)]
@@ -1657,11 +1657,10 @@ struct
       (* For arrays, the size in the type may be an overapproximation of the number *)
       (* of literals the array is initialized with *)
       let lh =
-        if is_array var_type && IList.length lh > IList.length rh_exps then
-          let i = IList.length lh - IList.length rh_exps in
-          IList.drop_last i lh
+        if is_array var_type && List.length lh > List.length rh_exps then
+          List.take lh (List.length rh_exps)
         else lh in
-      if Int.equal (IList.length rh_exps) (IList.length lh) then
+      if Int.equal (List.length rh_exps) (List.length lh) then
         (* Creating new instructions by assigning right hand side to left hand side expressions *)
         let assign_instr (lh_exp, lh_t) (rh_exp, _) = Sil.Store (lh_exp, lh_t, rh_exp, sil_loc) in
         let assign_instrs =
@@ -1674,7 +1673,7 @@ struct
               ~f:((fun arr index -> Exp.is_array_index_of index arr) var_exp)
               initd_exps
           then []
-          else IList.map2 assign_instr lh rh_exps in
+          else List.map2_exn ~f:assign_instr lh rh_exps in
         let initlist_expr_res =
           { empty_res_trans with
             exps = [(var_exp, var_type)];
@@ -1945,11 +1944,11 @@ struct
               add_autorelease_call context sil_expr ret_type sil_loc in
             let instrs = var_instrs @ res_trans_stmt.instrs @ ret_instrs @ autorelease_instrs in
             let ret_node = mk_ret_node instrs in
-            IList.iter
-              (fun n -> Procdesc.node_set_succs_exn procdesc n [ret_node] [])
+            List.iter
+              ~f:(fun n -> Procdesc.node_set_succs_exn procdesc n [ret_node] [])
               res_trans_stmt.leaf_nodes;
             let root_nodes_to_parent =
-              if IList.length res_trans_stmt.root_nodes >0
+              if List.length res_trans_stmt.root_nodes >0
               then res_trans_stmt.root_nodes
               else [ret_node] in
             { empty_res_trans with root_nodes = root_nodes_to_parent; leaf_nodes = []}
@@ -2069,13 +2068,13 @@ struct
         Cg.add_edge context.cg procname block_pname;
         let captured_block_vars = block_decl_info.Clang_ast_t.bdi_captured_variables in
         let captureds = CVar_decl.captured_vars_from_block_info context captured_block_vars in
-        let ids_instrs = IList.map assign_captured_var captureds in
+        let ids_instrs = List.map ~f:assign_captured_var captureds in
         let ids, instrs = List.unzip ids_instrs in
         let block_data = (context, type_ptr, block_pname, captureds) in
         F.function_decl context.translation_unit_context context.tenv context.cfg context.cg decl
           (Some block_data);
         let captured_vars =
-          IList.map2 (fun id (pvar, typ) -> (Exp.Var id, pvar, typ)) ids captureds in
+          List.map2_exn ~f:(fun id (pvar, typ) -> (Exp.Var id, pvar, typ)) ids captureds in
         let closure = Exp.Closure { name=block_pname; captured_vars } in
         let block_name = Procname.to_string block_pname in
         let static_vars = CContext.static_vars_for_block context block_pname in
@@ -2269,7 +2268,7 @@ struct
     let trans_state_pri = PriorityNode.try_claim_priority_node trans_state stmt_info in
     let trans_state_param = { trans_state_pri with succ_nodes = [] } in
     let res_trans_subexpr_list =
-      IList.map (exec_with_glvalue_as_reference instruction trans_state_param) stmts in
+      List.map ~f:(exec_with_glvalue_as_reference instruction trans_state_param) stmts in
     let params = collect_exprs res_trans_subexpr_list  in
     let sil_fun = Exp.Const (Const.Cfun pname) in
     let call_instr = Sil.Call (None, sil_fun, params, sil_loc, CallFlags.default) in
@@ -2329,7 +2328,7 @@ struct
     let fun_name = Procname.from_string_c_fun CFrontend_config.infer_skip_fun in
     let trans_state_pri = PriorityNode.try_claim_priority_node trans_state stmt_info in
     let trans_state_param = { trans_state_pri with succ_nodes = [] } in
-    let res_trans_subexpr_list = IList.map (instruction trans_state_param) stmts in
+    let res_trans_subexpr_list = List.map ~f:(instruction trans_state_param) stmts in
     let params = collect_exprs res_trans_subexpr_list  in
     let sil_fun = Exp.Const (Const.Cfun fun_name) in
     let ret_id = Ident.create_fresh Ident.knormal in
@@ -2723,7 +2722,7 @@ struct
             exps = res_trans_tail.exps @ res_trans_s.exps;
             initd_exps = res_trans_tail.initd_exps @ res_trans_s.initd_exps;
           } in
-    exec_trans_instrs_no_rev trans_state (IList.rev trans_stmt_fun_list)
+    exec_trans_instrs_no_rev trans_state (List.rev trans_stmt_fun_list)
 
   and get_clang_stmt_trans stmt =
     fun trans_state -> exec_with_node_creation instruction trans_state stmt
@@ -2735,7 +2734,7 @@ struct
 
   (** Given a translation state, this function translates a list of clang statements. *)
   and instructions trans_state stmt_list =
-    let stmt_trans_fun = IList.map get_clang_stmt_trans stmt_list in
+    let stmt_trans_fun = List.map ~f:get_clang_stmt_trans stmt_list in
     exec_trans_instrs trans_state stmt_trans_fun
 
   and expression_trans context stmt warning =
@@ -2762,7 +2761,7 @@ struct
       obj_bridged_cast_typ = None
     } in
     let instrs = extra_instrs @ [`ClangStmt body] in
-    let instrs_trans = IList.map get_custom_stmt_trans instrs in
+    let instrs_trans = List.map ~f:get_custom_stmt_trans instrs in
     let res_trans = exec_trans_instrs trans_state instrs_trans in
     res_trans.root_nodes
 

@@ -458,7 +458,7 @@ let instr_get_exps =
     ]
   | Nullify pvar _ => [Exp.Lvar pvar]
   | Abstract _ => []
-  | Remove_temps temps _ => IList.map (fun id => Exp.Var id) temps
+  | Remove_temps temps _ => List.map f::(fun id => Exp.Var id) temps
   | Declare_locals _ => [];
 
 
@@ -660,19 +660,19 @@ let module Predicates: {
   let rec process_sexp env =>
     fun
     | Eexp _ => ()
-    | Earray _ esel _ => IList.iter (fun (_, se) => process_sexp env se) esel
-    | Estruct fsel _ => IList.iter (fun (_, se) => process_sexp env se) fsel;
+    | Earray _ esel _ => List.iter f::(fun (_, se) => process_sexp env se) esel
+    | Estruct fsel _ => List.iter f::(fun (_, se) => process_sexp env se) fsel;
 
   /** Process one hpred, updating env */
   let rec process_hpred env =>
     fun
     | Hpointsto _ se _ => process_sexp env se
     | Hlseg _ hpara _ _ _ => {
-        IList.iter (process_hpred env) hpara.body;
+        List.iter f::(process_hpred env) hpara.body;
         process_hpara env hpara
       }
     | Hdllseg _ hpara_dll _ _ _ _ _ => {
-        IList.iter (process_hpred env) hpara_dll.body_dll;
+        List.iter f::(process_hpred env) hpara_dll.body_dll;
         process_hpara_dll env hpara_dll
       };
 
@@ -787,12 +787,14 @@ let inst_to_string inst => {
   }
 };
 
+exception JoinFail;
 
-/** join of instrumentations */
+
+/** join of instrumentations, can raise JoinFail */
 let inst_partial_join inst1 inst2 => {
   let fail () => {
     L.d_strln ("inst_partial_join failed on " ^ inst_to_string inst1 ^ " " ^ inst_to_string inst2);
-    raise IList.Fail
+    raise JoinFail
   };
   if (equal_inst inst1 inst2) {
     inst1
@@ -1137,7 +1139,7 @@ let rec strexp_expmap (f: (Exp.t, option inst) => (Exp.t, option inst)) => {
     }
   | Estruct fld_se_list inst => {
       let f_fld_se (fld, se) => (fld, strexp_expmap f se);
-      Estruct (IList.map f_fld_se fld_se_list) inst
+      Estruct (List.map f::f_fld_se fld_se_list) inst
     }
   | Earray len idx_se_list inst => {
       let len' = fe len;
@@ -1145,7 +1147,7 @@ let rec strexp_expmap (f: (Exp.t, option inst) => (Exp.t, option inst)) => {
         let idx' = fe idx;
         (idx', strexp_expmap f se)
       };
-      Earray len' (IList.map f_idx_se idx_se_list) inst
+      Earray len' (List.map f::f_idx_se idx_se_list) inst
     }
 };
 
@@ -1161,7 +1163,7 @@ let hpred_expmap (f: (Exp.t, option inst) => (Exp.t, option inst)) => {
   | Hlseg k hpara root next shared => {
       let root' = fe root;
       let next' = fe next;
-      let shared' = IList.map fe shared;
+      let shared' = List.map f::fe shared;
       Hlseg k hpara root' next' shared'
     }
   | Hdllseg k hpara iF oB oF iB shared => {
@@ -1169,7 +1171,7 @@ let hpred_expmap (f: (Exp.t, option inst) => (Exp.t, option inst)) => {
       let oB' = fe oB;
       let oF' = fe oF;
       let iB' = fe iB;
-      let shared' = IList.map fe shared;
+      let shared' = List.map f::fe shared;
       Hdllseg k hpara iF' oB' oF' iB' shared'
     }
 };
@@ -1179,19 +1181,19 @@ let rec strexp_instmap (f: inst => inst) strexp =>
   | Eexp e inst => Eexp e (f inst)
   | Estruct fld_se_list inst =>
     let f_fld_se (fld, se) => (fld, strexp_instmap f se);
-    Estruct (IList.map f_fld_se fld_se_list) (f inst)
+    Estruct (List.map f::f_fld_se fld_se_list) (f inst)
   | Earray len idx_se_list inst =>
     let f_idx_se (idx, se) => (idx, strexp_instmap f se);
-    Earray len (IList.map f_idx_se idx_se_list) (f inst)
+    Earray len (List.map f::f_idx_se idx_se_list) (f inst)
   };
 
 let rec hpara_instmap (f: inst => inst) hpara => {
   ...hpara,
-  body: IList.map (hpred_instmap f) hpara.body
+  body: List.map f::(hpred_instmap f) hpara.body
 }
 and hpara_dll_instmap (f: inst => inst) hpara_dll => {
   ...hpara_dll,
-  body_dll: IList.map (hpred_instmap f) hpara_dll.body_dll
+  body_dll: List.map f::(hpred_instmap f) hpara_dll.body_dll
 }
 and hpred_instmap (fn: inst => inst) (hpred: hpred) :hpred =>
   switch hpred {
@@ -1203,16 +1205,16 @@ and hpred_instmap (fn: inst => inst) (hpred: hpred) :hpred =>
   };
 
 let hpred_list_expmap (f: (Exp.t, option inst) => (Exp.t, option inst)) (hlist: list hpred) =>
-  IList.map (hpred_expmap f) hlist;
+  List.map f::(hpred_expmap f) hlist;
 
 let atom_expmap (f: Exp.t => Exp.t) =>
   fun
   | Aeq e1 e2 => Aeq (f e1) (f e2)
   | Aneq e1 e2 => Aneq (f e1) (f e2)
-  | Apred a es => Apred a (IList.map f es)
-  | Anpred a es => Anpred a (IList.map f es);
+  | Apred a es => Apred a (List.map f::f es)
+  | Anpred a es => Anpred a (List.map f::f es);
 
-let atom_list_expmap (f: Exp.t => Exp.t) (alist: list atom) => IList.map (atom_expmap f) alist;
+let atom_list_expmap (f: Exp.t => Exp.t) (alist: list atom) => List.map f::(atom_expmap f) alist;
 
 
 /** {2 Function for computing lexps in sigma} */
@@ -1233,7 +1235,7 @@ let rec exp_fpv e =>
   switch (e: Exp.t) {
   | Var _ => []
   | Exn e => exp_fpv e
-  | Closure {captured_vars} => IList.map (fun (_, pvar, _) => pvar) captured_vars
+  | Closure {captured_vars} => List.map f::(fun (_, pvar, _) => pvar) captured_vars
   | Const _ => []
   | Cast _ e
   | UnOp _ e _ => exp_fpv e
@@ -1247,26 +1249,26 @@ let rec exp_fpv e =>
   | Sizeof _ _ _ => []
   };
 
-let exp_list_fpv el => List.concat (IList.map exp_fpv el);
+let exp_list_fpv el => List.concat_map f::exp_fpv el;
 
 let atom_fpv =
   fun
   | Aeq e1 e2 => exp_fpv e1 @ exp_fpv e2
   | Aneq e1 e2 => exp_fpv e1 @ exp_fpv e2
   | Apred _ es
-  | Anpred _ es => List.fold f::(fun fpv e => IList.rev_append (exp_fpv e) fpv) init::[] es;
+  | Anpred _ es => List.fold f::(fun fpv e => List.rev_append (exp_fpv e) fpv) init::[] es;
 
 let rec strexp_fpv =
   fun
   | Eexp e _ => exp_fpv e
   | Estruct fld_se_list _ => {
       let f (_, se) => strexp_fpv se;
-      List.concat (IList.map f fld_se_list)
+      List.concat_map f::f fld_se_list
     }
   | Earray len idx_se_list _ => {
       let fpv_in_len = exp_fpv len;
       let f (idx, se) => exp_fpv idx @ strexp_fpv se;
-      fpv_in_len @ List.concat (IList.map f idx_se_list)
+      fpv_in_len @ List.concat_map f::f idx_se_list
     };
 
 let rec hpred_fpv =
@@ -1287,7 +1289,7 @@ let rec hpred_fpv =
     analysis. In interprocedural analysis, we should consider the issue
     of scopes of program variables. */
 and hpara_fpv para => {
-  let fpvars_in_body = List.concat (IList.map hpred_fpv para.body);
+  let fpvars_in_body = List.concat_map f::hpred_fpv para.body;
   switch fpvars_in_body {
   | [] => []
   | _ => assert false
@@ -1298,7 +1300,7 @@ and hpara_fpv para => {
     analysis. In interprocedural analysis, we should consider the issue
     of scopes of program variables. */
 and hpara_dll_fpv para => {
-  let fpvars_in_body = List.concat (IList.map hpred_fpv para.body_dll);
+  let fpvars_in_body = List.concat_map f::hpred_fpv para.body_dll;
   switch fpvars_in_body {
   | [] => []
   | _ => assert false
@@ -1324,7 +1326,7 @@ let fav_is_empty fav =>
 
 
 /** Check whether a predicate holds for all elements. */
-let fav_for_all fav predicate => IList.for_all predicate !fav;
+let fav_for_all fav predicate => List.for_all f::predicate !fav;
 
 
 /** Check whether a predicate holds for some elements. */
@@ -1344,7 +1346,7 @@ let (++) fav id =>
 
 
 /** extend [fav] with ident list [idl] */
-let (+++) fav idl => IList.iter (fun id => fav ++ id) idl;
+let (+++) fav idl => List.iter f::(fun id => fav ++ id) idl;
 
 
 /** add identity lists to fav */
@@ -1354,7 +1356,7 @@ let ident_list_fav_add idl fav => fav +++ idl;
 /** Convert a list to a fav. */
 let fav_from_list l => {
   let fav = fav_new ();
-  let _ = IList.iter (fun id => fav ++ id) l;
+  let _ = List.iter f::(fun id => fav ++ id) l;
   fav
 };
 
@@ -1372,7 +1374,7 @@ let rec remove_duplicates_from_sorted special_equal =>
 
 /** Convert a [fav] to a list of identifiers while preserving the order
     that the identifiers were added to [fav]. */
-let fav_to_list fav => IList.rev !fav;
+let fav_to_list fav => List.rev !fav;
 
 
 /** Pretty print a fav. */
@@ -1380,7 +1382,7 @@ let pp_fav pe f fav => (Pp.seq (Ident.pp pe)) f (fav_to_list fav);
 
 
 /** Copy a [fav]. */
-let fav_copy fav => ref (IList.map (fun x => x) !fav);
+let fav_copy fav => ref (List.map f::(fun x => x) !fav);
 
 
 /** Turn a xxx_fav_add function into a xxx_fav function */
@@ -1426,7 +1428,7 @@ let rec exp_fav_add fav e =>
   switch (e: Exp.t) {
   | Var id => fav ++ id
   | Exn e => exp_fav_add fav e
-  | Closure {captured_vars} => IList.iter (fun (e, _, _) => exp_fav_add fav e) captured_vars
+  | Closure {captured_vars} => List.iter f::(fun (e, _, _) => exp_fav_add fav e) captured_vars
   | Const (Cint _ | Cfun _ | Cstr _ | Cfloat _ | Cclass _ | Cptr_to_fld _) => ()
   | Cast _ e
   | UnOp _ e _ => exp_fav_add fav e
@@ -1462,7 +1464,7 @@ let atom_fav_add fav =>
       exp_fav_add fav e2
     }
   | Apred _ es
-  | Anpred _ es => IList.iter (fun e => exp_fav_add fav e) es;
+  | Anpred _ es => List.iter f::(fun e => exp_fav_add fav e) es;
 
 let atom_fav = fav_imperative_to_functional atom_fav_add;
 
@@ -1473,11 +1475,11 @@ let atom_av_add = atom_fav_add;
 let rec strexp_fav_add fav =>
   fun
   | Eexp e _ => exp_fav_add fav e
-  | Estruct fld_se_list _ => IList.iter (fun (_, se) => strexp_fav_add fav se) fld_se_list
+  | Estruct fld_se_list _ => List.iter f::(fun (_, se) => strexp_fav_add fav se) fld_se_list
   | Earray len idx_se_list _ => {
       exp_fav_add fav len;
-      IList.iter
-        (
+      List.iter
+        f::(
           fun (e, se) => {
             exp_fav_add fav e;
             strexp_fav_add fav se
@@ -1496,14 +1498,14 @@ let hpred_fav_add fav =>
   | Hlseg _ _ e1 e2 elist => {
       exp_fav_add fav e1;
       exp_fav_add fav e2;
-      IList.iter (exp_fav_add fav) elist
+      List.iter f::(exp_fav_add fav) elist
     }
   | Hdllseg _ _ e1 e2 e3 e4 elist => {
       exp_fav_add fav e1;
       exp_fav_add fav e2;
       exp_fav_add fav e3;
       exp_fav_add fav e4;
-      IList.iter (exp_fav_add fav) elist
+      List.iter f::(exp_fav_add fav) elist
     };
 
 let hpred_fav = fav_imperative_to_functional hpred_fav_add;
@@ -1539,14 +1541,14 @@ let exp_av_add = exp_fav_add; /** Expressions do not bind variables */
 let strexp_av_add = strexp_fav_add; /** Structured expressions do not bind variables */
 
 let rec hpara_av_add fav para => {
-  IList.iter (hpred_av_add fav) para.body;
+  List.iter f::(hpred_av_add fav) para.body;
   fav ++ para.root;
   fav ++ para.next;
   fav +++ para.svars;
   fav +++ para.evars
 }
 and hpara_dll_av_add fav para => {
-  IList.iter (hpred_av_add fav) para.body_dll;
+  List.iter f::(hpred_av_add fav) para.body_dll;
   fav ++ para.cell;
   fav ++ para.blink;
   fav ++ para.flink;
@@ -1564,7 +1566,7 @@ and hpred_av_add fav =>
       hpara_av_add fav para;
       exp_av_add fav e1;
       exp_av_add fav e2;
-      IList.iter (exp_av_add fav) elist
+      List.iter f::(exp_av_add fav) elist
     }
   | Hdllseg _ para e1 e2 e3 e4 elist => {
       hpara_dll_av_add fav para;
@@ -1572,11 +1574,11 @@ and hpred_av_add fav =>
       exp_av_add fav e2;
       exp_av_add fav e3;
       exp_av_add fav e4;
-      IList.iter (exp_av_add fav) elist
+      List.iter f::(exp_av_add fav) elist
     };
 
 let hpara_shallow_av_add fav para => {
-  IList.iter (hpred_fav_add fav) para.body;
+  List.iter f::(hpred_fav_add fav) para.body;
   fav ++ para.root;
   fav ++ para.next;
   fav +++ para.svars;
@@ -1584,7 +1586,7 @@ let hpara_shallow_av_add fav para => {
 };
 
 let hpara_dll_shallow_av_add fav para => {
-  IList.iter (hpred_fav_add fav) para.body_dll;
+  List.iter f::(hpred_fav_add fav) para.body_dll;
   fav ++ para.cell;
   fav ++ para.blink;
   fav ++ para.flink;
@@ -1655,7 +1657,7 @@ let sub_check_duplicated_ids sub => {
     For all (id1, e1), (id2, e2) in the input list,
     if id1 = id2, then e1 = e2. */
 let sub_of_list sub => {
-  let sub' = IList.sort compare_ident_exp sub;
+  let sub' = List.sort cmp::compare_ident_exp sub;
   let sub'' = remove_duplicates_from_sorted equal_ident_exp sub';
   if (sub_check_duplicated_ids sub'') {
     assert false
@@ -1666,7 +1668,7 @@ let sub_of_list sub => {
 
 /** like sub_of_list, but allow duplicate ids and only keep the first occurrence */
 let sub_of_list_duplicates sub => {
-  let sub' = IList.sort compare_ident_exp sub;
+  let sub' = List.sort cmp::compare_ident_exp sub;
   let rec remove_duplicate_ids =
     fun
     | [(id1, e1), (id2, e2), ...l] =>
@@ -1746,29 +1748,29 @@ let sub_filter_pair = List.filter;
 
 /** [sub_range_partition filter sub] partitions [sub] according to
     whether range expressions satisfy [filter]. */
-let sub_range_partition filter (sub: subst) => IList.partition (fun (_, e) => filter e) sub;
+let sub_range_partition filter (sub: subst) => List.partition_tf f::(fun (_, e) => filter e) sub;
 
 
 /** [sub_domain_partition filter sub] partitions [sub] according to
     whether domain identifiers satisfy [filter]. */
-let sub_domain_partition filter (sub: subst) => IList.partition (fun (i, _) => filter i) sub;
+let sub_domain_partition filter (sub: subst) => List.partition_tf f::(fun (i, _) => filter i) sub;
 
 
 /** Return the list of identifiers in the domain of the substitution. */
-let sub_domain sub => IList.map fst sub;
+let sub_domain sub => List.map f::fst sub;
 
 
 /** Return the list of expressions in the range of the substitution. */
-let sub_range sub => IList.map snd sub;
+let sub_range sub => List.map f::snd sub;
 
 
 /** [sub_range_map f sub] applies [f] to the expressions in the range of [sub]. */
-let sub_range_map f sub => sub_of_list (IList.map (fun (i, e) => (i, f e)) sub);
+let sub_range_map f sub => sub_of_list (List.map f::(fun (i, e) => (i, f e)) sub);
 
 
 /** [sub_map f g sub] applies the renaming [f] to identifiers in the domain
     of [sub] and the substitution [g] to the expressions in the range of [sub]. */
-let sub_map f g sub => sub_of_list (IList.map (fun (i, e) => (f i, g e)) sub);
+let sub_map f g sub => sub_of_list (List.map f::(fun (i, e) => (f i, g e)) sub);
 
 let mem_sub id sub => List.exists f::(fun (id1, _) => Ident.equal id id1) sub;
 
@@ -1787,8 +1789,8 @@ let extend_sub sub id exp :option subst => {
 /** Free auxilary variables in the domain and range of the
     substitution. */
 let sub_fav_add fav (sub: subst) =>
-  IList.iter
-    (
+  List.iter
+    f::(
       fun (id, e) => {
         fav ++ id;
         exp_fav_add fav e
@@ -1796,7 +1798,7 @@ let sub_fav_add fav (sub: subst) =>
     )
     sub;
 
-let sub_fpv (sub: subst) => List.concat (IList.map (fun (_, e) => exp_fpv e) sub);
+let sub_fpv (sub: subst) => List.concat_map f::(fun (_, e) => exp_fpv e) sub;
 
 
 /** Substitutions do not contain binders */
@@ -2095,7 +2097,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
     }
   };
   let id_list_compare_structural ids1 ids2 exp_map => {
-    let n = Int.compare (IList.length ids1) (IList.length ids2);
+    let n = Int.compare (List.length ids1) (List.length ids2);
     if (n != 0) {
       (n, exp_map)
     } else {
@@ -2158,7 +2160,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
     )
   | (Call ret_id1 e1 arg_ts1 _ cf1, Call ret_id2 e2 arg_ts2 _ cf2) =>
     let args_compare_structural args1 args2 exp_map => {
-      let n = Int.compare (IList.length args1) (IList.length args2);
+      let n = Int.compare (List.length args1) (List.length args2);
       if (n != 0) {
         (n, exp_map)
       } else {
@@ -2200,7 +2202,7 @@ let compare_structural_instr instr1 instr2 exp_map => {
   | (Remove_temps temps1 _, Remove_temps temps2 _) =>
     id_list_compare_structural temps1 temps2 exp_map
   | (Declare_locals ptl1 _, Declare_locals ptl2 _) =>
-    let n = Int.compare (IList.length ptl1) (IList.length ptl2);
+    let n = Int.compare (List.length ptl1) (List.length ptl2);
     if (n != 0) {
       (n, exp_map)
     } else {
@@ -2245,7 +2247,7 @@ let rec strexp_replace_exp epairs =>
   | Eexp e inst => Eexp (exp_replace_exp epairs e) inst
   | Estruct fsel inst => {
       let f (fld, se) => (fld, strexp_replace_exp epairs se);
-      Estruct (IList.map f fsel) inst
+      Estruct (List.map f::f fsel) inst
     }
   | Earray len isel inst => {
       let len' = exp_replace_exp epairs len;
@@ -2253,7 +2255,7 @@ let rec strexp_replace_exp epairs =>
         let idx' = exp_replace_exp epairs idx;
         (idx', strexp_replace_exp epairs se)
       };
-      Earray len' (IList.map f isel) inst
+      Earray len' (List.map f::f isel) inst
     };
 
 let hpred_replace_exp epairs =>
@@ -2267,7 +2269,7 @@ let hpred_replace_exp epairs =>
   | Hlseg k para root next shared => {
       let root_repl = exp_replace_exp epairs root;
       let next_repl = exp_replace_exp epairs next;
-      let shared_repl = IList.map (exp_replace_exp epairs) shared;
+      let shared_repl = List.map f::(exp_replace_exp epairs) shared;
       Hlseg k para root_repl next_repl shared_repl
     }
   | Hdllseg k para e1 e2 e3 e4 shared => {
@@ -2275,7 +2277,7 @@ let hpred_replace_exp epairs =>
       let e2' = exp_replace_exp epairs e2;
       let e3' = exp_replace_exp epairs e3;
       let e4' = exp_replace_exp epairs e4;
-      let shared_repl = IList.map (exp_replace_exp epairs) shared;
+      let shared_repl = List.map f::(exp_replace_exp epairs) shared;
       Hdllseg k para e1' e2' e3' e4' shared_repl
     };
 
@@ -2305,7 +2307,7 @@ let exp_compact sh e =>
 let rec sexp_compact sh se =>
   switch se {
   | Eexp e inst => Eexp (exp_compact sh e) inst
-  | Estruct fsel inst => Estruct (IList.map (fun (f, se) => (f, sexp_compact sh se)) fsel) inst
+  | Estruct fsel inst => Estruct (List.map f::(fun (f, se) => (f, sexp_compact sh se)) fsel) inst
   | Earray _ => se
   };
 
@@ -2372,19 +2374,19 @@ let sigma_to_sigma_ne sigma :list (list atom, list hpred) =>
       | Hlseg Lseg_NE _ _ _ _
       | Hdllseg Lseg_NE _ _ _ _ _ _ =>
         let g (eqs, sigma) => (eqs, [hpred, ...sigma]);
-        IList.map g eqs_sigma_list
+        List.map f::g eqs_sigma_list
       | Hlseg Lseg_PE para e1 e2 el =>
         let g (eqs, sigma) => [
           ([Aeq e1 e2, ...eqs], sigma),
           (eqs, [Hlseg Lseg_NE para e1 e2 el, ...sigma])
         ];
-        List.concat (IList.map g eqs_sigma_list)
+        List.concat_map f::g eqs_sigma_list
       | Hdllseg Lseg_PE para_dll e1 e2 e3 e4 el =>
         let g (eqs, sigma) => [
           ([Aeq e1 e3, Aeq e2 e4, ...eqs], sigma),
           (eqs, [Hdllseg Lseg_NE para_dll e1 e2 e3 e4 el, ...sigma])
         ];
-        List.concat (IList.map g eqs_sigma_list)
+        List.concat_map f::g eqs_sigma_list
       };
     List.fold f::f init::[([], [])] sigma
   } else {
@@ -2399,24 +2401,24 @@ let sigma_to_sigma_ne sigma :list (list atom, list hpred) =>
 let hpara_instantiate para e1 e2 elist => {
   let subst_for_svars = {
     let g id e => (id, e);
-    try (IList.map2 g para.svars elist) {
+    try (List.map2_exn f::g para.svars elist) {
     | Invalid_argument _ => assert false
     }
   };
   let ids_evars = {
     let g _ => Ident.create_fresh Ident.kprimed;
-    IList.map g para.evars
+    List.map f::g para.evars
   };
   let subst_for_evars = {
     let g id id' => (id, Exp.Var id');
-    try (IList.map2 g para.evars ids_evars) {
+    try (List.map2_exn f::g para.evars ids_evars) {
     | Invalid_argument _ => assert false
     }
   };
   let subst = sub_of_list (
     [(para.root, e1), (para.next, e2), ...subst_for_svars] @ subst_for_evars
   );
-  (ids_evars, IList.map (hpred_sub subst) para.body)
+  (ids_evars, List.map f::(hpred_sub subst) para.body)
 };
 
 
@@ -2428,24 +2430,24 @@ let hpara_instantiate para e1 e2 elist => {
 let hpara_dll_instantiate (para: hpara_dll) cell blink flink elist => {
   let subst_for_svars = {
     let g id e => (id, e);
-    try (IList.map2 g para.svars_dll elist) {
+    try (List.map2_exn f::g para.svars_dll elist) {
     | Invalid_argument _ => assert false
     }
   };
   let ids_evars = {
     let g _ => Ident.create_fresh Ident.kprimed;
-    IList.map g para.evars_dll
+    List.map f::g para.evars_dll
   };
   let subst_for_evars = {
     let g id id' => (id, Exp.Var id');
-    try (IList.map2 g para.evars_dll ids_evars) {
+    try (List.map2_exn f::g para.evars_dll ids_evars) {
     | Invalid_argument _ => assert false
     }
   };
   let subst = sub_of_list (
     [(para.cell, cell), (para.blink, blink), (para.flink, flink), ...subst_for_svars] @ subst_for_evars
   );
-  (ids_evars, IList.map (hpred_sub subst) para.body_dll)
+  (ids_evars, List.map f::(hpred_sub subst) para.body_dll)
 };
 
 let custom_error = Pvar.mk_global (Mangled.from_string "INFER_CUSTOM_ERROR") SourceFile.empty;

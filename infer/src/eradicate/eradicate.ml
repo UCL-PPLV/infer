@@ -46,7 +46,7 @@ struct
   let update_summary proc_name proc_desc final_typestate_opt =
     match Specs.get_summary proc_name with
     | Some old_summ ->
-        let nodes = IList.map (fun n -> Procdesc.Node.get_id n) (Procdesc.get_nodes proc_desc) in
+        let nodes = List.map ~f:(fun n -> Procdesc.Node.get_id n) (Procdesc.get_nodes proc_desc) in
         let method_annotation =
           (Specs.pdesc_resolve_attributes proc_desc).ProcAttributes.method_annotation in
         let new_summ =
@@ -95,8 +95,8 @@ struct
       State.set_node exit_node;
 
       if checks.TypeCheck.check_ret_type <> [] then
-        IList.iter
-          (fun f -> f curr_pname curr_pdesc ret_type typ_found_opt loc)
+        List.iter
+          ~f:(fun f -> f curr_pname curr_pdesc ret_type typ_found_opt loc)
           checks.TypeCheck.check_ret_type;
       if checks.TypeCheck.eradicate then
         EradicateChecks.check_return_annotation tenv
@@ -132,7 +132,7 @@ struct
               L.d_strln "before:";
               d_typestate typestate;
               L.d_strln "after:";
-              IList.iter d_typestate typestates_succ
+              List.iter ~f:d_typestate typestates_succ
             end;
 
           NodePrinter.finish_session node;
@@ -217,8 +217,8 @@ struct
               | Some callee_pd ->
                   res := (callee_pn, callee_pd) :: !res
               | None -> () in
-            IList.iter do_called private_called in
-          IList.iter do_proc initializers;
+            List.iter ~f:do_called private_called in
+          List.iter ~f:do_proc initializers;
           !res in
 
         (* Get the initializers recursively called by computing a fixpoint.
@@ -229,7 +229,7 @@ struct
           let res = ref [] in
           let seen = ref Procname.Set.empty in
           let mark_seen (initializers : init list) : unit =
-            IList.iter (fun (pn, _) -> seen := Procname.Set.add pn !seen) initializers;
+            List.iter ~f:(fun (pn, _) -> seen := Procname.Set.add pn !seen) initializers;
             res := !res @ initializers in
 
           let rec fixpoint initializers_old =
@@ -250,8 +250,8 @@ struct
           | _, Some final_typestate ->
               final_typestates := (pname, final_typestate) :: !final_typestates
           | _, None -> () in
-        IList.iter get_final_typestate initializers_recursive;
-        IList.rev !final_typestates
+        List.iter ~f:get_final_typestate initializers_recursive;
+        List.rev !final_typestates
 
       let pname_and_pdescs_with f =
         let res = ref [] in
@@ -264,8 +264,8 @@ struct
             | Some pdesc ->
                 res := (pname, pdesc) :: !res
             | None -> () in
-        IList.iter do_proc (get_procs_in_file curr_pname);
-        IList.rev !res
+        List.iter ~f:do_proc (get_procs_in_file curr_pname);
+        List.rev !res
 
       let get_class pn = match pn with
         | Procname.Java pn_java ->

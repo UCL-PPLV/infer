@@ -50,12 +50,12 @@ module MockProcCfg = struct
       let node_id = id n in
       List.filter
         ~f:(fun (_, succs) ->
-           List.exists ~f:(fun node -> equal_id (id node) node_id) succs)
+            List.exists ~f:(fun node -> equal_id (id node) node_id) succs)
         t
-      |> IList.map fst
+      |> List.map ~f:fst
     with Not_found -> []
 
-  let nodes t = IList.map fst t
+  let nodes t = List.map ~f:fst t
 
   let normal_succs = succs
   let normal_preds = preds
@@ -78,7 +78,7 @@ let create_test test_graph expected_result _ =
     match S.pop q with
     | Some (n, _, q') ->
         pop_schedule_record (S.schedule_succs q' n) (n :: visited_acc)
-    | None -> IList.rev visited_acc in
+    | None -> List.rev visited_acc in
   let pp_diff fmt (exp, actual) =
     let pp_sched fmt l =
       F.pp_print_list ~pp_sep:F.pp_print_space (fun fmt i -> F.fprintf fmt "%d" i) fmt l in
@@ -133,6 +133,6 @@ let tests =
       (3, [7]);],
      [1; 2; 3; 7; 11; 10]);
   ]
-    |> IList.map
-      (fun (name, test, expected) -> name>::create_test test expected) in
+    |> List.map
+      ~f:(fun (name, test, expected) -> name>::create_test test expected) in
   "scheduler_suite">:::test_list

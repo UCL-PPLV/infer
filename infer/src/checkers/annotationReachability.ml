@@ -38,9 +38,9 @@ let src_snk_pairs () =
     ([Annotations.any_thread; Annotations.for_non_ui_thread], Annotations.ui_thread) ::
     ([Annotations.ui_thread; Annotations.for_ui_thread], Annotations.for_non_ui_thread) ::
     (parse_user_defined_specs Config.annotation_reachability) in
-  IList.map
-    (fun (src_annot_str_list, snk_annot_str) ->
-       IList.map annotation_of_str src_annot_str_list, annotation_of_str snk_annot_str)
+  List.map
+    ~f:(fun (src_annot_str_list, snk_annot_str) ->
+        List.map ~f:annotation_of_str src_annot_str_list, annotation_of_str snk_annot_str)
     specs
 
 module Domain = struct
@@ -175,7 +175,7 @@ let string_of_pname =
 
 let report_allocation_stack
     src_annot pname fst_call_loc trace stack_str constructor_pname call_loc =
-  let final_trace = IList.rev (update_trace call_loc trace) in
+  let final_trace = List.rev (update_trace call_loc trace) in
   let constr_str = string_of_pname constructor_pname in
   let description =
     Printf.sprintf
@@ -193,7 +193,7 @@ let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str sn
   if String.equal snk_annot dummy_constructor_annot
   then report_allocation_stack src_annot src_pname loc trace stack_str snk_pname call_loc
   else
-    let final_trace = IList.rev (update_trace call_loc trace) in
+    let final_trace = List.rev (update_trace call_loc trace) in
     let exp_pname_str = string_of_pname snk_pname in
     let description =
       Printf.sprintf
@@ -236,13 +236,13 @@ let report_call_stack end_of_stack lookup_next_calls report call_site calls =
               else ((p, loc) :: accu, Procname.Set.add p set))
           ~init:([], visited_pnames)
           next_calls in
-      IList.iter (loop fst_call_loc updated_visited (new_trace, new_stack_str)) unseen_pnames in
-  IList.iter
-    (fun fst_call_site ->
-       let fst_callee_pname = CallSite.pname fst_call_site in
-       let fst_call_loc = CallSite.loc fst_call_site in
-       let start_trace = update_trace (CallSite.loc call_site) [] in
-       loop fst_call_loc Procname.Set.empty (start_trace, "") (fst_callee_pname, fst_call_loc))
+      List.iter ~f:(loop fst_call_loc updated_visited (new_trace, new_stack_str)) unseen_pnames in
+  List.iter
+    ~f:(fun fst_call_site ->
+        let fst_callee_pname = CallSite.pname fst_call_site in
+        let fst_call_loc = CallSite.loc fst_call_site in
+        let start_trace = update_trace (CallSite.loc call_site) [] in
+        loop fst_call_loc Procname.Set.empty (start_trace, "") (fst_callee_pname, fst_call_loc))
     calls
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
@@ -385,8 +385,8 @@ module Interprocedural = struct
             (CallSite.make proc_name loc)
             calls in
       let calls = extract_calls_with_annot snk_annot call_map in
-      if not (Int.equal (IList.length calls) 0)
-      then IList.iter (report_src_snk_path calls) src_annot_list in
+      if not (Int.equal (List.length calls) 0)
+      then List.iter ~f:(report_src_snk_path calls) src_annot_list in
 
     let initial =
       let init_map =
@@ -402,7 +402,9 @@ module Interprocedural = struct
             ~make_extras:ProcData.make_empty_extras
             proc_data with
     | Some Domain.NonBottom (call_map, _) ->
-        IList.iter (report_src_snk_paths call_map) (src_snk_pairs ())
+        List.iter ~f:(report_src_snk_paths call_map) (src_snk_pairs ())
     | Some Domain.Bottom | None ->
         ()
 end
+
+let checker = Interprocedural.check_and_report

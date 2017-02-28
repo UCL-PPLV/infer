@@ -120,7 +120,7 @@ module Normal = struct
   include (DefaultNode : module type of DefaultNode with type t := node)
 
   let instrs = Procdesc.Node.get_instrs
-  let instr_ids n = IList.map (fun i -> i, None) (instrs n)
+  let instr_ids n = List.map ~f:(fun i -> i, None) (instrs n)
   let normal_succs _ n = Procdesc.Node.get_succs n
   let normal_preds _ n = Procdesc.Node.get_preds n
   (* prune away exceptional control flow *)
@@ -163,7 +163,7 @@ module Exceptional = struct
 
   let instrs = Procdesc.Node.get_instrs
 
-  let instr_ids n = IList.map (fun i -> i, None) (instrs n)
+  let instr_ids n = List.map ~f:(fun i -> i, None) (instrs n)
 
   let nodes (t, _) = Procdesc.get_nodes t
 
@@ -185,8 +185,8 @@ module Exceptional = struct
         normal_succs
     | exceptional_succs ->
         normal_succs @ exceptional_succs
-        |> IList.sort Procdesc.Node.compare
-        |> IList.remove_duplicates Procdesc.Node.compare
+        |> List.sort ~cmp:Procdesc.Node.compare
+        |> List.remove_consecutive_duplicates ~equal:Procdesc.Node.equal
 
   (** get all normal and exceptional predecessors of [n]. *)
   let preds t n =
@@ -196,8 +196,8 @@ module Exceptional = struct
         normal_preds
     | exceptional_preds ->
         normal_preds @ exceptional_preds
-        |> IList.sort Procdesc.Node.compare
-        |> IList.remove_duplicates Procdesc.Node.compare
+        |> List.sort ~cmp:Procdesc.Node.compare
+        |> List.remove_consecutive_duplicates ~equal:Procdesc.Node.equal
 
   let proc_desc (pdesc, _) = pdesc
   let start_node (pdesc, _) = Procdesc.get_start_node pdesc
@@ -208,8 +208,8 @@ end
 (** Wrapper that reverses the direction of the CFG *)
 module Backward (Base : S) = struct
   include Base
-  let instrs n = IList.rev (Base.instrs n)
-  let instr_ids n = IList.rev (Base.instr_ids n)
+  let instrs n = List.rev (Base.instrs n)
+  let instr_ids n = List.rev (Base.instr_ids n)
 
   let succs = Base.preds
   let preds = Base.succs
@@ -229,8 +229,8 @@ module OneInstrPerNode (Base : S with type node = Procdesc.Node.t
 
   (* keep the invariants before/after each instruction *)
   let instr_ids t =
-    IList.mapi
-      (fun i instr ->
+    List.mapi
+      ~f:(fun i instr ->
          let id = Procdesc.Node.get_id t, Instr_index i in
          instr, Some id)
       (instrs t)

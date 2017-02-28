@@ -192,7 +192,7 @@ module Debug = struct
           result in
         let dotty_of_tree cluster_id tree =
           let get_root tree = match tree with Tree (root, _) -> root in
-          let get_children tree = match tree with Tree (_, children) -> IList.rev children in
+          let get_children tree = match tree with Tree (_, children) -> List.rev children in
           (* shallow: emit dotty about root node and edges to its children *)
           let shallow_dotty_of_tree tree =
             let root_node = get_root tree in
@@ -217,7 +217,7 @@ module Debug = struct
                 | Stmt stmt -> Clang_ast_proj.get_stmt_kind_string stmt
                 | Decl decl -> Clang_ast_proj.get_decl_kind_string decl in
               let smart_string_of_formula phi =
-                let num_children = IList.length children in
+                let num_children = List.length children in
                 match phi with
                 | And _ when Int.equal num_children 2 -> "(...) AND (...)"
                 | Or _ when Int.equal num_children 2 -> "(...) OR (...)"
@@ -231,22 +231,22 @@ module Debug = struct
                 (Escape.escape_dotty (smart_string_of_formula root_node.content.phi)) in
             let edges =
               let buf = Buffer.create 16 in
-              IList.iter
-                (fun subtree -> Buffer.add_string buf ((edge (get_root subtree)) ^ "\n"))
+              List.iter
+                ~f:(fun subtree -> Buffer.add_string buf ((edge (get_root subtree)) ^ "\n"))
                 children;
               buffer_content buf in
             Printf.sprintf "%d [label=\"%s\" shape=box color=%s]\n%s\n"
               root_node.id label color edges in
           let rec traverse buf tree =
             Buffer.add_string buf (shallow_dotty_of_tree tree);
-            IList.iter (traverse buf) (get_children tree) in
+            List.iter ~f:(traverse buf) (get_children tree) in
           let buf = Buffer.create 16 in
           traverse buf tree;
           Printf.sprintf "subgraph cluster_%d {\n%s\n}" cluster_id (buffer_content buf) in
         let buf = Buffer.create 16 in
-        IList.iteri
-          (fun cluster_id tree -> Buffer.add_string buf ((dotty_of_tree cluster_id tree) ^ "\n"))
-          (IList.rev t.forest);
+        List.iteri
+          ~f:(fun cluster_id tree -> Buffer.add_string buf ((dotty_of_tree cluster_id tree) ^ "\n"))
+          (List.rev t.forest);
         Printf.sprintf "digraph CTL_Evaluation {\n%s\n}\n" (buffer_content buf)
     end
   end
@@ -255,7 +255,7 @@ end
 let print_checker c =
   Logging.out "\n-------------------- \n";
   Logging.out "\nChecker name: %s\n" c.name;
-  IList.iter (fun d -> (match d with
+  List.iter ~f:(fun d -> (match d with
       | CSet (clause_name, phi)
       | CLet (clause_name, phi) ->
           Logging.out "    %s=  \n    %a\n\n"
@@ -312,11 +312,11 @@ let get_successor_nodes an =
   match an with
   | Stmt st ->
       let _, succs_st = Clang_ast_proj.get_stmt_tuple st in
-      let succs = IList.map (fun s -> Stmt s) succs_st in
+      let succs = List.map ~f:(fun s -> Stmt s) succs_st in
       succs @ (get_decl_of_stmt st)
   | Decl dec ->
       (match Clang_ast_proj.get_decl_context_tuple dec with
-       | Some (decl_list, _) -> IList.map (fun d -> Decl d) decl_list
+       | Some (decl_list, _) -> List.map ~f:(fun d -> Decl d) decl_list
        | None -> [])
 
 let node_to_string an =

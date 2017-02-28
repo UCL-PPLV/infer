@@ -190,7 +190,7 @@ let node_map_iter f g => {
   let table = ref [];
   Procname.Hash.iter (fun node info => table := [(node, info), ...!table]) g.node_map;
   let cmp (n1: Procname.t, _) (n2: Procname.t, _) => Procname.compare n1 n2;
-  IList.iter (fun (n, info) => f n info) (IList.sort cmp !table)
+  List.iter f::(fun (n, info) => f n info) (List.sort cmp::cmp !table)
 };
 
 let get_nodes (g: t) => {
@@ -220,7 +220,7 @@ let get_calls (g: t) node => {
 
 let get_all_nodes (g: t) => {
   let nodes = Procname.Set.elements (get_nodes g);
-  IList.map (fun node => (node, get_calls g node)) nodes
+  List.map f::(fun node => (node, get_calls g node)) nodes
 };
 
 let get_nodes_and_calls (g: t) =>
@@ -306,7 +306,7 @@ let get_nodes_and_defined_children (g: t) => {
     )
     g;
   let nodes_list = Procname.Set.elements !nodes;
-  IList.map (fun n => (n, get_defined_children g n)) nodes_list
+  List.map f::(fun n => (n, get_defined_children g n)) nodes_list
 };
 
 
@@ -332,7 +332,7 @@ let get_nodes_and_edges (g: t) :nodes_and_edges => {
 let get_defined_nodes (g: t) => {
   let (nodes, _) = get_nodes_and_edges g;
   let get_node (node, _) => node;
-  IList.map get_node (List.filter f::(fun (_, defined) => defined) nodes)
+  List.map f::get_node (List.filter f::(fun (_, defined) => defined) nodes)
 };
 
 
@@ -344,43 +344,43 @@ let get_source (g: t) => g.source;
     undefined nodes become defined if at least one side is. */
 let extend cg_old cg_new => {
   let (nodes, edges) = get_nodes_and_edges cg_new;
-  IList.iter (fun (node, defined) => add_node cg_old node defined::defined) nodes;
-  IList.iter (fun (nfrom, nto) => add_edge cg_old nfrom nto) edges
+  List.iter f::(fun (node, defined) => add_node cg_old node defined::defined) nodes;
+  List.iter f::(fun (nfrom, nto) => add_edge cg_old nfrom nto) edges
 };
 
 
 /** Begin support for serialization */
-let callgraph_serializer: Serialization.serializer (SourceFile.t, nodes_and_edges) = Serialization.create_serializer Serialization.cg_key;
+let callgraph_serializer: Serialization.serializer (SourceFile.t, nodes_and_edges) = Serialization.create_serializer Serialization.Key.cg;
 
 
 /** Load a call graph from a file */
 let load_from_file (filename: DB.filename) :option t =>
-  switch (Serialization.from_file callgraph_serializer filename) {
+  switch (Serialization.read_from_file callgraph_serializer filename) {
   | None => None
   | Some (source, (nodes, edges)) =>
     let g = create (Some source);
-    IList.iter
-      (
+    List.iter
+      f::(
         fun (node, defined) =>
           if defined {
             add_defined_node g node
           }
       )
       nodes;
-    IList.iter (fun (nfrom, nto) => add_edge g nfrom nto) edges;
+    List.iter f::(fun (nfrom, nto) => add_edge g nfrom nto) edges;
     Some g
   };
 
 
 /** Save a call graph into a file */
 let store_to_file (filename: DB.filename) (call_graph: t) =>
-  Serialization.to_file
+  Serialization.write_to_file
     callgraph_serializer filename (call_graph.source, get_nodes_and_edges call_graph);
 
 let pp_graph_dotty get_specs (g: t) fmt => {
   let nodes_with_calls = get_all_nodes g;
   let num_specs n =>
-    try (IList.length (get_specs n)) {
+    try (List.length (get_specs n)) {
     | exn when SymOp.exn_not_failure exn => (-1)
     };
   let get_color (n, _) =>
@@ -406,8 +406,8 @@ let pp_graph_dotty get_specs (g: t) fmt => {
       calls.out_calls
       (num_specs n);
   F.fprintf fmt "digraph {@\n";
-  IList.iter
-    (
+  List.iter
+    f::(
       fun nc =>
         F.fprintf
           fmt
@@ -420,7 +420,7 @@ let pp_graph_dotty get_specs (g: t) fmt => {
           (get_shape nc)
     )
     nodes_with_calls;
-  IList.iter (fun (s, d) => F.fprintf fmt "%a -> %a@\n" pp_node s pp_node d) (get_edges g);
+  List.iter f::(fun (s, d) => F.fprintf fmt "%a -> %a@\n" pp_node s pp_node d) (get_edges g);
   F.fprintf fmt "}@."
 };
 

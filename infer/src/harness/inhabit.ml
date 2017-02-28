@@ -103,7 +103,7 @@ let rec inhabit_typ tenv typ cfg env =
                       let try_get_non_receiver_formals p =
                         get_non_receiver_formals (formals_from_name cfg p) in
                       Procname.is_constructor p
-                      && IList.for_all (fun (_, typ) ->
+                      && List.for_all ~f:(fun (_, typ) ->
                           not (TypSet.mem typ env.cur_inhabiting)
                         ) (try_get_non_receiver_formals p) in
                     List.filter ~f:(fun p -> is_suitable_constructor p) methods
@@ -214,7 +214,7 @@ let create_dummy_harness_filename harness_name =
 (* TODO (t3040429): fill this file up with Java-like code that matches the SIL *)
 let write_harness_to_file harness_instrs harness_file_name =
   let harness_file = Utils.create_outfile harness_file_name in
-  let pp_harness fmt = IList.iter (fun instr ->
+  let pp_harness fmt = List.iter ~f:(fun instr ->
       Format.fprintf fmt "%a\n" (Sil.pp_instr Pp.text) instr) harness_instrs in
   Utils.do_outf harness_file (fun outf ->
       pp_harness outf.fmt;
@@ -223,8 +223,8 @@ let write_harness_to_file harness_instrs harness_file_name =
 (** add the harness proc to the cg and make sure its callees can be looked up by sym execution *)
 let add_harness_to_cg harness_name harness_node cg =
   Cg.add_defined_node cg (Procname.Java harness_name);
-  IList.iter
-    (fun p -> Cg.add_edge cg (Procname.Java harness_name) p)
+  List.iter
+    ~f:(fun p -> Cg.add_edge cg (Procname.Java harness_name) p)
     (Procdesc.Node.get_callees harness_node)
 
 (** create and fill the appropriate nodes and add them to the harness cfg. also add the harness
@@ -242,7 +242,7 @@ let setup_harness_cfg harness_name env cg cfg =
     Cfg.create_proc_desc cfg proc_attributes in
   let harness_node =
     (* important to reverse the list or there will be scoping issues! *)
-    let instrs = (IList.rev env.instrs) in
+    let instrs = (List.rev env.instrs) in
     let nodekind = Procdesc.Node.Stmt_node "method_body" in
     Procdesc.create_node procdesc env.pc nodekind instrs in
   let (start_node, exit_node) =
@@ -260,7 +260,7 @@ let setup_harness_cfg harness_name env cg cfg =
 (** create a procedure named harness_name that calls each of the methods in trace in the specified
  * order with the specified receiver and add it to the execution environment *)
 let inhabit_trace tenv trace harness_name cg cfg =
-  if IList.length trace > 0 then
+  if List.length trace > 0 then
     let source_file = Cg.get_source cg in
     let harness_filename = create_dummy_harness_filename harness_name in
     let start_line = 1 in
@@ -279,5 +279,5 @@ let inhabit_trace tenv trace harness_name cg cfg =
         trace in
     try
       setup_harness_cfg harness_name env'' cg cfg;
-      write_harness_to_file (IList.rev env''.instrs) harness_filename
+      write_harness_to_file (List.rev env''.instrs) harness_filename
     with Not_found -> ()

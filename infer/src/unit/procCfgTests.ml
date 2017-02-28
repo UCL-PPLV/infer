@@ -48,7 +48,7 @@ let tests =
 
   let open OUnit2 in
   let cmp l1 l2 =
-    let sort = IList.sort Procdesc.Node.compare in
+    let sort = List.sort ~cmp:Procdesc.Node.compare in
     List.equal ~equal:Procdesc.Node.equal (sort l1) (sort l2) in
   let pp_diff fmt (actual, expected) =
     let pp_sep fmt _ = F.pp_print_char fmt ',' in
@@ -162,6 +162,6 @@ let tests =
     ("exn_normal_succs_n1", ProcCfg.Exceptional.normal_succs exceptional_proc_cfg n1, [n2]);
     ("exn_normal_preds_n2", ProcCfg.Exceptional.normal_preds exceptional_proc_cfg n2, [n1]);
   ]
-    |> IList.map (fun (name, test, expected) -> name>::create_test test expected) in
+    |> List.map ~f:(fun (name, test, expected) -> name>::create_test test expected) in
   let tests = instr_test :: graph_tests in
   "procCfgSuite">:::tests

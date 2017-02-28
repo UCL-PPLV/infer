@@ -30,8 +30,8 @@ let exes = [
 ]
 
 let exe_name =
-  let exe_to_name = IList.map (fun (n,a) -> (a,n)) exes in
-  fun exe -> IList.assoc equal_exe exe exe_to_name
+  let exe_to_name = List.map ~f:(fun (n,a) -> (a,n)) exes in
+  fun exe -> List.Assoc.find_exn ~equal:equal_exe exe_to_name exe
 
 let frontend_parse_modes = CLOpt.(Infer [Clang])
 
@@ -262,8 +262,8 @@ let real_exe_name =
   Utils.realpath Sys.executable_name
 
 let current_exe =
-  try IList.assoc String.equal (Filename.basename real_exe_name) exes
-  with Not_found -> Driver
+  List.Assoc.find ~equal:String.equal exes (Filename.basename real_exe_name) |>
+  Option.value ~default:Driver
 
 let bin_dir =
   Filename.dirname real_exe_name
@@ -445,7 +445,7 @@ and (
     let mk_option analyzer_name =
       let long = Printf.sprintf "%s-%s" analyzer_name suffix in
       let deprecated =
-        IList.map (Printf.sprintf "%s_%s" analyzer_name) deprecated_suffix in
+        List.map ~f:(Printf.sprintf "%s_%s" analyzer_name) deprecated_suffix in
       (* empty doc to hide the options from --help since there are many redundant ones *)
       CLOpt.mk_string_list ~deprecated ~long ~meta "" in
     ignore (
@@ -454,7 +454,7 @@ and (
         ~parse_mode:CLOpt.(Infer [Driver;Print])
         help
     );
-    IList.map (fun (name, analyzer) -> (analyzer, mk_option name)) string_to_analyzer in
+    List.map ~f:(fun (name, analyzer) -> (analyzer, mk_option name)) string_to_analyzer in
   (
     mk_filtering_options
       ~suffix:"blacklist-files-containing"
@@ -1200,7 +1200,7 @@ and specs_library =
           failwith ("Failing because path " ^ path ^ " is not absolute") in
       match Utils.read_file (resolve fname) with
       | Some pathlist ->
-          IList.iter validate_path pathlist;
+          List.iter ~f:validate_path pathlist;
           pathlist
       | None -> failwith ("cannot read file " ^ fname ^ " from cwd " ^ (Sys.getcwd ()))
     in
@@ -1386,9 +1386,9 @@ let post_parsing_initialization () =
          Unix.close_process_full chans |> ignore;
          err in
        let analyzer_name =
-         IList.assoc equal_analyzer
-           (match !analyzer with Some a -> a | None -> Infer)
-           (IList.map (fun (n,a) -> (a,n)) string_to_analyzer) in
+         List.Assoc.find_exn ~equal:equal_analyzer
+           (List.map ~f:(fun (n,a) -> (a,n)) string_to_analyzer)
+           (match !analyzer with Some a -> a | None -> Infer) in
        let infer_version = Version.commit in
        F.eprintf "%s/%s/%s@." javac_version analyzer_name infer_version
    | `Javac ->
@@ -1459,13 +1459,13 @@ and abs_struct = !abs_struct
 and abs_val_orig = !abs_val
 and allow_specs_cleanup = !allow_specs_cleanup
 and analysis_path_regex_whitelist_options =
-  IList.map (fun (a, b) -> (a, !b)) analysis_path_regex_whitelist_options
+  List.map ~f:(fun (a, b) -> (a, !b)) analysis_path_regex_whitelist_options
 and analysis_path_regex_blacklist_options =
-  IList.map (fun (a, b) -> (a, !b)) analysis_path_regex_blacklist_options
+  List.map ~f:(fun (a, b) -> (a, !b)) analysis_path_regex_blacklist_options
 and analysis_blacklist_files_containing_options =
-  IList.map (fun (a, b) -> (a, !b)) analysis_blacklist_files_containing_options
+  List.map ~f:(fun (a, b) -> (a, !b)) analysis_blacklist_files_containing_options
 and analysis_suppress_errors_options =
-  IList.map (fun (a, b) -> (a, !b)) analysis_suppress_errors_options
+  List.map ~f:(fun (a, b) -> (a, !b)) analysis_suppress_errors_options
 and analysis_stops = !analysis_stops
 and angelic_execution = !angelic_execution
 and annotation_reachability = !annotation_reachability
@@ -1622,13 +1622,13 @@ and xml_specs = !xml_specs
 (** Configuration values derived from command-line options *)
 
 let analysis_path_regex_whitelist analyzer =
-  IList.assoc equal_analyzer analyzer analysis_path_regex_whitelist_options
+  List.Assoc.find_exn ~equal:equal_analyzer analysis_path_regex_whitelist_options analyzer
 and analysis_path_regex_blacklist analyzer =
-  IList.assoc equal_analyzer analyzer analysis_path_regex_blacklist_options
+  List.Assoc.find_exn ~equal:equal_analyzer analysis_path_regex_blacklist_options analyzer
 and analysis_blacklist_files_containing analyzer =
-  IList.assoc equal_analyzer analyzer analysis_blacklist_files_containing_options
+  List.Assoc.find_exn ~equal:equal_analyzer analysis_blacklist_files_containing_options analyzer
 and analysis_suppress_errors analyzer =
-  IList.assoc equal_analyzer analyzer analysis_suppress_errors_options
+  List.Assoc.find_exn ~equal:equal_analyzer analysis_suppress_errors_options analyzer
 
 let checkers_enabled = not (eradicate || crashcontext || quandary || threadsafety || permsafety)
 
@@ -1678,7 +1678,7 @@ let specs_library =
                   let dest_file = dest_dir ^/ (Filename.basename entry.filename) in
                   if Filename.check_suffix entry.filename specs_files_suffix
                   then Zip.copy_entry_to_file zip_channel entry dest_file in
-                IList.iter extract_entry entries;
+                List.iter ~f:extract_entry entries;
                 Zip.close_in zip_channel in
         extract_specs key_dir filename;
         key_dir :: specs_library in

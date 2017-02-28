@@ -264,7 +264,7 @@ let add_type_from_decl_ref type_ptr_to_sil_type tenv decl_ref_opt fail_if_not_fo
 let add_type_from_decl_ref_list type_ptr_to_sil_type tenv decl_ref_list =
   let add_elem dr =
     ignore (type_ptr_to_sil_type tenv (`DeclPtr dr.Clang_ast_t.dr_decl_pointer)) in
-  IList.iter add_elem decl_ref_list
+  List.iter ~f:add_elem decl_ref_list
 
 let get_function_decl_with_body decl_ptr =
   let open Clang_ast_t in
@@ -335,10 +335,10 @@ let get_tag ast_item =
 let rec generate_key_stmt stmt =
   let tag_str = string_of_int (get_tag stmt) in
   let _, stmts = Clang_ast_proj.get_stmt_tuple stmt in
-  let tags = IList.map generate_key_stmt stmts in
+  let tags = List.map ~f:generate_key_stmt stmts in
   let buffer = Buffer.create 16 in
   let tags = tag_str :: tags in
-  IList.iter (fun tag -> Buffer.add_string buffer tag) tags;
+  List.iter ~f:(fun tag -> Buffer.add_string buffer tag) tags;
   Buffer.contents buffer
 
 (* Generates a key for a declaration based on its name and the declaration tag. *)
@@ -418,6 +418,8 @@ let rec is_objc_if_descendant ?(blacklist = default_blacklist) if_decl ancestors
 
 let rec type_ptr_to_objc_interface type_ptr =
   let typ_opt = get_desugared_type type_ptr in
+  ctype_to_objc_interface typ_opt
+and ctype_to_objc_interface typ_opt =
   match (typ_opt : Clang_ast_t.c_type option) with
   | Some ObjCInterfaceType (_, decl_ptr) -> get_decl decl_ptr
   | Some ObjCObjectPointerType (_, (inner_qual_type: Clang_ast_t.qual_type)) ->
@@ -427,6 +429,20 @@ let rec type_ptr_to_objc_interface type_ptr =
       type_ptr_to_objc_interface function_type_info.Clang_ast_t.fti_return_type
   | _ -> None
 
+let type_ptr_is_typedef_named type_ptr (type_name: string): bool =
+  let is_decl_name_match decl_opt =
+    let tuple_opt = match decl_opt with
+      | Some decl -> Clang_ast_proj.get_named_decl_tuple decl
+      | _ -> None in
+    match tuple_opt with
+    | Some (_, ni) ->
+        String.equal type_name ni.ni_name
+    | _ -> false in
+  match get_type type_ptr with
+  | Some TypedefType (_, tti) ->
+      let decl_opt = get_decl tti.tti_decl_ptr in
+      is_decl_name_match decl_opt
+  | _ -> false
 
 let if_decl_to_di_pointer_opt if_decl =
   match if_decl with

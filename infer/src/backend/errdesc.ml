@@ -20,7 +20,7 @@ let vector_class = ["std"; "vector"]
 
 let is_one_of_classes class_name classes =
   List.exists ~f:(fun wrapper_class ->
-      IList.for_all (fun wrapper_class_substring ->
+      List.for_all ~f:(fun wrapper_class_substring ->
           String.is_substring ~substring:wrapper_class_substring class_name) wrapper_class)
     classes
 
@@ -78,7 +78,7 @@ let find_in_node_or_preds start_node f_node_instr =
       begin
         visited := Procdesc.NodeSet.add node !visited;
         let instrs = Procdesc.Node.get_instrs node in
-        match List.find_map ~f:(f_node_instr node) (IList.rev instrs) with
+        match List.find_map ~f:(f_node_instr node) (List.rev instrs) with
         | Some res -> Some res
         | None -> List.find_map ~f:find (Procdesc.Node.get_preds node)
       end in
@@ -139,7 +139,7 @@ let find_normal_variable_funcall
     (id: Ident.t): (Exp.t * (Exp.t list) * Location.t * CallFlags.t) option =
   let find_declaration _ = function
     | Sil.Call (Some (id0, _), fun_exp, args, loc, call_flags) when Ident.equal id id0 ->
-        Some (fun_exp, IList.map fst args, loc, call_flags)
+        Some (fun_exp, List.map ~f:fst args, loc, call_flags)
     | _ -> None in
   let res = find_in_node_or_preds node find_declaration in
   if verbose && is_none res
@@ -172,7 +172,7 @@ let find_struct_by_value_assignment node pvar =
     let find_instr node = function
       | Sil.Call (_, Const (Cfun pname), args, loc, cf) ->
           begin
-            match IList.last args with
+            match List.last args with
             | Some (Exp.Lvar last_arg, _) when Pvar.equal pvar last_arg ->
                 Some (node, pname, loc, cf)
             | _ ->
@@ -234,12 +234,12 @@ let rec _find_normal_variable_load tenv (seen : Exp.Set.t) node id : DExp.t opti
 
         let fun_dexp = DExp.Dconst (Const.Cfun pname) in
         let args_dexp =
-          let args_dexpo = IList.map (fun (e, _) -> _exp_rv_dexp tenv seen node e) args in
+          let args_dexpo = List.map ~f:(fun (e, _) -> _exp_rv_dexp tenv seen node e) args in
           if List.exists ~f:is_none args_dexpo
           then []
           else
             let unNone = function Some x -> x | None -> assert false in
-            IList.map unNone args_dexpo in
+            List.map ~f:unNone args_dexpo in
         Some (DExp.Dretcall (fun_dexp, args_dexp, loc, call_flags))
     | Sil.Store (Exp.Lvar pvar, _, Exp.Var id0, _)
       when is_infer && Ident.equal id id0 && not (Pvar.is_frontend_tmp pvar) ->
@@ -299,11 +299,11 @@ and _exp_lv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
                   match find_normal_variable_funcall node' id with
                   | Some (fun_exp, eargs, loc, call_flags) ->
                       let fun_dexpo = _exp_rv_dexp tenv seen node' fun_exp in
-                      let blame_args = IList.map (_exp_rv_dexp tenv seen node') eargs in
+                      let blame_args = List.map ~f:(_exp_rv_dexp tenv seen node') eargs in
                       if List.exists ~f:is_none (fun_dexpo:: blame_args) then None
                       else
                         let unNone = function Some x -> x | None -> assert false in
-                        let args = IList.map unNone blame_args in
+                        let args = List.map ~f:unNone blame_args in
                         Some (DExp.Dfcall (unNone fun_dexpo, args, loc, call_flags))
                   | None ->
                       _exp_rv_dexp tenv seen node' (Exp.Var id)
@@ -447,9 +447,9 @@ let leak_from_list_abstraction hpred prop =
     | Some texp' when Exp.equal texp texp' -> found := true
     | _ -> () in
   let check_hpara texp _ hpara =
-    IList.iter (check_hpred texp) hpara.Sil.body in
+    List.iter ~f:(check_hpred texp) hpara.Sil.body in
   let check_hpara_dll texp _ hpara =
-    IList.iter (check_hpred texp) hpara.Sil.body_dll in
+    List.iter ~f:(check_hpred texp) hpara.Sil.body_dll in
   match hpred_type hpred with
   | Some texp ->
       let env = Prop.prop_pred_env prop in
@@ -473,7 +473,7 @@ let find_typ_without_ptr prop pvar =
     | Sil.Hpointsto (e, _, te) when Exp.equal e (Exp.Lvar pvar) ->
         res := Some te
     | _ -> () in
-  IList.iter do_hpred prop.Prop.sigma;
+  List.iter ~f:do_hpred prop.Prop.sigma;
   !res
 
 (** Produce a description of a leak by looking at the current state.
@@ -537,7 +537,7 @@ let explain_leak tenv hpred prop alloc_att_opt bucket =
                  Pvar.d pvar; L.d_ln ());
               [pvar]
           | _ -> [] in
-        let nullify_pvars = List.concat (IList.map get_nullify node_instrs) in
+        let nullify_pvars = List.concat_map ~f:get_nullify node_instrs in
         let nullify_pvars_notmp =
           List.filter ~f:(fun pvar -> not (Pvar.is_frontend_tmp pvar)) nullify_pvars in
         value_str_from_pvars_vpath nullify_pvars_notmp vpath
@@ -575,7 +575,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
   let rec find sigma_acc sigma_todo exp =
     let do_fse res sigma_acc' sigma_todo' lexp texp (f, se) = match se with
       | Sil.Eexp (e, _) when Exp.equal exp e ->
-          let sigma' = (IList.rev_append sigma_acc' sigma_todo') in
+          let sigma' = (List.rev_append sigma_acc' sigma_todo') in
           (match lexp with
            | Exp.Lvar pv ->
                let typo = match texp with
@@ -601,7 +601,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
       | _ -> () in
     let do_sexp sigma_acc' sigma_todo' lexp sexp texp = match sexp with
       | Sil.Eexp (e, _) when Exp.equal exp e ->
-          let sigma' = (IList.rev_append sigma_acc' sigma_todo') in
+          let sigma' = (List.rev_append sigma_acc' sigma_todo') in
           (match lexp with
            | Exp.Lvar pv when not (Pvar.is_frontend_tmp pv) ->
                let typo = match texp with
@@ -620,7 +620,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
                None, None)
       | Sil.Estruct (fsel, _) ->
           let res = ref (None, None) in
-          IList.iter (do_fse res sigma_acc' sigma_todo' lexp texp) fsel;
+          List.iter ~f:(do_fse res sigma_acc' sigma_todo' lexp texp) fsel;
           !res
       | _ ->
           None, None in
@@ -673,7 +673,7 @@ let explain_dexp_access prop dexp is_nullable =
       | Sil.Hpointsto (e', se, _) when Exp.equal e e' ->
           res := Some se
       | _ -> () in
-    IList.iter do_hpred sigma;
+    List.iter ~f:do_hpred sigma;
     !res in
   let rec lookup_fld fsel f = match fsel with
     | [] ->
@@ -964,7 +964,7 @@ let explain_nth_function_parameter tenv use_buckets deref_str prop n pvar_off =
   match State.get_instr () with
   | Some Sil.Call (_, _, args, _, _) ->
       (try
-         let arg = fst (IList.nth args (n - 1)) in
+         let arg = fst (List.nth_exn args (n - 1)) in
          let dexp_opt = exp_rv_dexp tenv node arg in
          let dexp_opt' = match dexp_opt with
            | Some de ->
@@ -981,12 +981,12 @@ let find_with_exp prop exp =
     if not (Pvar.is_abduced pv) && not (Pvar.is_this pv) then
       res := Some (pv, Fpvar) in
   let found_in_struct pv fld_lst = (* found_in_pvar has priority *)
-    if is_none !res then res := Some (pv, Fstruct (IList.rev fld_lst)) in
+    if is_none !res then res := Some (pv, Fstruct (List.rev fld_lst)) in
   let rec search_struct pv fld_lst = function
     | Sil.Eexp (e, _) ->
         if Exp.equal e exp then found_in_struct pv fld_lst
     | Sil.Estruct (fsel, _) ->
-        IList.iter (fun (f, se) -> search_struct pv (f:: fld_lst) se) fsel
+        List.iter ~f:(fun (f, se) -> search_struct pv (f:: fld_lst) se) fsel
     | _ -> () in
   let do_hpred_pointed_by_pvar pv e = function
     | Sil.Hpointsto(e1, se, _) ->
@@ -995,9 +995,9 @@ let find_with_exp prop exp =
   let do_hpred = function
     | Sil.Hpointsto(Exp.Lvar pv, Sil.Eexp (e, _), _) ->
         if Exp.equal e exp then found_in_pvar pv
-        else IList.iter (do_hpred_pointed_by_pvar pv e) prop.Prop.sigma
+        else List.iter ~f:(do_hpred_pointed_by_pvar pv e) prop.Prop.sigma
     | _ -> () in
-  IList.iter do_hpred prop.Prop.sigma;
+  List.iter ~f:do_hpred prop.Prop.sigma;
   !res
 
 (** return a description explaining value [exp] in [prop] in terms of a source expression

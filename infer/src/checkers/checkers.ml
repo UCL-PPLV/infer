@@ -55,15 +55,6 @@ module ST = struct
           end
     end
 
-  let store_summary proc_name =
-    Option.iter
-      ~f:(fun summary ->
-          let summary' =
-            { summary with
-              Specs.timestamp = summary.Specs.timestamp + 1 } in
-          try Specs.store_summary proc_name summary' with Sys_error s -> L.err "%s@." s)
-      (Specs.get_summary proc_name)
-
   let report_error tenv
       proc_name
       proc_desc
@@ -182,7 +173,7 @@ let callback_check_access { Callbacks.tenv; proc_desc } =
 
 (** Report all field accesses and method calls of a class. *)
 let callback_check_cluster_access exe_env all_procs get_proc_desc _ =
-  IList.iter (fun proc_name ->
+  List.iter ~f:(fun proc_name ->
       match get_proc_desc proc_name with
       | Some proc_desc ->
           let tenv = Exe_env.get_tenv exe_env proc_name in
@@ -260,11 +251,11 @@ let callback_check_write_to_parcel_java
       | _ -> assert false in
 
     let r_call_descs =
-      IList.map node_to_call_desc
+      List.map ~f:node_to_call_desc
         (List.filter ~f:is_serialization_node
            (Procdesc.get_sliced_slope r_desc is_serialization_node)) in
     let w_call_descs =
-      IList.map node_to_call_desc
+      List.map ~f:node_to_call_desc
         (List.filter ~f:is_serialization_node
            (Procdesc.get_sliced_slope w_desc is_serialization_node)) in
 
@@ -333,7 +324,7 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
         | Typ.Tptr (Typ.Tstruct _, _) -> true
         | _ -> false in
       List.filter ~f:is_class_type formals in
-    IList.map fst class_formals) in
+    List.map ~f:fst class_formals) in
   let equal_formal_param exp formal_name = match exp with
     | Exp.Lvar pvar ->
         let name = Pvar.get_name pvar in
@@ -363,7 +354,7 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
   let summary_checks_of_formals () =
     let formal_names = Lazy.force class_formal_names in
     let nchecks = Exp.Set.cardinal !checks_to_formals in
-    let nformals = IList.length formal_names in
+    let nformals = List.length formal_names in
     if (nchecks > 0 && nchecks < nformals) then
       begin
         let was_not_found formal_name =
@@ -427,7 +418,7 @@ let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; p
         (fun n -> Procdesc.Node.get_sliced_preds n has_instr) in
     let instrs =
       List.concat
-        (IList.map (fun n -> IList.rev (Procdesc.Node.get_instrs n)) preds) in
+        (List.map ~f:(fun n -> List.rev (Procdesc.Node.get_instrs n)) preds) in
     List.find ~f instrs in
 
   let get_return_const proc_name' =
@@ -471,7 +462,7 @@ let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; p
                  | _ -> "?")
              | _ -> "?" in
            let arg_name (exp, _) = find_const exp in
-           Some (IList.map arg_name args)
+           Some (List.map ~f:arg_name args)
          with _ -> None)
     | _ -> None in
 
@@ -542,7 +533,7 @@ let callback_check_field_access { Callbacks.proc_desc } =
         do_read_exp e
     | Sil.Call (_, e, etl, _, _) ->
         do_read_exp e;
-        IList.iter (fun (e, _) -> do_read_exp e) etl
+        List.iter ~f:(fun (e, _) -> do_read_exp e) etl
     | Sil.Nullify _
     | Sil.Abstract _
     | Sil.Remove_temps _

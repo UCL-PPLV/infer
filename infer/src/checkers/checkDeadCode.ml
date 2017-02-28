@@ -69,7 +69,7 @@ let report_error tenv description pn pd loc =
 (** Check the final state at the end of the analysis. *)
 let check_final_state tenv proc_name proc_desc final_s =
   let proc_nodes = Procdesc.get_nodes proc_desc in
-  let tot_nodes = IList.length proc_nodes in
+  let tot_nodes = List.length proc_nodes in
   let tot_visited = State.num_visited final_s in
   if verbose then L.stderr "TOT nodes: %d (visited: %n)@." tot_nodes tot_visited;
   if tot_nodes <> tot_visited then
@@ -87,7 +87,7 @@ let check_final_state tenv proc_name proc_desc final_s =
           | _ -> true in
         if report
         then report_error tenv description proc_name proc_desc loc in
-      IList.iter do_node not_visited
+      List.iter ~f:do_node not_visited
     end
 
 (** Simple check for dead code. *)

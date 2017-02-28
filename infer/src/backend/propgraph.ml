@@ -73,8 +73,12 @@ let get_subl footprint_part g =
 let edge_from_source g n footprint_part is_hpred =
   let edges =
     if is_hpred
-    then IList.map (fun hpred -> Ehpred hpred ) (get_sigma footprint_part g)
-    else IList.map (fun a -> Eatom a) (get_pi footprint_part g) @ IList.map (fun entry -> Esub_entry entry) (get_subl footprint_part g) in
+    then
+      List.map ~f:(fun hpred -> Ehpred hpred ) (get_sigma footprint_part g)
+    else
+      List.map
+        ~f:(fun a -> Eatom a) (get_pi footprint_part g) @
+      List.map ~f:(fun entry -> Esub_entry entry) (get_subl footprint_part g) in
   let starts_from hpred =
     match edge_get_source hpred with
     | Some e -> Exp.equal n e
@@ -95,7 +99,9 @@ let get_edges footprint_part g =
   let hpreds = get_sigma footprint_part g in
   let atoms = get_pi footprint_part g in
   let subst_entries = get_subl footprint_part g in
-  IList.map (fun hpred -> Ehpred hpred) hpreds @ IList.map (fun a -> Eatom a) atoms @ IList.map (fun entry -> Esub_entry entry) subst_entries
+  List.map ~f:(fun hpred -> Ehpred hpred) hpreds @
+  List.map ~f:(fun a -> Eatom a) atoms @
+  List.map ~f:(fun entry -> Esub_entry entry) subst_entries
 
 let edge_equal e1 e2 = match e1, e2 with
   | Ehpred hp1, Ehpred hp2 -> Sil.equal_hpred hp1 hp2
@@ -111,7 +117,7 @@ let contains_edge (footprint_part: bool) (g: t) (e: edge) =
 (** [iter_edges footprint_part f g] iterates function [f] on the edges in [g] in the same order as returned by [get_edges];
     if [footprint_part] is true the edges are taken from the footprint part. *)
 let iter_edges footprint_part f g =
-  IList.iter f (get_edges footprint_part g)  (* For now simple iterator; later might use a specific traversal *)
+  List.iter ~f (get_edges footprint_part g)
 
 (** Graph annotated with the differences w.r.t. a previous graph *)
 type diff =
@@ -165,7 +171,7 @@ let compute_edge_diff (oldedge: edge) (newedge: edge) : Obj.t list = match olded
       compute_exp_diff e1 e2
   | Eatom (Sil.Apred (_, es1)), Eatom (Sil.Apred (_, es2))
   | Eatom (Sil.Anpred (_, es1)), Eatom (Sil.Anpred (_, es2)) ->
-      List.concat (try IList.map2 compute_exp_diff es1 es2 with IList.Fail -> [])
+      List.concat (try List.map2_exn ~f:compute_exp_diff es1 es2 with Invalid_argument _ -> [])
   | Esub_entry (_, e1), Esub_entry (_, e2) ->
       compute_exp_diff e1 e2
   | _ -> [Obj.repr newedge]
@@ -190,7 +196,7 @@ let compute_diff default_color oldgraph newgraph : diff =
           )
         | None ->
             () in
-    IList.iter build_changed newedges;
+    List.iter ~f:build_changed newedges;
     let colormap (o: Obj.t) =
       if List.exists ~f:(fun x -> phys_equal x o) !changed then Pp.Red
       else default_color in
@@ -212,7 +218,7 @@ let diff_get_colormap footprint_part diff =
     If !Config.pring_using_diff is true, print the diff w.r.t. the given prop,
     extracting its local stack vars if the boolean is true. *)
 let pp_proplist pe0 s (base_prop, extract_stack) f plist =
-  let num = IList.length plist in
+  let num = List.length plist in
   let base_stack = fst (Prop.sigma_get_stack_nonstack true base_prop.Prop.sigma) in
   let add_base_stack prop =
     if extract_stack then Prop.set prop ~sigma:(base_stack @ prop.Prop.sigma)

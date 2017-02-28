@@ -148,13 +148,13 @@ let visited_str vis =
   let s = ref "" in
   let lines = ref Int.Set.empty in
   let do_one (_, ns) =
-    (* if IList.length ns > 1 then
+    (* if List.length ns > 1 then
        begin
        let ss = ref "" in
-       IList.iter (fun n -> ss := !ss ^ " " ^ string_of_int n) ns;
+       List.iter ~f:(fun n -> ss := !ss ^ " " ^ string_of_int n) ns;
        L.err "Node %d has lines %s@." node !ss
        end; *)
-    IList.iter (fun n -> lines := Int.Set.add !lines n) ns in
+    List.iter ~f:(fun n -> lines := Int.Set.add !lines n) ns in
   Visitedset.iter do_one vis;
   Int.Set.iter ~f:(fun n -> s := !s ^ " " ^ string_of_int n) !lines;
   !s
@@ -184,12 +184,13 @@ end = struct
   let spec_fav tenv (spec: Prop.normal spec) : Sil.fav =
     let fav = Sil.fav_new () in
     Jprop.fav_add_dfs tenv fav spec.pre;
-    IList.iter (fun (p, _) -> Prop.prop_fav_add_dfs tenv fav p) spec.posts;
+    List.iter ~f:(fun (p, _) -> Prop.prop_fav_add_dfs tenv fav p) spec.posts;
     fav
 
   let spec_sub tenv sub spec =
     { pre = Jprop.normalize tenv (Jprop.jprop_sub sub spec.pre);
-      posts = IList.map (fun (p, path) -> (Prop.normalize tenv (Prop.prop_sub sub p), path)) spec.posts;
+      posts =
+        List.map ~f:(fun (p, path) -> (Prop.normalize tenv (Prop.prop_sub sub p), path)) spec.posts;
       visited = spec.visited }
 
   (** Convert spec into normal form w.r.t. variable renaming *)
@@ -198,14 +199,14 @@ end = struct
     let idlist = Sil.fav_to_list fav in
     let count = ref 0 in
     let sub =
-      Sil.sub_of_list (IList.map (fun id ->
+      Sil.sub_of_list (List.map ~f:(fun id ->
           incr count; (id, Exp.Var (Ident.create_normal Ident.name_spec !count))) idlist) in
     spec_sub tenv sub spec
 
   (** Return a compact representation of the spec *)
   let compact sh spec =
     let pre = Jprop.compact sh spec.pre in
-    let posts = IList.map (fun (p, path) -> (Prop.prop_compact sh p, path)) spec.posts in
+    let posts = List.map ~f:(fun (p, path) -> (Prop.prop_compact sh p, path)) spec.posts in
     { pre = pre; posts = posts; visited = spec.visited }
 
   (** Erase join info from pre of spec *)
@@ -247,7 +248,7 @@ module CallStats = struct (** module for tracing stats of function calls *)
   let init calls =
     let hash = PnameLocHash.create 1 in
     let do_call pn_loc = PnameLocHash.add hash pn_loc empty_trace in
-    IList.iter do_call calls;
+    List.iter ~f:do_call calls;
     hash
 
   let trace t proc_name loc res in_footprint =
@@ -270,7 +271,7 @@ module CallStats = struct (** module for tracing stats of function calls *)
   let pp_trace fmt tr =
     Pp.seq
       (fun fmt x -> F.fprintf fmt "%s" (tr_elem_str x))
-      fmt (IList.rev tr)
+      fmt (List.rev tr)
 
   let iter f t =
     let elems = ref [] in
@@ -278,8 +279,8 @@ module CallStats = struct (** module for tracing stats of function calls *)
     let sorted_elems =
       let compare (pname_loc1, _) (pname_loc2, _) =
         [%compare: Procname.t * Location.t] pname_loc1 pname_loc2 in
-      IList.sort compare !elems in
-    IList.iter (fun (x, tr) -> f x tr) sorted_elems
+      List.sort ~cmp:compare !elems in
+    List.iter ~f:(fun (x, tr) -> f x tr) sorted_elems
 
 (*
   let pp fmt t =
@@ -373,7 +374,7 @@ let pp_spec pe num_opt fmt spec =
     | Some (n, tot) -> Format.sprintf "%d of %d [nvisited:%s]" n tot (visited_str spec.visited) in
   let pre = Jprop.to_prop spec.pre in
   let pe_post = Prop.prop_update_obj_sub pe pre in
-  let post_list = IList.map fst spec.posts in
+  let post_list = List.map ~f:fst spec.posts in
   match pe.Pp.kind with
   | TEXT ->
       F.fprintf fmt "--------------------------- %s ---------------------------@\n" num_str;
@@ -393,19 +394,19 @@ let pp_spec pe num_opt fmt spec =
 let d_spec (spec: 'a spec) = L.add_print_action (L.PTspec, Obj.repr spec)
 
 let pp_specs pe fmt specs =
-  let total = IList.length specs in
+  let total = List.length specs in
   let cnt = ref 0 in
   match pe.Pp.kind with
   | TEXT ->
-      IList.iter (fun spec -> incr cnt;
-                   F.fprintf fmt "%a" (pp_spec pe (Some (!cnt, total))) spec) specs
+      List.iter ~f:(fun spec -> incr cnt;
+                     F.fprintf fmt "%a" (pp_spec pe (Some (!cnt, total))) spec) specs
   | HTML ->
-      IList.iter (fun spec -> incr cnt;
-                   F.fprintf fmt "%a<br>@\n" (pp_spec pe (Some (!cnt, total))) spec) specs
+      List.iter ~f:(fun spec -> incr cnt;
+                     F.fprintf fmt "%a<br>@\n" (pp_spec pe (Some (!cnt, total))) spec) specs
   | LATEX ->
-      IList.iter (fun spec -> incr cnt;
-                   F.fprintf fmt "\\subsection*{Spec %d of %d}@\n\\(%a\\)@\n"
-                     !cnt total (pp_spec pe None) spec) specs
+      List.iter ~f:(fun spec -> incr cnt;
+                     F.fprintf fmt "\\subsection*{Spec %d of %d}@\n\\(%a\\)@\n"
+                       !cnt total (pp_spec pe None) spec) specs
 
 let describe_timestamp summary =
   ("Timestamp", Printf.sprintf "%d" summary.timestamp)
@@ -419,11 +420,11 @@ let describe_phase summary =
 (** Return the signature of a procedure declaration as a string *)
 let get_signature summary =
   let s = ref "" in
-  IList.iter
-    (fun (p, typ) ->
-       let pp f = F.fprintf f "%a %a" (Typ.pp_full Pp.text) typ Mangled.pp p in
-       let decl = F.asprintf "%t" pp in
-       s := if String.equal !s "" then decl else !s ^ ", " ^ decl)
+  List.iter
+    ~f:(fun (p, typ) ->
+        let pp f = F.fprintf f "%a %a" (Typ.pp_full Pp.text) typ Mangled.pp p in
+        let decl = F.asprintf "%t" pp in
+        s := if String.equal !s "" then decl else !s ^ ", " ^ decl)
     summary.attributes.ProcAttributes.formals;
   let pp f =
     F.fprintf
@@ -511,7 +512,7 @@ let payload_compact sh payload =
   match payload.preposts with
   | Some specs ->
       { payload with
-        preposts = Some (IList.map (NormSpec.compact sh) specs);
+        preposts = Some (List.map ~f:(NormSpec.compact sh) specs);
       }
   | None ->
       payload
@@ -537,8 +538,8 @@ let res_dir_specs_filename pname =
 
 (** paths to the .specs file for the given procedure in the current spec libraries *)
 let specs_library_filenames pname =
-  IList.map
-    (fun specs_dir -> DB.filename_from_string (Filename.concat specs_dir (specs_filename pname)))
+  List.map
+    ~f:(fun specs_dir -> DB.filename_from_string (Filename.concat specs_dir (specs_filename pname)))
     Config.specs_library
 
 (** paths to the .specs file for the given procedure in the models folder *)
@@ -549,7 +550,7 @@ let summary_exists_in_models pname =
   Sys.file_exists (DB.filename_to_string (specs_models_filename pname)) = `Yes
 
 let summary_serializer : summary Serialization.serializer =
-  Serialization.create_serializer Serialization.summary_key
+  Serialization.create_serializer Serialization.Key.summary
 
 (** Save summary for the procedure into the spec database *)
 let store_summary pname (summ1: summary) =
@@ -562,11 +563,11 @@ let store_summary pname (summ1: summary) =
       { summ2 with
         stats = { summ1.stats with stats_time = 0.0} } in
   add_summary pname summ3 (* Make sure the summary in memory is identical to the saved one *);
-  Serialization.to_file summary_serializer (res_dir_specs_filename pname) summ3
+  Serialization.write_to_file summary_serializer (res_dir_specs_filename pname) summ3
 
 (** Load procedure summary from the given file *)
 let load_summary specs_file =
-  Serialization.from_file summary_serializer specs_file
+  Serialization.read_from_file summary_serializer specs_file
 
 
 (** Load procedure summary for the given procedure name and update spec table *)
@@ -672,6 +673,9 @@ let is_active summary =
 
 let get_timestamp summary =
   summary.timestamp
+
+let increment_timestamp summary =
+  { summary with timestamp = summary.timestamp + 1 }
 
 let get_proc_name summary =
   summary.attributes.ProcAttributes.proc_name

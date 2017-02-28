@@ -40,14 +40,14 @@ let get proc_attributes : t =
           []
       | _ :: _, [] ->
           assert false in
-    IList.rev (extract (IList.rev ial0) (IList.rev formals)) in
+    List.rev (extract (List.rev ial0) (List.rev formals)) in
   let annotated_signature = { ret = (ia, ret_type); params = natl } in
   annotated_signature
 
 let param_is_nullable pvar ann_sig =
   List.exists
     ~f:(fun (param, annot, _) ->
-       Mangled.equal param (Pvar.get_name pvar) && Annotations.ia_is_nullable annot)
+        Mangled.equal param (Pvar.get_name pvar) && Annotations.ia_is_nullable annot)
     ann_sig.params
 
 let pp proc_name fmt annotated_signature =
@@ -86,7 +86,7 @@ let is_anonymous_inner_class_wrapper ann_sig proc_name =
       PatternMatch.type_is_object t in
   Procname.java_is_anonymous_inner_class proc_name
   && check_ret ann_sig.ret
-  && IList.for_all check_param ann_sig.params
+  && List.for_all ~f:check_param ann_sig.params
   && !x_param_found
 
 let mk_ann_str s = { Annot.class_name = s; parameters = [] }

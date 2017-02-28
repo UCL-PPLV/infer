@@ -37,7 +37,7 @@ let add_or_replace_check_changed tenv check_attribute_change prop atom0 =
   match atom0 with
   | Sil.Apred (att0, ((_ :: _) as exps0)) | Anpred (att0, ((_ :: _) as exps0)) ->
       let pairs =
-        IList.map (fun e -> (e, Prop.exp_normalize_prop tenv prop e)) exps0 in
+        List.map ~f:(fun e -> (e, Prop.exp_normalize_prop tenv prop e)) exps0 in
       let _, nexp = List.hd_exn pairs in (* len exps0 > 0 by match *)
       let natom = Sil.atom_replace_exp pairs atom0 in
       let atom_map = function
@@ -64,8 +64,8 @@ let add_or_replace tenv prop atom =
 let get_all (prop: 'a Prop.t) =
   let res = ref [] in
   let do_atom a = if is_pred a then res := a :: !res in
-  IList.iter do_atom prop.pi;
-  IList.rev !res
+  List.iter ~f:do_atom prop.pi;
+  List.rev !res
 
 (** Get all the attributes of the prop *)
 let get_for_symb prop att =
@@ -263,17 +263,17 @@ let deallocate_stack_vars tenv (p: 'a Prop.t) pvars =
     | Sil.Hpointsto (Exp.Lvar v, _, _) ->
         List.exists ~f:(Pvar.equal v) pvars
     | _ -> false in
-  let sigma_stack, sigma_other = IList.partition filter p.sigma in
+  let sigma_stack, sigma_other = List.partition_tf ~f:filter p.sigma in
   let fresh_address_vars = ref [] in (* fresh vars substituted for the address of stack vars *)
   let stack_vars_address_in_post = ref [] in (* stack vars whose address is still present *)
-  let exp_replace = IList.map (function
+  let exp_replace = List.map ~f:(function
       | Sil.Hpointsto (Exp.Lvar v, _, _) ->
           let freshv = Ident.create_fresh Ident.kprimed in
           fresh_address_vars := (v, freshv) :: !fresh_address_vars;
           (Exp.Lvar v, Exp.Var freshv)
       | _ -> assert false) sigma_stack in
-  let pi1 = IList.map (fun (id, e) -> Sil.Aeq (Exp.Var id, e)) (Sil.sub_to_list p.sub) in
-  let pi = IList.map (Sil.atom_replace_exp exp_replace) (p.pi @ pi1) in
+  let pi1 = List.map ~f:(fun (id, e) -> Sil.Aeq (Exp.Var id, e)) (Sil.sub_to_list p.sub) in
+  let pi = List.map ~f:(Sil.atom_replace_exp exp_replace) (p.pi @ pi1) in
   let p' =
     Prop.normalize tenv
       (Prop.set p
@@ -289,7 +289,7 @@ let deallocate_stack_vars tenv (p: 'a Prop.t) pvars =
           let pred = Sil.Apred (Adangling DAaddr_stack_var, [Exp.Var freshv]) in
           res := add_or_replace tenv !res pred
         end in
-    IList.iter do_var !fresh_address_vars;
+    List.iter ~f:do_var !fresh_address_vars;
     !res in
   !stack_vars_address_in_post, List.fold ~f:(Prop.prop_atom_and tenv) ~init:p'' pi
 

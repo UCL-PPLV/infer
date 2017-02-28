@@ -27,6 +27,20 @@ let is_owned access_path attribute_map =
   ThreadSafetyDomain.AttributeMapDomain.has_attribute
     access_path ThreadSafetyDomain.Attribute.unconditionally_owned attribute_map
 
+let container_write_string = "__CONTAINERWRITE__"
+
+let is_container_write_str str =
+  String.is_substring ~substring:container_write_string str
+
+let strip_container_write str =
+  String.substr_replace_first str ~pattern:container_write_string ~with_:""
+
+let is_container_write_sink (sink:ThreadSafetyDomain.TraceElem.t) =
+  let access_list = snd (ThreadSafetyDomain.TraceElem.kind sink) in
+  match List.rev access_list with
+  |  FieldAccess (fn) :: _  -> is_container_write_str (Ident.fieldname_to_string fn)
+  | _ -> false
+
 module TransferFunctions (CFG : ProcCfg.S) = struct
   module CFG = CFG
   module Domain = ThreadSafetyDomain
@@ -150,7 +164,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     (* we don't want to warn on writes to the field if it is (a) thread-confined, or (b) volatile *)
     let is_safe_write access_path tenv =
       let is_thread_safe_write accesses tenv =
-        match IList.rev accesses,
+        match List.rev accesses,
               AccessPath.Raw.get_typ (AccessPath.Raw.truncate access_path) tenv with
         | AccessPath.FieldAccess fieldname :: _,
           Some (Typ.Tstruct typename | Tptr (Tstruct typename, _)) ->
@@ -271,7 +285,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
           (* create a dummy write that represents mutating the contents of the container *)
           let open Domain in
           let dummy_fieldname =
-            Ident.create_fieldname (Mangled.from_string (Procname.get_method callee_pname)) 0 in
+            Ident.create_fieldname
+              (Mangled.from_string
+                 (container_write_string ^ (Procname.get_method callee_pname))) 0 in
           let dummy_access_exp = Exp.Lfield (receiver_exp, dummy_fieldname, receiver_typ) in
           let callee_conditional_writes =
             match AccessPath.of_lhs_exp dummy_access_exp receiver_typ ~f_resolve_id with
@@ -653,8 +669,29 @@ let runs_on_ui_thread proc_desc =
                   Annotations.ia_is_on_unbind annot ||
                   Annotations.ia_is_on_unmount annot)
 
-let is_assumed_thread_safe pdesc =
-  Annotations.pdesc_return_annot_ends_with pdesc Annotations.assume_thread_safe
+
+(* returns true if the annotation is @ThreadSafe or @ThreadSafe(enableChecks = true) *)
+let is_thread_safe item_annot =
+  let f (annot, _) =
+    Annotations.annot_ends_with annot Annotations.thread_safe &&
+    match annot.Annot.parameters with
+    | ["false"] -> false
+    | _ -> true in
+  List.exists ~f item_annot
+
+(* returns true if the annotation is @ThreadSafe(enableChecks = false) *)
+let is_assumed_thread_safe item_annot =
+  let f (annot, _) =
+    Annotations.annot_ends_with annot Annotations.thread_safe &&
+    match annot.Annot.parameters with
+    | ["false"] -> true
+    | _ -> false in
+  List.exists ~f item_annot
+
+let pdesc_is_assumed_thread_safe pdesc tenv =
+  is_assumed_thread_safe (Annotations.pdesc_get_return_annot pdesc) ||
+  PatternMatch.check_current_class_attributes
+    is_assumed_thread_safe tenv (Procdesc.get_proc_name pdesc)
 
 (* return true if we should compute a summary for the procedure. if this returns false, we won't
    analyze the procedure or report any warnings on it *)
@@ -668,7 +705,7 @@ let should_analyze_proc pdesc tenv =
   not (is_call_to_immutable_collection_method tenv pn) &&
   not (runs_on_ui_thread pdesc) &&
   not (is_thread_confined_method tenv pdesc) &&
-  not (is_assumed_thread_safe pdesc)
+  not (pdesc_is_assumed_thread_safe pdesc tenv)
 
 (* return true if we should report on unprotected accesses during the procedure *)
 let should_report_on_proc (_, _, proc_name, proc_desc) =
@@ -746,8 +783,9 @@ let get_current_class_and_threadsafe_superclasses tenv pname =
   match pname with
   | Procname.Java java_pname ->
       let current_class = Procname.java_get_class_type_name java_pname in
-      let thread_safe_annotated_classes = PatternMatch.find_superclasses_with_attributes
-          Annotations.ia_is_thread_safe tenv current_class
+      let thread_safe_annotated_classes =
+        PatternMatch.find_superclasses_with_attributes
+          is_thread_safe tenv current_class
       in
       Some (current_class,thread_safe_annotated_classes)
   | _ -> None  (*shouldn't happen*)
@@ -839,9 +877,15 @@ let de_dup trace =
   ThreadSafetyDomain.PathDomain.update_sinks trace de_duped_sinks
 
 (*A helper function used in the error reporting*)
-let pp_accesses_sink fmt sink =
-  let _, accesses = ThreadSafetyDomain.PathDomain.Sink.kind sink in
-  AccessPath.pp_access_list fmt accesses
+let pp_accesses_sink fmt ~is_write_access sink =
+  let access_path = ThreadSafetyDomain.PathDomain.Sink.kind sink in
+  let container_write = is_write_access && is_container_write_sink sink in
+  F.fprintf fmt
+    (if container_write then "container %a" else "%a")
+    AccessPath.pp_access_list (if container_write then
+                                 snd (AccessPath.Raw.truncate access_path)
+                               else snd access_path
+                              )
 
 
 (* trace is really a set of accesses*)
@@ -859,9 +903,10 @@ let report_thread_safety_violations ( _, tenv, pname, pdesc) make_description tr
     let initial_sink_site = PathDomain.Sink.call_site initial_sink in
     let final_sink_site = PathDomain.Sink.call_site final_sink in
     let desc_of_sink sink =
-      if CallSite.equal (PathDomain.Sink.call_site sink) final_sink_site
+      if
+        CallSite.equal (PathDomain.Sink.call_site sink) final_sink_site
       then
-        Format.asprintf "access to %a" pp_accesses_sink sink
+        Format.asprintf "access to %a" (pp_accesses_sink ~is_write_access:true) sink
       else
         Format.asprintf
           "call to %a" Procname.pp (CallSite.pname (PathDomain.Sink.call_site sink)) in
@@ -873,38 +918,39 @@ let report_thread_safety_violations ( _, tenv, pname, pdesc) make_description tr
     let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
     Reporting.log_error pname ~loc ~ltr exn in
 
-  IList.iter
-    report_one_path
+  List.iter
+    ~f:report_one_path
     (PathDomain.get_reportable_sink_paths (de_dup trace) ~trace_of_pname)
 
 
 let make_unprotected_write_description
     tenv pname final_sink_site initial_sink_site final_sink _ =
   Format.asprintf
-    "Unprotected write. Public method %a%s writes to field %a outside of synchronization.%s"
+    "Unprotected write. Public method %a%s %s %a outside of synchronization.%s"
     Procname.pp pname
     (if CallSite.equal final_sink_site initial_sink_site then "" else " indirectly")
-    pp_accesses_sink final_sink
+    (if is_container_write_sink final_sink then "mutates"  else "writes to field")
+    (pp_accesses_sink ~is_write_access:true) final_sink
     (calculate_addendum_message tenv pname)
 
 let make_read_write_race_description tenv pname final_sink_site initial_sink_site final_sink tab =
-  let conflicting_proc_envs = IList.map
-      fst
+  let conflicting_proc_envs = List.map
+      ~f:fst
       (collect_conflicting_writes final_sink tab) in
-  let conflicting_proc_names = IList.map
-      (fun (_,_,proc_name,_) -> proc_name)
+  let conflicting_proc_names = List.map
+      ~f:(fun (_,_,proc_name,_) -> proc_name)
       conflicting_proc_envs in
   let pp_proc_name_list fmt proc_names =
     let pp_sep _ _ = F.fprintf fmt " , " in
     F.pp_print_list ~pp_sep Procname.pp fmt proc_names in
   let conflicts_description =
     Format.asprintf "Potentially races with writes in method%s %a."
-      (if IList.length conflicting_proc_names > 1 then "s" else "")
+      (if List.length conflicting_proc_names > 1 then "s" else "")
       pp_proc_name_list conflicting_proc_names in
   Format.asprintf "Read/Write race. Public method %a%s reads from field %a. %s %s"
     Procname.pp pname
     (if CallSite.equal final_sink_site initial_sink_site then "" else " indirectly")
-    pp_accesses_sink final_sink
+    (pp_accesses_sink ~is_write_access:false) final_sink
     conflicts_description
     (calculate_addendum_message tenv pname)
 
@@ -957,7 +1003,7 @@ let process_results_table file_env tab =
          Annotations.pname_has_return_annot
            pn
            ~attrs_of_pname:Specs.proc_resolve_attributes
-           Annotations.ia_is_thread_safe_method)
+           is_thread_safe)
       tenv
       (Procdesc.get_proc_name pdesc) in
   let should_report ((_, tenv, _, pdesc) as proc_env) =

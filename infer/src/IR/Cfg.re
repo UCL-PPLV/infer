@@ -44,7 +44,7 @@ let create_proc_desc cfg (proc_attributes: ProcAttributes.t) => {
 /** Iterate over all the nodes in the cfg */
 let iter_all_nodes sorted::sorted=false f cfg => {
   let do_proc_desc _ (pdesc: Procdesc.t) =>
-    IList.iter (fun node => f pdesc node) (Procdesc.get_nodes pdesc);
+    List.iter f::(fun node => f pdesc node) (Procdesc.get_nodes pdesc);
   if (not sorted) {
     iter_proc_desc cfg do_proc_desc
   } else {
@@ -58,8 +58,8 @@ let iter_all_nodes sorted::sorted=false f cfg => {
       )
       cfg.proc_desc_table
       [] |>
-    IList.sort [%compare : (Procdesc.t, Procdesc.Node.t)] |>
-    IList.iter (fun (d, n) => f d n)
+    List.sort cmp::[%compare : (Procdesc.t, Procdesc.Node.t)] |>
+    List.iter f::(fun (d, n) => f d n)
   }
 };
 
@@ -88,19 +88,19 @@ let check_cfg_connectedness cfg => {
     let succs = Procdesc.Node.get_succs n;
     let preds = Procdesc.Node.get_preds n;
     switch (Procdesc.Node.get_kind n) {
-    | Procdesc.Node.Start_node _ => Int.equal (IList.length succs) 0 || IList.length preds > 0
-    | Procdesc.Node.Exit_node _ => IList.length succs > 0 || Int.equal (IList.length preds) 0
+    | Procdesc.Node.Start_node _ => Int.equal (List.length succs) 0 || List.length preds > 0
+    | Procdesc.Node.Exit_node _ => List.length succs > 0 || Int.equal (List.length preds) 0
     | Procdesc.Node.Stmt_node _
     | Procdesc.Node.Prune_node _
     | Procdesc.Node.Skip_node _ =>
-      Int.equal (IList.length succs) 0 || Int.equal (IList.length preds) 0
+      Int.equal (List.length succs) 0 || Int.equal (List.length preds) 0
     | Procdesc.Node.Join_node =>
       /* Join node has the exception that it may be without predecessors
          and pointing to an exit node */
       /* if the if brances end with a return */
       switch succs {
       | [n'] when is_exit_node n' => false
-      | _ => Int.equal (IList.length preds) 0
+      | _ => Int.equal (List.length preds) 0
       }
     }
   };
@@ -115,17 +115,17 @@ let check_cfg_connectedness cfg => {
     }
   };
   let pdescs = get_all_procs cfg;
-  IList.iter do_pdesc pdescs
+  List.iter f::do_pdesc pdescs
 };
 
 
 /** Serializer for control flow graphs */
-let cfg_serializer: Serialization.serializer cfg = Serialization.create_serializer Serialization.cfg_key;
+let cfg_serializer: Serialization.serializer cfg = Serialization.create_serializer Serialization.Key.cfg;
 
 
 /** Load a cfg from a file */
 let load_cfg_from_file (filename: DB.filename) :option cfg =>
-  Serialization.from_file cfg_serializer filename;
+  Serialization.read_from_file cfg_serializer filename;
 
 
 /** Save the .attr files for the procedures in the cfg. */
@@ -144,7 +144,7 @@ let save_attributes source_file cfg => {
     };
     AttributesTable.store_attributes attributes'
   };
-  IList.iter save_proc (get_all_procs cfg)
+  List.iter f::save_proc (get_all_procs cfg)
 };
 
 
@@ -183,17 +183,17 @@ let inline_synthetic_method ret_id etl pdesc loc_call :option Sil.instr => {
     | (Sil.Call ret_id' (Exp.Const (Const.Cfun pn)) etl' _ cf, _, _)
         when
           Bool.equal (is_none ret_id) (is_none ret_id') &&
-          Int.equal (IList.length etl') (IList.length etl) =>
+          Int.equal (List.length etl') (List.length etl) =>
       let instr' = Sil.Call ret_id (Exp.Const (Const.Cfun pn)) etl loc_call cf;
       found instr instr'
     | (Sil.Call ret_id' (Exp.Const (Const.Cfun pn)) etl' _ cf, _, _)
         when
           Bool.equal (is_none ret_id) (is_none ret_id') &&
-          Int.equal (IList.length etl' + 1) (IList.length etl) =>
+          Int.equal (List.length etl' + 1) (List.length etl) =>
       let etl1 =
-        switch (IList.rev etl) {
+        switch (List.rev etl) {
         /* remove last element */
-        | [_, ...l] => IList.rev l
+        | [_, ...l] => List.rev l
         | [] => assert false
         };
       let instr' = Sil.Call ret_id (Exp.Const (Const.Cfun pn)) etl1 loc_call cf;
@@ -234,7 +234,7 @@ let proc_inline_synthetic_methods cfg pdesc :unit => {
         instr'
       };
     let instrs = Procdesc.Node.get_instrs node;
-    let instrs' = IList.map do_instr instrs;
+    let instrs' = List.map f::do_instr instrs;
     if !modified {
       Procdesc.Node.replace_instrs node instrs'
     }
@@ -295,7 +295,7 @@ let mark_unchanged_pdescs cfg_new cfg_old => {
           equal::Procdesc.Node.equal (Procdesc.Node.get_preds n1) (Procdesc.Node.get_preds n2) &&
         instrs_eq (Procdesc.Node.get_instrs n1) (Procdesc.Node.get_instrs n2)
       };
-      try (IList.for_all2 node_eq n1s n2s) {
+      try (List.for_all2_exn f::node_eq n1s n2s) {
       | Invalid_argument _ => false
       }
     };
@@ -336,7 +336,7 @@ let store_cfg_to_file source_file::source_file (filename: DB.filename) (cfg: cfg
      OndemandCapture module relies on it - it uses existance of .cfg file as a barrier to make
      sure that all attributes were written to disk (but not necessarily flushed) */
   save_attributes source_file cfg;
-  Serialization.to_file cfg_serializer filename cfg
+  Serialization.write_to_file cfg_serializer filename cfg
 };
 
 
@@ -399,7 +399,7 @@ let specialize_types_proc callee_pdesc resolved_pdesc substitutions => {
           Procname.replace_class
             (Procname.Java callee_pname_java) (Typename.name redirected_typename);
         let args = {
-          let other_args = IList.map (fun (exp, typ) => (convert_exp exp, typ)) origin_args;
+          let other_args = List.map f::(fun (exp, typ) => (convert_exp exp, typ)) origin_args;
           [(Exp.Var id, redirected_typ), ...other_args]
         };
         let call_instr =
@@ -407,7 +407,7 @@ let specialize_types_proc callee_pdesc resolved_pdesc substitutions => {
         [call_instr, ...instrs]
       }
     | Sil.Call return_ids origin_call_exp origin_args loc call_flags => {
-        let converted_args = IList.map (fun (exp, typ) => (convert_exp exp, typ)) origin_args;
+        let converted_args = List.map f::(fun (exp, typ) => (convert_exp exp, typ)) origin_args;
         let call_instr =
           Sil.Call return_ids (convert_exp origin_call_exp) converted_args loc call_flags;
         [call_instr, ...instrs]
@@ -417,7 +417,7 @@ let specialize_types_proc callee_pdesc resolved_pdesc substitutions => {
         ...instrs
       ]
     | Sil.Declare_locals typed_vars loc => {
-        let new_typed_vars = IList.map (fun (pvar, typ) => (convert_pvar pvar, typ)) typed_vars;
+        let new_typed_vars = List.map f::(fun (pvar, typ) => (convert_pvar pvar, typ)) typed_vars;
         [Sil.Declare_locals new_typed_vars loc, ...instrs]
       }
     | Sil.Nullify _
@@ -434,7 +434,7 @@ let specialize_types_proc callee_pdesc resolved_pdesc substitutions => {
   let rec convert_node node => {
     let loc = Procdesc.Node.get_loc node
     and kind = convert_node_kind (Procdesc.Node.get_kind node)
-    and instrs = List.fold f::convert_instr init::[] (Procdesc.Node.get_instrs node) |> IList.rev;
+    and instrs = List.fold f::convert_instr init::[] (Procdesc.Node.get_instrs node) |> List.rev;
     Procdesc.create_node resolved_pdesc loc kind instrs
   }
   and loop callee_nodes =>
@@ -486,7 +486,7 @@ let specialize_types callee_pdesc resolved_pname args => {
       args;
   let resolved_attributes = {
     ...callee_attributes,
-    formals: IList.rev resolved_params,
+    formals: List.rev resolved_params,
     proc_name: resolved_pname
   };
   AttributesTable.store_attributes resolved_attributes;
@@ -495,4 +495,10 @@ let specialize_types callee_pdesc resolved_pname args => {
     create_proc_desc tmp_cfg resolved_attributes
   };
   specialize_types_proc callee_pdesc resolved_pdesc substitutions
+};
+
+let pp_proc_signatures fmt cfg => {
+  F.fprintf fmt "METHOD SIGNATURES\n@.";
+  let sorted_procs = List.sort cmp::Procdesc.compare (get_all_procs cfg);
+  List.iter f::(fun pdesc => F.fprintf fmt "%a@." Procdesc.pp_signature pdesc) sorted_procs
 };

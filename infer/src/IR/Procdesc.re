@@ -166,7 +166,7 @@ let module Node = {
 
   /** Get the source location of the last instruction in the node */
   let get_last_loc n =>
-    switch (IList.rev (get_instrs n)) {
+    switch (List.rev (get_instrs n)) {
     | [instr, ..._] => Sil.instr_get_loc instr
     | [] => n.loc
     };
@@ -192,7 +192,7 @@ let module Node = {
       (Pvar.get_ret_pvar pname, ret_type)
     };
     let construct_decl (x, typ) => (Pvar.mk x pname, typ);
-    let ptl = [ret_var, ...IList.map construct_decl locals];
+    let ptl = [ret_var, ...List.map f::construct_decl locals];
     let instr = Sil.Declare_locals ptl loc;
     prepend_instrs node [instr]
   };
@@ -324,7 +324,7 @@ let compute_distance_to_exit_node pdesc => {
         node.dist_exit = Some dist;
         next_nodes := node.preds @ !next_nodes
       };
-    IList.iter do_node nodes;
+    List.iter f::do_node nodes;
     if (!next_nodes != []) {
       mark_distance (dist + 1) !next_nodes
     }
@@ -395,7 +395,7 @@ let is_body_empty pdesc => List.is_empty (Node.get_succs (get_start_node pdesc))
 
 let is_java_synchronized pdesc => pdesc.attributes.is_java_synchronized_method;
 
-let iter_nodes f pdesc => IList.iter f (IList.rev (get_nodes pdesc));
+let iter_nodes f pdesc => List.iter f::f (List.rev (get_nodes pdesc));
 
 let fold_calls f acc pdesc => {
   let do_node a node =>
@@ -411,11 +411,11 @@ let fold_calls f acc pdesc => {
 let iter_calls f pdesc => fold_calls (fun _ call => f call) () pdesc;
 
 let iter_instrs f pdesc => {
-  let do_node node => IList.iter (fun i => f node i) (Node.get_instrs node);
+  let do_node node => List.iter f::(fun i => f node i) (Node.get_instrs node);
   iter_nodes do_node pdesc
 };
 
-let fold_nodes f acc pdesc => List.fold f::f init::acc (IList.rev (get_nodes pdesc));
+let fold_nodes f acc pdesc => List.fold f::f init::acc (List.rev (get_nodes pdesc));
 
 let fold_instrs f acc pdesc => {
   let fold_node acc node =>
@@ -440,7 +440,7 @@ let iter_slope f pdesc => {
 };
 
 let iter_slope_calls f pdesc => {
-  let do_node node => IList.iter (fun callee_pname => f callee_pname) (Node.get_callees node);
+  let do_node node => List.iter f::(fun callee_pname => f callee_pname) (Node.get_callees node);
   iter_slope do_node pdesc
 };
 
@@ -485,7 +485,7 @@ let append_locals pdesc new_locals =>
 let set_succs_exn_base (node: Node.t) succs exn => {
   node.succs = succs;
   node.exn = exn;
-  IList.iter (fun (n: Node.t) => n.preds = [node, ...n.preds]) succs
+  List.iter f::(fun (n: Node.t) => n.preds = [node, ...n.preds]) succs
 };
 
 
@@ -541,7 +541,7 @@ let get_loop_heads pdesc => {
       } else {
         let ancester = NodeSet.add n ancester;
         let succs = List.append (Node.get_succs n) (Node.get_exn n);
-        let works = IList.map (fun m => (m, ancester)) succs;
+        let works = List.map f::(fun m => (m, ancester)) succs;
         set_loop_head_rec (NodeSet.add n visited) heads (List.append works wl')
       }
     };
@@ -558,4 +558,37 @@ let is_loop_head pdesc (node: Node.t) => {
     | None => get_loop_heads pdesc
     };
   NodeSet.mem node lh
+};
+
+let pp_variable_list fmt etl =>
+  if (List.is_empty etl) {
+    Format.fprintf fmt "None"
+  } else {
+    List.iter
+      f::(fun (id, ty) => Format.fprintf fmt " %a:%a" Mangled.pp id (Typ.pp_full Pp.text) ty) etl
+  };
+
+let pp_signature fmt pdesc => {
+  let pname = get_proc_name pdesc;
+  let pname_string = Procname.to_string pname;
+  let defined_string = is_defined pdesc ? "defined" : "undefined";
+  Format.fprintf
+    fmt
+    "%s [%s, Return type: %s, Formals: %a, Locals: %a"
+    pname_string
+    defined_string
+    (Typ.to_string (get_ret_type pdesc))
+    pp_variable_list
+    (get_formals pdesc)
+    pp_variable_list
+    (get_locals pdesc);
+  if (not (List.is_empty (get_captured pdesc))) {
+    Format.fprintf fmt ", Captured: %a" pp_variable_list (get_captured pdesc)
+  };
+  let attributes = get_attributes pdesc;
+  let method_annotation = attributes.ProcAttributes.method_annotation;
+  if (not (Annot.Method.is_empty method_annotation)) {
+    Format.fprintf fmt ", Annotation: %a" (Annot.Method.pp pname_string) method_annotation
+  };
+  Format.fprintf fmt "]@\n"
 };

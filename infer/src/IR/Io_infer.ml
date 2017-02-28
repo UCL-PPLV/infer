@@ -19,9 +19,9 @@ module Html =
 struct
   (** Create a new html file *)
   let create pk path =
-    let fname, dir_path = match IList.rev path with
+    let fname, dir_path = match List.rev path with
       | fname :: path_rev ->
-          fname, IList.rev ((fname ^ ".html") :: path_rev)
+          fname, List.rev ((fname ^ ".html") :: path_rev)
       | [] ->
           raise (Failure "Html.create") in
     let fd = DB.Results_dir.create_file pk dir_path in
@@ -127,9 +127,9 @@ struct
 
   (** Get the full html filename from a path *)
   let get_full_fname source path =
-    let dir_path = match IList.rev path with
+    let dir_path = match List.rev path with
       | fname :: path_rev ->
-          IList.rev ((fname ^ ".html") :: path_rev)
+          List.rev ((fname ^ ".html") :: path_rev)
       | [] ->
           raise (Failure "Html.open_out") in
     DB.Results_dir.path_to_filename (DB.Results_dir.Abs_source_dir source) dir_path
@@ -333,7 +333,7 @@ struct
     | String s ->
         F.fprintf fmt "%s%s%s" indent s newline
   and pp_forest newline indent fmt forest =
-    IList.iter (pp_node newline indent fmt) forest
+    List.iter ~f:(pp_node newline indent fmt) forest
 
   let pp_prelude fmt = pp fmt "%s" "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 

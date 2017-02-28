@@ -411,11 +411,11 @@ let typecheck_instr
               | fp:: tail when is_hidden_parameter fp -> 1 + drop_n_args tail
               | _ -> 0 in
             let n = drop_n_args proc_attributes.ProcAttributes.formals in
-            let visible_params = IList.drop_first n params in
+            let visible_params = List.drop params n in
 
             (* Drop the trailing hidden parameter if the constructor is synthetic. *)
             if proc_attributes.ProcAttributes.is_synthetic_method then
-              IList.drop_last 1 visible_params
+              List.take visible_params (List.length visible_params - 1)
             else
               visible_params
           end
@@ -427,7 +427,9 @@ let typecheck_instr
   let drop_unchecked_signature_params proc_attributes annotated_signature =
     if Procname.is_constructor (proc_attributes.ProcAttributes.proc_name) &&
        proc_attributes.ProcAttributes.is_synthetic_method then
-      IList.drop_last 1 annotated_signature.AnnotatedSignature.params
+      List.take
+        annotated_signature.AnnotatedSignature.params
+        (List.length annotated_signature.AnnotatedSignature.params - 1)
     else
       annotated_signature.AnnotatedSignature.params in
 
@@ -573,14 +575,14 @@ let typecheck_instr
             proc_attributes
         | None ->
             let formals =
-              IList.mapi
-                (fun i (_, typ) ->
-                   let arg =
-                     if Int.equal i 0 &&
-                        not (Procname.java_is_static callee_pname)
-                     then "this"
-                     else Printf.sprintf "arg%d" i in
-                   (Mangled.from_string arg, typ))
+              List.mapi
+                ~f:(fun i (_, typ) ->
+                    let arg =
+                      if Int.equal i 0 &&
+                         not (Procname.java_is_static callee_pname)
+                      then "this"
+                      else Printf.sprintf "arg%d" i in
+                    (Mangled.from_string arg, typ))
                 etl_ in
             let ret_type = Typ.java_proc_return_typ callee_pname_java in
             let proc_attributes =
@@ -705,7 +707,7 @@ let typecheck_instr
                   | _ -> ()
                 end
             | _ -> () in
-          IList.iter do_instr (Procdesc.Node.get_instrs cond_node) in
+          List.iter ~f:do_instr (Procdesc.Node.get_instrs cond_node) in
         let handle_optional_isPresent node' e =
           match convert_complex_exp_to_pvar node' false e typestate' loc with
           | Exp.Lvar pvar', _ ->
@@ -721,8 +723,8 @@ let typecheck_instr
               (* In foo(cond1 && cond2), the node that sets the result to false
                  has all the negated conditions as parents. *)
               | Some boolean_assignment_node ->
-                  IList.iter
-                    handle_negated_condition
+                  List.iter
+                    ~f:handle_negated_condition
                     (Procdesc.Node.get_preds boolean_assignment_node);
                   !res_typestate
               | None ->
@@ -818,7 +820,7 @@ let typecheck_instr
                 (typecheck_expr find_canonical_duplicate calls_this checks tenv);
             let typestate2 =
               if checks.check_extension then
-                let etl' = IList.map (fun ((_, e), t) -> (e, t)) call_params in
+                let etl' = List.map ~f:(fun ((_, e), t) -> (e, t)) call_params in
                 let extension = TypeState.get_extension typestate1 in
                 let extension' =
                   ext.TypeState.check_instr
@@ -839,7 +841,7 @@ let typecheck_instr
             if has_method callee_pname "checkNotNull"
             && Procname.java_is_vararg callee_pname
             then
-              let last_parameter = IList.length call_params in
+              let last_parameter = List.length call_params in
               do_preconditions_check_not_null
                 last_parameter
                 true (* is_vararg *)
@@ -1031,7 +1033,7 @@ let typecheck_instr
                 when Exp.equal (Exp.Lvar pvar) (Idenv.expand_expr idenv e') ->
                   found := Some e
               | _ -> () in
-            IList.iter do_instr (Procdesc.Node.get_instrs prev_node);
+            List.iter ~f:do_instr (Procdesc.Node.get_instrs prev_node);
             !found
         | _ -> None in
 

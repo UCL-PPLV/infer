@@ -128,7 +128,7 @@ let check_condition tenv case_zero find_canonical_duplicate curr_pdesc
       | _ -> () in
     let do_node n =
       if Location.equal loc (Procdesc.Node.get_loc n)
-      then IList.iter do_instr (Procdesc.Node.get_instrs n) in
+      then List.iter ~f:do_instr (Procdesc.Node.get_instrs n) in
     Procdesc.iter_nodes do_node pdesc;
     !throwable_found in
 
@@ -320,7 +320,7 @@ let check_constructor_initialization tenv
                     curr_pdesc;
               ) in
 
-            IList.iter do_field fields
+            List.iter ~f:do_field fields
         | None ->
             ()
       )
@@ -448,7 +448,7 @@ let check_call_parameters tenv
     sig_params call_params loc instr_ref typecheck_expr : unit =
   let callee_pname = callee_attributes.ProcAttributes.proc_name in
   let has_this = is_virtual sig_params in
-  let tot_param_num = IList.length sig_params - (if has_this then 1 else 0) in
+  let tot_param_num = List.length sig_params - (if has_this then 1 else 0) in
   let rec check sparams cparams = match sparams, cparams with
     | (s1, ia1, t1) :: sparams', ((orig_e2, e2), t2) :: cparams' ->
         let param_is_this = String.equal (Mangled.to_string s1) "this" in
@@ -480,7 +480,7 @@ let check_call_parameters tenv
               | None -> "formal parameter " ^ (Mangled.to_string s1) in
             let origin_descr = TypeAnnotation.descr_origin tenv ta2 in
 
-            let param_num = IList.length sparams' + (if has_this then 0 else 1) in
+            let param_num = List.length sparams' + (if has_this then 0 else 1) in
             let callee_loc = callee_attributes.ProcAttributes.loc in
             report_error tenv
               find_canonical_duplicate
@@ -506,7 +506,7 @@ let check_call_parameters tenv
       Specs.get_summary callee_pname <> None in
   if should_check_parameters then
     (* left to right to avoid guessing the different lengths *)
-    check (IList.rev sig_params) (IList.rev call_params)
+    check (List.rev sig_params) (List.rev call_params)
 
 (** Checks if the annotations are consistent with the inherited class or with the
     implemented interfaces *)
@@ -548,7 +548,7 @@ let check_overridden_annotations
     let current_params = annotated_signature.AnnotatedSignature.params
     and overridden_params = overriden_signature.AnnotatedSignature.params in
     let initial_pos = if is_virtual current_params then 0 else 1 in
-    if Int.equal (IList.length current_params) (IList.length overridden_params) then
+    if Int.equal (List.length current_params) (List.length overridden_params) then
       ignore (List.fold2_exn ~f:compare ~init:initial_pos current_params overridden_params) in
 
   let check overriden_proc_name =

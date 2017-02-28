@@ -157,7 +157,7 @@ let wrap_line indent_string wrap_length line =
         (rev_lines, new_non_empty, new_line, String.length new_line) in
   let (rev_lines, _, line, _) =
     List.fold ~f:add_word_to_paragraph ~init:([], false, "", 0) words in
-  IList.rev (line::rev_lines)
+  List.rev (line::rev_lines)
 
 let pad_and_xform doc_width left_width desc =
   match desc with
@@ -184,7 +184,7 @@ let pad_and_xform doc_width left_width desc =
           if String.length s > doc_width then
             wrap_line "" doc_width s
           else [s] in
-        IList.map wrap_line lines in
+        List.map ~f:wrap_line lines in
       let doc = indent_doc (String.concat ~sep:"\n" (List.concat wrapped_lines)) in
       xdesc {desc with doc}
 
@@ -214,7 +214,7 @@ let align desc_list =
     let cols_after_min_width = float_of_int (max 0 (cur_term_width - min_term_width)) in
     min (int_of_float (cols_after_min_width *. multiplier) + min_left_width) opt_left_width in
   let doc_width = min max_doc_width (doc_width cur_term_width left_width) in
-  (IList.map (pad_and_xform doc_width left_width) desc_list, (doc_width, left_width))
+  (List.map ~f:(pad_and_xform doc_width left_width) desc_list, (doc_width, left_width))
 
 
 let check_no_duplicates desc_list =
@@ -226,7 +226,7 @@ let check_no_duplicates desc_list =
     | _ :: tl ->
         check_for_duplicates_ tl
   in
-  check_for_duplicates_ (IList.sort (fun (x, _, _) (y, _, _) -> String.compare x y) desc_list)
+  check_for_duplicates_ (List.sort ~cmp:(fun (x, _, _) (y, _, _) -> String.compare x y) desc_list)
 
 
 let parse_tag_desc_lists = List.map ~f:(fun parse_tag -> (parse_tag, ref [])) all_parse_tags
@@ -395,8 +395,8 @@ let mk_bool ?(deprecated_no=[]) ?(default=false) ?(f=fun b -> b)
 let mk_bool_group ?(deprecated_no=[]) ?(default=false)
     ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc children no_children =
   let f b =
-    IList.iter (fun child -> child := b) children ;
-    IList.iter (fun child -> child := not b) no_children ;
+    List.iter ~f:(fun child -> child := b) children ;
+    List.iter ~f:(fun child -> child := not b) no_children ;
     b
   in
   mk_bool ~deprecated ~deprecated_no ~default ~long ?short ~f ?parse_mode ~meta doc
@@ -489,10 +489,10 @@ let mk_path_list ?(default=[]) ?(deprecated=[]) ~long ?short ?parse_mode ?(meta=
     ~default ~deprecated ~long ~short ~parse_mode ~meta
 
 let mk_symbol ~default ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  let strings = IList.map fst symbols in
-  let sym_to_str = IList.map (fun (x,y) -> (y,x)) symbols in
-  let of_string str = IList.assoc String.equal str symbols in
-  let to_string sym = IList.assoc eq sym sym_to_str in
+  let strings = List.map ~f:fst symbols in
+  let sym_to_str = List.map ~f:(fun (x,y) -> (y,x)) symbols in
+  let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
+  let to_string sym = List.Assoc.find_exn ~equal:eq sym_to_str sym in
   mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
     ~default_to_string:(fun s -> to_string s)
     ~mk_setter:(fun var str -> var := of_string str)
@@ -500,8 +500,8 @@ let mk_symbol ~default ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode ?(
     ~mk_spec:(fun set -> Symbol (strings, set))
 
 let mk_symbol_opt ~symbols ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  let strings = IList.map fst symbols in
-  let of_string str = IList.assoc String.equal str symbols in
+  let strings = List.map ~f:fst symbols in
+  let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
   mk ~deprecated ~long ?short ~default:None ?parse_mode ~meta doc
     ~default_to_string:(fun _ -> "")
     ~mk_setter:(fun var str -> var := Some (of_string str))
@@ -510,13 +510,13 @@ let mk_symbol_opt ~symbols ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") 
 
 let mk_symbol_seq ?(default=[]) ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode
     ?(meta="") doc =
-  let sym_to_str = IList.map (fun (x,y) -> (y,x)) symbols in
-  let of_string str = IList.assoc String.equal str symbols in
-  let to_string sym = IList.assoc eq sym sym_to_str in
+  let sym_to_str = List.map ~f:(fun (x,y) -> (y,x)) symbols in
+  let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
+  let to_string sym = List.Assoc.find_exn ~equal:eq sym_to_str sym in
   mk ~deprecated ~long ?short ~default ?parse_mode ~meta:(",-separated sequence" ^ meta) doc
-    ~default_to_string:(fun syms -> String.concat ~sep:" " (IList.map to_string syms))
+    ~default_to_string:(fun syms -> String.concat ~sep:" " (List.map ~f:to_string syms))
     ~mk_setter:(fun var str_seq ->
-        var := IList.map of_string (Str.split (Str.regexp_string ",") str_seq))
+        var := List.map ~f:of_string (Str.split (Str.regexp_string ",") str_seq))
     ~decode_json:(fun json ->
         [dashdash long;
          String.concat ~sep:"," (YBU.convert_each YBU.to_string json)])
@@ -607,7 +607,7 @@ let set_curr_speclist_for_parse_action ~incomplete ~usage parse_action =
       | _ ->
           let lower_norm s = String.lowercase @@ norm s in
           String.compare (lower_norm x) (lower_norm y) in
-    let sort speclist = IList.sort compare_specs speclist in
+    let sort speclist = List.sort ~cmp:compare_specs speclist in
     align (sort speclist)
   in
   let add_to_curr_speclist ?(add_help=false) ?header parse_action =
@@ -630,7 +630,7 @@ let set_curr_speclist_for_parse_action ~incomplete ~usage parse_action =
        and that instance is the one that has a non-empty docstring if there is one. *)
     let is_not_dup_with_doc speclist (opt, _, doc) =
       opt = "" ||
-      IList.for_all (fun (opt', _, doc') ->
+      List.for_all ~f:(fun (opt', _, doc') ->
           (doc <> "" && doc' = "") || (not (String.equal opt opt'))) speclist in
     let unique_exe_speclist = List.filter ~f:(is_not_dup_with_doc !curr_speclist) exe_speclist in
     curr_speclist := List.filter ~f:(is_not_dup_with_doc unique_exe_speclist) !curr_speclist @

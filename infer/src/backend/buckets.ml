@@ -59,7 +59,7 @@ let check_access access_opt de_opt =
         | None -> []
         | Some (_, _, pdesc) ->
             Procdesc.get_formals pdesc in
-      let formal_names = IList.map fst formals in
+      let formal_names = List.map ~f:fst formals in
       let is_formal pvar =
         let name = Pvar.get_name pvar in
         List.exists ~f:(Mangled.equal name) formal_names in
@@ -70,7 +70,7 @@ let check_access access_opt de_opt =
               Config.curr_language_is Config.Java && Pvar.is_this pvar in
             if not is_java_this && is_formal pvar then formal_ids := id :: !formal_ids
         | _ -> () in
-      IList.iter process_formal_letref node_instrs;
+      List.iter ~f:process_formal_letref node_instrs;
       !formal_ids in
     let formal_param_used_in_call = ref false in
     let has_call_or_sets_null node =

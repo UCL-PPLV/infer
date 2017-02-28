@@ -16,8 +16,8 @@ module L = Logging
 module F = Format
 
 let list_product l1 l2 =
-  let l1' = IList.rev l1 in
-  let l2' = IList.rev l2 in
+  let l1' = List.rev l1 in
+  let l2' = List.rev l2 in
   List.fold
     ~f:(fun acc x -> List.fold ~f:(fun acc' y -> (x, y):: acc') ~init:acc l2')
     ~init:[]
@@ -117,7 +117,7 @@ let rec create_struct_values pname tenv orig_prop footprint_part kind max_stamp 
                 let replace_typ_of_f (f', t', a') =
                   if Ident.equal_fieldname f f' then (f, res_t', a') else (f', t', a') in
                 let fields' =
-                  IList.sort StructTyp.compare_field (IList.map replace_typ_of_f fields) in
+                  List.sort ~cmp:StructTyp.compare_field (List.map ~f:replace_typ_of_f fields) in
                 ignore (Tenv.mk_struct tenv ~default:struct_typ ~fields:fields' name) ;
                 (atoms', se, t)
             | None ->
@@ -220,13 +220,13 @@ let rec _strexp_extend_values
                     let replace_fse ((f1, _) as ft1) =
                       if Ident.equal_fieldname f1 f then (f1, res_se') else ft1 in
                     let res_fsel' =
-                      IList.sort
-                        [%compare: Ident.fieldname * Sil.strexp]
-                        (IList.map replace_fse fsel) in
+                      List.sort
+                        ~cmp:[%compare: Ident.fieldname * Sil.strexp]
+                        (List.map ~f:replace_fse fsel) in
                     let replace_fta ((f1, _, a1) as fta1) =
                       if Ident.equal_fieldname f f1 then (f1, res_typ', a1) else fta1 in
                     let fields' =
-                      IList.sort StructTyp.compare_field (IList.map replace_fta fields) in
+                      List.sort ~cmp:StructTyp.compare_field (List.map ~f:replace_fta fields) in
                     ignore (Tenv.mk_struct tenv ~default:struct_typ ~fields:fields' name) ;
                     (res_atoms', Sil.Estruct (res_fsel', inst'), typ) :: acc in
                   List.fold ~f:replace ~init:[] atoms_se_typ_list'
@@ -235,11 +235,11 @@ let rec _strexp_extend_values
                     create_struct_values
                       pname tenv orig_prop footprint_part kind max_stamp typ' off' inst in
                   let res_fsel' =
-                    IList.sort [%compare: Ident.fieldname * Sil.strexp] ((f, se'):: fsel) in
+                    List.sort ~cmp:[%compare: Ident.fieldname * Sil.strexp] ((f, se'):: fsel) in
                   let replace_fta (f', t', a') =
                     if Ident.equal_fieldname f' f then (f, res_typ', a') else (f', t', a') in
                   let fields' =
-                    IList.sort StructTyp.compare_field (IList.map replace_fta fields) in
+                    List.sort ~cmp:StructTyp.compare_field (List.map ~f:replace_fta fields) in
                   ignore (Tenv.mk_struct tenv ~default:struct_typ ~fields:fields' name) ;
                   [(atoms', Sil.Estruct (res_fsel', inst'), typ)]
             )
@@ -273,8 +273,8 @@ let rec _strexp_extend_values
               pname tenv orig_prop footprint_part kind max_stamp se' typ' off' inst in
           let replace acc (res_atoms', res_se', res_typ') =
             let replace_ise ise = if Exp.equal e (fst ise) then (e, res_se') else ise in
-            let res_esel' = IList.map replace_ise esel in
-            if (Typ.equal res_typ' typ') || Int.equal (IList.length res_esel') 1 then
+            let res_esel' = List.map ~f:replace_ise esel in
+            if (Typ.equal res_typ' typ') || Int.equal (List.length res_esel') 1 then
               ( res_atoms'
               , Sil.Earray (len, res_esel', inst_arr)
               , Typ.Tarray (res_typ', len_for_typ') )
@@ -305,7 +305,7 @@ and array_case_analysis_index pname tenv orig_prop
     List.exists ~f:(fun (i, _) -> Prover.check_equal tenv Prop.prop_emp index i) array_cont in
   let array_is_full =
     match array_len with
-    | Exp.Const (Const.Cint n') -> IntLit.geq (IntLit.of_int (IList.length array_cont)) n'
+    | Exp.Const (Const.Cint n') -> IntLit.geq (IntLit.of_int (List.length array_cont)) n'
     | _ -> false in
 
   if index_in_array then
@@ -317,7 +317,7 @@ and array_case_analysis_index pname tenv orig_prop
       create_struct_values
         pname tenv orig_prop footprint_part kind max_stamp typ_cont off inst in
     check_sound elem_typ;
-    let cont_new = IList.sort [%compare: Exp.t * Sil.strexp] ((index, elem_se):: array_cont) in
+    let cont_new = List.sort ~cmp:[%compare: Exp.t * Sil.strexp] ((index, elem_se):: array_cont) in
     let array_new = Sil.Earray (array_len, cont_new, inst_arr) in
     let typ_new = Typ.Tarray (elem_typ, typ_array_len) in
     [(atoms, array_new, typ_new)]
@@ -330,13 +330,14 @@ and array_case_analysis_index pname tenv orig_prop
           create_struct_values
             pname tenv orig_prop footprint_part kind max_stamp typ_cont off inst in
         check_sound elem_typ;
-        let cont_new = IList.sort [%compare: Exp.t * Sil.strexp] ((index, elem_se):: array_cont) in
+        let cont_new =
+          List.sort ~cmp:[%compare: Exp.t * Sil.strexp] ((index, elem_se):: array_cont) in
         let array_new = Sil.Earray (array_len, cont_new, inst_arr) in
         let typ_new = Typ.Tarray (elem_typ, typ_array_len) in
         [(atoms, array_new, typ_new)]
       end in
     let rec handle_case acc isel_seen_rev = function
-      | [] -> List.concat (IList.rev (res_new:: acc))
+      | [] -> List.concat (List.rev (res_new:: acc))
       | (i, se) as ise :: isel_unseen ->
           let atoms_se_typ_list =
             _strexp_extend_values
@@ -367,7 +368,7 @@ let laundry_offset_for_footprint max_stamp offs_in =
   let rec laundry offs_seen eqs offs =
     match offs with
     | [] ->
-        (IList.rev offs_seen, IList.rev eqs)
+        (List.rev offs_seen, List.rev eqs)
     | (Sil.Off_fld _ as off):: offs' ->
         let offs_seen' = off:: offs_seen in
         laundry offs_seen' eqs offs'
@@ -393,7 +394,7 @@ let strexp_extend_values
     let off', eqs = laundry_offset_for_footprint max_stamp off in
     (* do laundry_offset whether footprint_part is true or not, so max_stamp is modified anyway *)
     if footprint_part then
-      off', IList.map (fun (id, e) -> Prop.mk_eq tenv (Exp.Var id) e) eqs
+      off', List.map ~f:(fun (id, e) -> Prop.mk_eq tenv (Exp.Var id) e) eqs
     else off, [] in
   if Config.trace_rearrange then
     (L.d_str "entering strexp_extend_values se: "; Sil.d_sexp se; L.d_str " typ: ";
@@ -410,7 +411,7 @@ let strexp_extend_values
   let len, st = match te with
     | Exp.Sizeof(_, len, st) -> (len, st)
     | _ -> None, Subtype.exact in
-  IList.map (fun (atoms', se', typ') -> (laundry_atoms @ atoms', se', Exp.Sizeof (typ', len, st)))
+  List.map ~f:(fun (atoms', se', typ') -> (laundry_atoms @ atoms', se', Exp.Sizeof (typ', len, st)))
     atoms_se_typ_list_filtered
 
 let collect_root_offset exp =
@@ -460,7 +461,7 @@ let mk_ptsto_exp_footprint
   let atoms, ptsto_foot = create_ptsto true off_foot in
   let sub = Sil.sub_of_list eqs in
   let ptsto = Sil.hpred_sub sub ptsto_foot in
-  let atoms' = IList.map (fun (id, e) -> Prop.mk_eq tenv (Exp.Var id) e) eqs in
+  let atoms' = List.map ~f:(fun (id, e) -> Prop.mk_eq tenv (Exp.Var id) e) eqs in
   (ptsto, ptsto_foot, atoms @ atoms')
 
 (** Check if the path in exp exists already in the current ptsto predicate.
@@ -487,7 +488,7 @@ let prop_iter_check_fields_ptsto_shallow tenv iter lexp =
 let fav_max_stamp fav =
   let max_stamp = ref 0 in
   let f id = max_stamp := max !max_stamp (Ident.get_stamp id) in
-  IList.iter f (Sil.fav_to_list fav);
+  List.iter ~f (Sil.fav_to_list fav);
   max_stamp
 
 (** [prop_iter_extend_ptsto iter lexp] extends the current psto
@@ -505,7 +506,9 @@ let prop_iter_extend_ptsto pname tenv orig_prop iter lexp inst =
         let atoms_se_te_list =
           strexp_extend_values
             pname tenv orig_prop true Ident.kfootprint (ref max_stamp_val) se te offset inst in
-        IList.map (fun (atoms', se', te') -> (atoms', Sil.Hpointsto (e, se', te'))) atoms_se_te_list
+        List.map
+          ~f:(fun (atoms', se', te') -> (atoms', Sil.Hpointsto (e, se', te')))
+          atoms_se_te_list
     | Sil.Hlseg (k, hpara, e1, e2, el) ->
         begin
           match hpara.Sil.body with
@@ -515,10 +518,16 @@ let prop_iter_extend_ptsto pname tenv orig_prop iter lexp inst =
                   pname tenv orig_prop true Ident.kfootprint
                   (ref max_stamp_val) se' te' offset inst in
               let atoms_body_list =
-                IList.map (fun (atoms0, se0, te0) -> (atoms0, Sil.Hpointsto(e', se0, te0):: body_rest)) atoms_se_te_list in
+                List.map
+                  ~f:(fun (atoms0, se0, te0) -> (atoms0, Sil.Hpointsto(e', se0, te0):: body_rest))
+                  atoms_se_te_list in
               let atoms_hpara_list =
-                IList.map (fun (atoms, body') -> (atoms, { hpara with Sil.body = body'})) atoms_body_list in
-              IList.map (fun (atoms, hpara') -> (atoms, Sil.Hlseg(k, hpara', e1, e2, el))) atoms_hpara_list
+                List.map
+                  ~f:(fun (atoms, body') -> (atoms, { hpara with Sil.body = body'}))
+                  atoms_body_list in
+              List.map
+                ~f:(fun (atoms, hpara') -> (atoms, Sil.Hlseg(k, hpara', e1, e2, el)))
+                atoms_hpara_list
           | _ -> assert false
         end
     | _ -> assert false in
@@ -539,7 +548,7 @@ let prop_iter_extend_ptsto pname tenv orig_prop iter lexp inst =
       let atoms_se_te_list =
         strexp_extend_values
           pname tenv orig_prop false extend_kind max_stamp se te offset inst in
-      IList.map (atoms_se_te_to_iter e) atoms_se_te_list in
+      List.map ~f:(atoms_se_te_to_iter e) atoms_se_te_list in
     let res_iter_list =
       if Ident.equal_kind extend_kind Ident.kprimed
       then iter_list (* normal part already extended: nothing to do *)
@@ -547,7 +556,7 @@ let prop_iter_extend_ptsto pname tenv orig_prop iter lexp inst =
         let atoms_fp_sigma_list =
           let footprint_sigma = Prop.prop_iter_get_footprint_sigma iter in
           let sigma_pto, sigma_rest =
-            IList.partition (function
+            List.partition_tf ~f:(function
                 | Sil.Hpointsto(e', _, _) -> Exp.equal e e'
                 | Sil.Hlseg (_, _, e1, _, _) -> Exp.equal e e1
                 | Sil.Hdllseg (_, _, e_iF, _, _, e_iB, _) ->
@@ -557,20 +566,22 @@ let prop_iter_extend_ptsto pname tenv orig_prop iter lexp inst =
             match sigma_pto with
             | [hpred] ->
                 let atoms_hpred_list = extend_footprint_pred hpred in
-                IList.map (fun (atoms, hpred') -> (atoms, hpred' :: sigma_rest)) atoms_hpred_list
+                List.map ~f:(fun (atoms, hpred') -> (atoms, hpred' :: sigma_rest)) atoms_hpred_list
             | _ ->
                 L.d_warning "Cannot extend "; Sil.d_exp lexp; L.d_strln " in"; Prop.d_prop (Prop.prop_iter_to_prop tenv iter); L.d_ln();
                 [([], footprint_sigma)] in
-          IList.map (fun (atoms, sigma') -> (atoms, IList.stable_sort Sil.compare_hpred sigma')) atoms_sigma_list in
+          List.map
+            ~f:(fun (atoms, sigma') -> (atoms, List.stable_sort ~cmp:Sil.compare_hpred sigma'))
+            atoms_sigma_list in
         let iter_atoms_fp_sigma_list =
           list_product iter_list atoms_fp_sigma_list in
-        IList.map (fun (iter, (atoms, fp_sigma)) ->
+        List.map ~f:(fun (iter, (atoms, fp_sigma)) ->
             let iter' =
               List.fold ~f:(Prop.prop_iter_add_atom !Config.footprint) ~init:iter atoms in
             Prop.prop_iter_replace_footprint_sigma iter' fp_sigma
           ) iter_atoms_fp_sigma_list in
     let res_prop_list =
-      IList.map (Prop.prop_iter_to_prop tenv) res_iter_list in
+      List.map ~f:(Prop.prop_iter_to_prop tenv) res_iter_list in
     begin
       L.d_str "in prop_iter_extend_ptsto lexp: "; Sil.d_exp lexp; L.d_ln ();
       L.d_strln "prop before:";
@@ -994,13 +1005,13 @@ let iter_rearrange_ptsto pname tenv orig_prop iter lexp inst =
             let filter it =
               let p = Prop.prop_iter_to_prop tenv it in
               not (Prover.check_inconsistency tenv p) in
-            List.filter ~f:filter (IList.map handle_case atoms_se_te_list)
+            List.filter ~f:filter (List.map ~f:handle_case atoms_se_te_list)
         | _ -> [iter]
       end in
   begin
     if Config.trace_rearrange then begin
       L.d_strln "exiting iter_rearrange_ptsto, returning results";
-      Prop.d_proplist_with_typ (IList.map (Prop.prop_iter_to_prop tenv) res);
+      Prop.d_proplist_with_typ (List.map ~f:(Prop.prop_iter_to_prop tenv) res);
       L.d_decrease_indent 1;
       L.d_ln (); L.d_ln ()
     end;
@@ -1222,7 +1233,7 @@ let rec iter_rearrange
       else
         iter_rearrange pname tenv (Prop.lexp_normalize_prop tenv prop' lexp) typ prop' iter' inst in
     let rec f_many_iters iters_lst = function
-      | [] -> List.concat (IList.rev iters_lst)
+      | [] -> List.concat (List.rev iters_lst)
       | iter':: iters' ->
           let iters_res' = f_one_iter iter' in
           f_many_iters (iters_res':: iters_lst) iters' in
@@ -1264,7 +1275,7 @@ let rec iter_rearrange
             end in
   if Config.trace_rearrange then begin
     L.d_strln "exiting iter_rearrange, returning results";
-    Prop.d_proplist_with_typ (IList.map (Prop.prop_iter_to_prop tenv) res);
+    Prop.d_proplist_with_typ (List.map ~f:(Prop.prop_iter_to_prop tenv) res);
     L.d_decrease_indent 1;
     L.d_ln (); L.d_ln ()
   end;
@@ -1291,45 +1302,45 @@ let check_dereference_error tenv pdesc (prop : Prop.normal Prop.t) lexp loc =
   (* return true if deref_exp is only pointed to by fields/params with @Nullable annotations *)
   let is_only_pt_by_nullable_fld_or_param deref_exp =
     let ann_sig = Models.get_modelled_annotated_signature (Specs.pdesc_resolve_attributes pdesc) in
-    IList.for_all
-      (fun hpred ->
-         match hpred with
-         | Sil.Hpointsto (Exp.Lvar pvar, Sil.Eexp (Exp.Var _ as exp, _), _)
-           when Exp.equal exp deref_exp ->
-             let is_weak_captured_var = is_weak_captured_var pdesc pvar in
-             let is_nullable =
-               if AnnotatedSignature.param_is_nullable pvar ann_sig || is_weak_captured_var
-               then
-                 begin
-                   nullable_obj_str := Some (Pvar.to_string pvar);
-                   nullable_str_is_weak_captured_var := is_weak_captured_var;
-                   true
-                 end
-               else
-                 let is_nullable_attr = function
-                   | Sil.Apred ((Aretval (pname, ret_attr) | Aundef (pname, ret_attr, _, _)), _)
-                     when Annotations.ia_is_nullable ret_attr ->
-                       nullable_obj_str := Some (Procname.to_string pname);
-                       true
-                   | _ -> false in
-                 List.exists ~f:is_nullable_attr (Attribute.get_for_exp tenv prop exp) in
-             (* it's ok for a non-nullable local to point to deref_exp *)
-             is_nullable || Pvar.is_local pvar
-         | Sil.Hpointsto (_, Sil.Estruct (flds, _), Exp.Sizeof (typ, _, _)) ->
-             let fld_is_nullable fld =
-               match StructTyp.get_field_type_and_annotation ~lookup fld typ with
-               | Some (_, annot) -> Annotations.ia_is_nullable annot
-               | _ -> false in
-             let is_strexp_pt_by_nullable_fld (fld, strexp) =
-               match strexp with
-               | Sil.Eexp (Exp.Var _ as exp, _) when Exp.equal exp deref_exp ->
-                   let is_nullable = fld_is_nullable fld in
-                   if is_nullable then
-                     nullable_obj_str := Some (Ident.fieldname_to_simplified_string fld);
-                   is_nullable
-               | _ -> true in
-             IList.for_all is_strexp_pt_by_nullable_fld flds
-         | _ -> true)
+    List.for_all
+      ~f:(fun hpred ->
+          match hpred with
+          | Sil.Hpointsto (Exp.Lvar pvar, Sil.Eexp (Exp.Var _ as exp, _), _)
+            when Exp.equal exp deref_exp ->
+              let is_weak_captured_var = is_weak_captured_var pdesc pvar in
+              let is_nullable =
+                if AnnotatedSignature.param_is_nullable pvar ann_sig || is_weak_captured_var
+                then
+                  begin
+                    nullable_obj_str := Some (Pvar.to_string pvar);
+                    nullable_str_is_weak_captured_var := is_weak_captured_var;
+                    true
+                  end
+                else
+                  let is_nullable_attr = function
+                    | Sil.Apred ((Aretval (pname, ret_attr) | Aundef (pname, ret_attr, _, _)), _)
+                      when Annotations.ia_is_nullable ret_attr ->
+                        nullable_obj_str := Some (Procname.to_string pname);
+                        true
+                    | _ -> false in
+                  List.exists ~f:is_nullable_attr (Attribute.get_for_exp tenv prop exp) in
+              (* it's ok for a non-nullable local to point to deref_exp *)
+              is_nullable || Pvar.is_local pvar
+          | Sil.Hpointsto (_, Sil.Estruct (flds, _), Exp.Sizeof (typ, _, _)) ->
+              let fld_is_nullable fld =
+                match StructTyp.get_field_type_and_annotation ~lookup fld typ with
+                | Some (_, annot) -> Annotations.ia_is_nullable annot
+                | _ -> false in
+              let is_strexp_pt_by_nullable_fld (fld, strexp) =
+                match strexp with
+                | Sil.Eexp (Exp.Var _ as exp, _) when Exp.equal exp deref_exp ->
+                    let is_nullable = fld_is_nullable fld in
+                    if is_nullable then
+                      nullable_obj_str := Some (Ident.fieldname_to_simplified_string fld);
+                    is_nullable
+                | _ -> true in
+              List.for_all ~f:is_strexp_pt_by_nullable_fld flds
+          | _ -> true)
       prop.Prop.sigma &&
     !nullable_obj_str <> None in
   let root = Exp.root_of_lexp lexp in

@@ -81,7 +81,7 @@ let normalize prog::prog args::args :list action_item => {
     };
   /* collect stdout and stderr output together (in reverse order) */
   Utils.with_process_in clang_hashhashhash consume_input |> ignore;
-  normalized_commands := IList.rev !normalized_commands;
+  normalized_commands := List.rev !normalized_commands;
   !normalized_commands
 };
 
@@ -111,7 +111,7 @@ let exe prog::prog args::args => {
       (bin_xx, true)
     | None => (clang_xx, false)
     };
-  IList.iter exec_action_item commands;
+  List.iter f::exec_action_item commands;
   if (List.is_empty commands || should_run_original_command) {
     if (List.is_empty commands) {
       /* No command to execute after -###, let's execute the original command
