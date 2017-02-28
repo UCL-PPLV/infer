@@ -196,14 +196,14 @@ let mk_inv_thetas ss =
   let vs =
     Field.Map.fold
       (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
-      ((List.hd_exn (List.hd_exn ss)).sum_inv)
+      ((List.hd_exn ss).sum_inv)
       Field.Map.empty in
   let mk s =
     Field.Map.fold
       (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
       s.sum_inv
       Ident.Map.empty in
-  IList.map (IList.map mk) ss
+  IList.map mk ss
 
 let extend_with_pres thetas ss =
   let extend_with_pre theta sum =
@@ -211,17 +211,17 @@ let extend_with_pres thetas ss =
       (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
       sum.sum_pre
       theta in
-  IList.map2 (IList.map2 extend_with_pre) thetas ss
+  IList.map2 extend_with_pre thetas ss
 
 let extend_with_exists thetas ss =
   let extend_with_exist theta sum =
     let vars = Constr.Set.vars sum.sum_constraints in
     let evars = Ident.Set.filter (fun v -> not (Ident.Map.mem v theta)) vars in
     Ident.Set.fold (fun v acc -> Ident.Map.add v (Ident.mk ()) acc) evars theta in
-  IList.map2 (IList.map2 extend_with_exist) thetas ss
+  IList.map2 extend_with_exist thetas ss
 
 let apply_substs thetas ss =
-  IList.map2 (IList.map2 Summary.subst) thetas ss
+  IList.map2 Summary.subst thetas ss
 
 let add_splits_and_flatten sums =
   let aux sums =
@@ -248,8 +248,9 @@ let add_splits_and_flatten sums =
       sum_pre = new_pre;
       sum_locked = false;
       sum_constraints = constrs
-    } in
-  IList.map aux sums
+    }
+  in
+  aux sums
 
 let file_analysis _ _ get_proc_desc file_env =
   (* outsource checks for ctrs/public etc to ThreadSafety *)
@@ -274,21 +275,19 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   (* take a list of (proc info, summary) pairs *)
-  let merge (_, summaries) =
+  let merge (pinfos, summaries) =
     let thetas = mk_inv_thetas summaries in
     let thetas = extend_with_pres thetas summaries in
     let thetas = extend_with_exists thetas summaries in
     let sums = apply_substs thetas summaries in
-    let sums' = add_splits_and_flatten sums in
-    let constraints =
-      List.fold
-        ~f:(fun acc s -> Constr.Set.union s.sum_constraints acc)
-        ~init:Constr.Set.empty
-        sums' in
-    Ident.Set.fold
-      (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
-      (Constr.Set.vars constraints)
-      constraints
+    let merged_summary = add_splits_and_flatten sums in
+    let constraints = merged_summary.sum_constraints in
+    let bounded =
+      Ident.Set.fold
+        (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
+        (Constr.Set.vars constraints)
+        constraints in
+    (pinfos, bounded)
   in
 
   (* run z3 on a set of constraints
@@ -321,7 +320,8 @@ let file_analysis _ _ get_proc_desc file_env =
     output
   in
 
-  let run_check merged =
+  let run_check (pinfos, merged) =
+    L.out "Analysing case: %a@." (Pp.seq Procname.pp) pinfos ;
     (* parse a z3 model (without the enclosing braces and model statement) *)
     let parse_z3_model varmap =
       let rec aux acc = function
@@ -331,20 +331,19 @@ let file_analysis _ _ get_proc_desc file_env =
           let var = String.Map.find_exn varmap varstr in
           let value = Scanf.sscanf l2 " %f" (fun v -> v) in
           aux (Ident.Map.add var value acc) ls in
-      aux Ident.Map.empty
+        aux Ident.Map.empty
+      in
+      match run_z3 merged with
+      | "unsat" :: _ ->
+        L.out "Z3 says: unsat@.@."
+      | "sat" :: _ :: output -> (* drop first "(model" line as _ *)
+        begin
+          let varmap = Ident.Set.mk_string_map (Constr.Set.vars merged) in
+          let model = parse_z3_model varmap output in
+          L.out "Z3 model: %a@.@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
+        end
+      | _ -> assert false
     in
-
-    match run_z3 merged with
-    | "unsat" :: _ ->
-      L.out "Z3 says: unsat@."
-    | "sat" :: _ :: output -> (* drop first "(model" line as _ *)
-      begin
-        let varmap = Ident.Set.mk_string_map (Constr.Set.vars merged) in
-        let model = parse_z3_model varmap output in
-        L.out "Z3 model: %a@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
-      end
-    | _ -> assert false
-  in
 
   let classmap =
     List.fold
@@ -358,12 +357,11 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   let analyse_class _ procs =
-    List.filter ~f:should_analyze procs |>
-    IList.map summarise |>
-    all_pairs |>
-    IList.map process_case |>
-    List.unzip |>
-    merge |>
-    run_check
+    let procs = List.filter ~f:should_analyze procs in
+    let proc_sums = List.map ~f:summarise procs in
+    let pairs = all_pairs proc_sums in
+    let cases = IList.map process_case pairs in
+    let merged_cases = List.map ~f:merge cases in
+    List.iter ~f:run_check merged_cases
   in
   ClassMap.iter analyse_class classmap
