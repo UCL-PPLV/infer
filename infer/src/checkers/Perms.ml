@@ -1,6 +1,7 @@
 (* TODO
    (decreasing importance)
    - Interprocedural
+   - generalise variable freshening
    - track breaking of soundness assumptions eg reentrancy
    - static fields?
    - include only public methods in check
@@ -78,28 +79,47 @@ module Summary = struct
       payload.Specs.permsafety
     end)
 
-  let of_state { pre; inv; constraints; locked } =
+  let of_state { pre; inv; curr; constraints; locked } =
     {
       sum_pre = pre;
       sum_inv = inv;
+      sum_post = curr;
       sum_constraints = constraints;
       sum_locked = locked;
     }
 
-  let subst theta { sum_pre; sum_inv; sum_locked; sum_constraints } =
+  let subst theta { sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
     {
       sum_pre = Field.Map.map (Ident.subst theta) sum_pre;
       sum_inv = Field.Map.map (Ident.subst theta) sum_inv;
+      sum_post = Field.Map.map (Ident.subst theta) sum_post;
       sum_locked;
       sum_constraints = Constr.Set.map (Constr.subst theta) sum_constraints
     }
 
-  let pp fmt { sum_pre; sum_inv; sum_locked; sum_constraints } =
-    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_locked=%a sum_constraints=%a }"
+  let pp fmt { sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
+    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_post=%a; sum_locked=%a sum_constraints=%a }"
       (Field.Map.pp ~pp_value:Ident.pp) sum_pre
       (Field.Map.pp ~pp_value:Ident.pp) sum_inv
+      (Field.Map.pp ~pp_value:Ident.pp) sum_post
       F.pp_print_bool sum_locked
       Constr.Set.pp sum_constraints
+
+(* send variables of
+     sum_constraints U sum_post \ (sum_pre U sum_inv)
+   to variables fresh in astate *)
+(* optimised currently only for the case where there are none *)
+  let freshen summary _ =
+    let vars_of_map m =
+      Field.Map.fold (fun _ v a -> Ident.Set.add v a) m Ident.Set.empty in
+    let prevars = vars_of_map summary.sum_pre in
+    let invvars = vars_of_map summary.sum_inv in
+    let rhs_vars = Ident.Set.union prevars invvars in
+    let cvars = Constr.Set.vars summary.sum_constraints in
+    let postvars = vars_of_map summary.sum_post in
+    let lhs_vars = Ident.Set.union cvars postvars in
+    let evars = Ident.Set.diff lhs_vars rhs_vars in
+    if Ident.Set.is_empty evars then summary else assert false
 
 end
 
@@ -110,55 +130,58 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
-  let do_mem mk_constr mk_constr2 fieldname astate =
-    if not (Field.Map.mem fieldname astate.curr) then
-      L.out "%a not present in %a@." Field.pp fieldname State.pp astate;
-    let mk =
-      if astate.locked
-      then
-        mk_constr2 (Field.Map.find fieldname astate.inv)
-      else
-        mk_constr in
+  let do_mem mk_constr fieldname astate =
     let fld_var = Field.Map.find fieldname astate.curr in
-    Domain.NonBottom (State.add_constr (mk fld_var) astate)
+    let args =
+      (if astate.locked then [Field.Map.find fieldname astate.inv] else []) @ [fld_var] in
+    Domain.NonBottom (State.add_constr (mk_constr args) astate)
   let do_store fieldname astate =
-    do_mem Constr.mk_eq_one Constr.mk_2eq_one fieldname astate
+    do_mem Constr.mk_eq_one fieldname astate
   let do_load fieldname astate =
-    do_mem Constr.mk_gt_zero Constr.mk_2gt_zero fieldname astate
+    do_mem Constr.mk_gt_zero fieldname astate
 
-  (* add or remove permissions from invariant *)
-  (* let hale mk_constr lk a =
-    Field.Map.fold
-      (fun f lvar acc ->
-         let v = Ident.mk () in
-         let cn = mk_constr v lvar (Field.Map.find f a.inv) in
-         acc |> State.add_fld f v |> State.add_constr cn
-      )
-      a.curr
-      { a with curr = Field.Map.empty; locked = lk } *)
+  let lock_unlock astate to_lock =
+    if phys_equal astate.locked to_lock then
+      Domain.Bottom
+    else
+      Domain.NonBottom { astate with locked = to_lock }
 
-  let do_sync pn args astate =
-    (* let exhale = hale Constr.mk_minus false in
-    let inhale = hale Constr.mk_add true in *)
-    (* decide if a lock statement is about "this" *)
-    let lock_effect_on_this pn args astate =
-      (* L.out "args=%a this_refs=%a@." (PrettyPrintable.pp_collection ~pp_item:Exp.pp) (IList.map fst args) Ident.Set.pp astate.this_refs; *)
-      let this_arg = match args with
-        | (l, _)::_ -> ExpSet.mem l astate.this_refs
-        | _ -> false in
-      if this_arg then get_lock_model pn else NoEffect in
-    match lock_effect_on_this pn args astate with
-    | Lock ->
-        if astate.locked then
-          Domain.Bottom
-        else
-          Domain.NonBottom { astate with locked = true }
-    | Unlock ->
-        if astate.locked then
-          Domain.NonBottom { astate with locked = false }
-        else
-          Domain.Bottom
-    | NoEffect -> Domain.NonBottom astate
+  let is_lock_unlock pn args astate =
+    let this_arg =
+      match args with
+      | (l, _)::_ -> ExpSet.mem l astate.this_refs
+      | _ -> false in
+    if not this_arg then false else
+    match get_lock_model pn with
+    | NoEffect -> false
+    | _ -> true
+
+  let do_call pdesc pn args astate =
+    if is_lock_unlock pn args astate then
+      begin
+        match get_lock_model pn with
+        | Lock -> lock_unlock astate true
+        | Unlock -> lock_unlock astate false
+        | NoEffect -> assert false
+      end
+    else
+      (* method call other than lock/unlock *)
+      match Summary.read_summary pdesc pn with
+      | None ->
+          L.out "Couldn't find summary for %a@." Procname.pp pn ;
+          Domain.NonBottom astate
+      | Some summary ->
+          if astate.locked && summary.sum_locked then Domain.Bottom else
+          let summary = Summary.freshen summary astate in
+          let theta = Field.Map.mk_theta Ident.Map.empty summary.sum_pre astate.pre in
+          let theta = Field.Map.mk_theta theta summary.sum_inv astate.inv in
+          let summary = Summary.subst theta summary in
+          Domain.NonBottom
+            { astate with
+              locked = astate.locked || summary.sum_locked;
+              constraints = Constr.Set.union astate.constraints summary.sum_constraints;
+              curr = summary.sum_post;
+            }
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -184,8 +207,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
       L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
       astate *)
-    | Sil.Call (_, Const (Cfun pn), args, _, _) ->
-      do_sync pn args astate
+    | Sil.Call (_, Const (Cfun pn), (((l,_)::_) as args), _, _)
+      when Exp.is_this l || ExpSet.mem l astate.this_refs ->
+        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
+        do_call pdesc pn args astate
+    | Sil.Call (_, Const (Cfun pn), (((_, Typ.Tstruct tname)::_) as args), _, _)
+      when PatternMatch.is_subtype tenv classname tname ->
+        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
+        do_call pdesc pn args astate
     | _ -> Domain.NonBottom astate
 
   let exec_instr astate pdata x cmd =
@@ -290,6 +319,7 @@ let add_splits_and_flatten sums =
     {
       sum_inv = s.sum_inv;
       sum_pre = new_pre;
+      sum_post = Field.Map.empty; (* we don't use posts for || rule *)
       sum_locked = false;
       sum_constraints = constrs
     }

@@ -38,6 +38,11 @@ module Field : sig
 
     (* make a new map from a set of fields into fresh logical var ids *)
     val mk : Set.t -> Ident.t t
+
+(* extend a given variable substitution sending, for each field in the two maps,
+   the variable from the first map to that of the second. *)
+    val mk_theta : Ident.t Ident.Map.t -> Ident.t t -> Ident.t t -> Ident.t Ident.Map.t
+
   end
 end
 
@@ -48,10 +53,10 @@ module Constr : sig
   val mk_add : Ident.t -> Ident.t -> Ident.t -> t
   val mk_lb : Ident.t -> t
   val mk_ub : Ident.t -> t
-  val mk_eq_one : Ident.t -> t
-  val mk_2eq_one : Ident.t -> Ident.t -> t
-  val mk_gt_zero : Ident.t -> t
-  val mk_2gt_zero : Ident.t -> Ident.t -> t
+  (* val mk_eq_one : Ident.t -> t *)
+  val mk_eq_one : Ident.t list -> t
+  (* val mk_gt_zero : Ident.t -> t *)
+  val mk_gt_zero : Ident.t list -> t
   val mk_minus : Ident.t -> Ident.t -> Ident.t -> t
   val mk_le : Ident.t -> Ident.t -> t
 
@@ -123,6 +128,7 @@ type summary =
   {
     sum_pre: perms_t;
     sum_inv: perms_t;
+    sum_post: perms_t;
     sum_constraints: Constr.Set.t;
     (*NB sum_locked stands for whether the method definitely locks but does not
       unlock on method exit *)

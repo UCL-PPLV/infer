@@ -54,6 +54,12 @@ module Field = struct
     (* make a new map from a set of fields into fresh logical var ids *)
     let mk fields =
       Set.fold (fun f fm -> add f (Ident.mk ()) fm) fields empty
+
+    let mk_theta theta ps qs =
+      fold
+        (fun f v acc -> Ident.Map.add v (find f qs) acc)
+        ps
+        theta
   end
 end
 
@@ -73,14 +79,14 @@ module Constr = struct
     Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
   let mk_ub p =
     Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
-  let mk_eq_one p =
-    Exp.eq (Exp.Var p) (Exp.one)
-  let mk_2eq_one p q =
-    Exp.eq (sum [p;q]) (Exp.one)
-  let mk_gt_zero p =
-    Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero)
-  let mk_2gt_zero p q =
-    Exp.BinOp (Binop.Gt, sum [p;q], Exp.zero)
+  (* let mk_eq_one p =
+    Exp.eq (Exp.Var p) (Exp.one) *)
+  let mk_eq_one ps =
+    Exp.eq (sum ps) (Exp.one)
+  (* let mk_gt_zero p =
+    Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero) *)
+  let mk_gt_zero ps =
+    Exp.BinOp (Binop.Gt, sum ps, Exp.zero)
   let mk_minus p q r =
     Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r))
   let mk_le p q =
@@ -194,6 +200,7 @@ type summary =
   {
     sum_pre: perms_t;
     sum_inv: perms_t;
+    sum_post: perms_t;
     sum_constraints: Constr.Set.t;
     sum_locked: bool;
   }
