@@ -52,12 +52,24 @@ module Field = struct
     include PrettyPrintable.MakePPMap(F)
 
     (* make a new map from a set of fields into fresh logical var ids *)
-    let mk fields =
+    let of_fields fields =
       Set.fold (fun f fm -> add f (Ident.mk ()) fm) fields empty
+
+    let mk m =
+      fold
+        (fun f _ acc -> add f (Ident.mk ()) acc)
+        m
+        empty
 
     let mk_theta theta ps qs =
       fold
         (fun f v acc -> Ident.Map.add v (find f qs) acc)
+        ps
+        theta
+
+    let fresh_theta theta ps =
+      fold
+        (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
         ps
         theta
   end

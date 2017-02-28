@@ -172,17 +172,27 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           L.out "Couldn't find summary for %a@." Procname.pp pn ;
           Domain.NonBottom astate
       | Some summary ->
-          if astate.locked && summary.sum_locked then Domain.Bottom else
-          let summary = Summary.freshen summary astate in
-          let theta = Field.Map.mk_theta Ident.Map.empty summary.sum_pre astate.pre in
-          let theta = Field.Map.mk_theta theta summary.sum_inv astate.inv in
-          let summary = Summary.subst theta summary in
-          Domain.NonBottom
-            { astate with
-              locked = astate.locked || summary.sum_locked;
-              constraints = Constr.Set.union astate.constraints summary.sum_constraints;
-              curr = summary.sum_post;
-            }
+          if astate.locked then
+            begin
+              if summary.sum_locked then
+                Domain.Bottom
+              else
+                let summary = Summary.freshen summary astate in
+                assert false
+            end
+          else
+            begin
+              let summary = Summary.freshen summary astate in
+              let theta = Field.Map.mk_theta Ident.Map.empty summary.sum_pre astate.pre in
+              let theta = Field.Map.mk_theta theta summary.sum_inv astate.inv in
+              let summary = Summary.subst theta summary in
+              Domain.NonBottom
+                { astate with
+                  locked = astate.locked || summary.sum_locked;
+                  constraints = Constr.Set.union astate.constraints summary.sum_constraints;
+                  curr = summary.sum_post;
+                }
+            end
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -240,8 +250,8 @@ let compute_and_store_post callback =
   let compute_post pdesc =
     let fields = get_fields pdesc in
     let initial =
-      let m = Field.Map.mk fields in
-      Domain.NonBottom { State.empty with pre = m; curr = m; inv = Field.Map.mk fields } in
+      let m = Field.Map.of_fields fields in
+      Domain.NonBottom { State.empty with pre = m; curr = m; inv = Field.Map.of_fields fields } in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
     match Analyzer.compute_post ~initial pdata with
     | None -> L.out "No spec found@." ; None
@@ -267,24 +277,13 @@ let all_pairs =
 (* create a list of substitutions from all inv variables of a list of lists of summaries
    to the same targets *)
 let mk_inv_thetas ss =
-  let vs =
-    Field.Map.fold
-      (fun f _ a -> Field.Map.add f (Ident.mk ()) a)
-      ((List.hd_exn ss).sum_inv)
-      Field.Map.empty in
-  let mk s =
-    Field.Map.fold
-      (fun f v acc -> Ident.Map.add v (Field.Map.find f vs) acc)
-      s.sum_inv
-      Ident.Map.empty in
+  let vs = Field.Map.mk (List.hd_exn ss).sum_inv in
+  let mk s = Field.Map.mk_theta Ident.Map.empty s.sum_inv vs in
   List.map ~f:mk ss
 
 let extend_with_pres thetas ss =
   let extend_with_pre theta sum =
-    Field.Map.fold
-      (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
-      sum.sum_pre
-      theta in
+    Field.Map.fresh_theta theta sum.sum_pre in
   List.map2_exn ~f:extend_with_pre thetas ss
 
 let extend_with_exists thetas ss =
@@ -300,7 +299,7 @@ let apply_substs thetas ss =
 let add_splits_and_flatten sums =
   let aux sums =
     let s = List.hd_exn sums in
-    let new_pre = Field.Map.map (fun _ -> Ident.mk ()) s.sum_pre in
+    let new_pre = Field.Map.mk s.sum_pre in
     let constrs =
       List.fold
         ~f:(fun acc s' -> Constr.Set.union s'.sum_constraints acc)

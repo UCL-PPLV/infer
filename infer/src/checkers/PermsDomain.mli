@@ -36,12 +36,19 @@ module Field : sig
   module Map : sig
     include PrettyPrintable.PPMap with type key = t
 
-    (* make a new map from a set of fields into fresh logical var ids *)
-    val mk : Set.t -> Ident.t t
+(* Create a field map with the same fields with argument, to fresh variables *)
+    val mk : Ident.t t -> Ident.t t
+
+(* make a new map from a set of fields into fresh logical var ids *)
+    val of_fields : Set.t -> Ident.t t
 
 (* extend a given variable substitution sending, for each field in the two maps,
    the variable from the first map to that of the second. *)
     val mk_theta : Ident.t Ident.Map.t -> Ident.t t -> Ident.t t -> Ident.t Ident.Map.t
+
+(* extend a given variable substitution sending, for each field in the map,
+   the variable from the map to a fresh one (obtained by Ident.mk). *)
+    val fresh_theta : Ident.t Ident.Map.t -> Ident.t t -> Ident.t Ident.Map.t
 
   end
 end
