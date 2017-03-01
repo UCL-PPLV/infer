@@ -161,20 +161,41 @@ module Lock = struct
       | Fld of Field.t[@@deriving compare]
     let equal = [%compare.equal : t]
     let pp fmt = function
-      | This -> F.pp_print_string fmt "<This>"
+      | This -> F.pp_print_string fmt "|This|"
       | Fld f -> F.fprintf fmt "F(%a)" Field.pp f
   end
   include L
 
+  module Set = PrettyPrintable.MakePPSet(L)
+  module Map = PrettyPrintable.MakePPMap(L)
+
   module MultiSet = struct
-    type nonrec t = t list
+    type elt = t
+    type t = elt list
 
     let empty = []
 
+    let singleton x = [x]
+    let to_list m = m
+
     let compare m1 m2 = List.compare L.compare m1 m2
     let equal = [%compare.equal : t]
+    let pp fmt m = F.fprintf fmt "{%a}" (Pp.seq L.pp) m
 
-    let pp fmt m = Pp.seq L.pp fmt m
+    let union m1 m2 =
+      List.sort ~cmp:L.compare (m1 @ m2)
+
+    let add l m =
+      union (singleton l) m
+
+    let rec remove l = function
+      | [] -> raise Not_found
+      | l'::ls when L.equal l l' -> ls
+      | l'::ls -> l'::(remove l ls)
+
+    let mem l ls =
+      List.mem ~equal:L.equal ls l
+
     (* let mem_remove l m =
       let rec aux (acc,found) = function
         | [] -> if found then Some (List.rev acc) else None
@@ -192,7 +213,8 @@ module Lock = struct
           | Some m2' -> subset ls m2'
 
     let equal m1 m2 =
-      subset m1 m2 && subset m2 m1 *)
+       subset m1 m2 && subset m2 m1 *)
+
   end
 end
 
@@ -215,7 +237,7 @@ module Atom = struct
     let equal = [%compare.equal : t]
 
     let pp fmt {access; field; locks} =
-      F.fprintf fmt "Acc=%a; Fld=%a; Lks=%a"
+      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a>"
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
@@ -274,9 +296,13 @@ module State = struct
     { a with this_refs = ExpSet.remove v a.this_refs }
   let add_fld f v a =
     { a with curr = Field.Map.add f v a.curr }
+  let add_atom access field a =
+    { a with atoms = Atom.Set.add {access; field; locks=a.locks_held} a.atoms }
 
-  let pp fmt { pre; inv; curr; locked; this_refs; constraints } =
-    F.fprintf fmt "{ pre=%a; inv=%a; curr=%a; locked=%a; this_refs=%a; constraints=%a }"
+  let pp fmt { locks_held; atoms; pre; inv; curr; locked; this_refs; constraints } =
+    F.fprintf fmt "{ locks_held=%a; atoms=%a; pre=%a; inv=%a; curr=%a; locked=%a; this_refs=%a; constraints=%a }"
+      Lock.MultiSet.pp locks_held
+      Atom.Set.pp atoms
       (Field.Map.pp ~pp_value:Ident.pp) pre
       (Field.Map.pp ~pp_value:Ident.pp) inv
       (Field.Map.pp ~pp_value:Ident.pp) curr
@@ -288,6 +314,7 @@ end
 (* summary type, omit transient parts of astate *)
 type summary =
   {
+    sum_atoms: Atom.Set.t;
     sum_pre: perms_t;
     sum_inv: perms_t;
     sum_post: perms_t;
@@ -320,6 +347,8 @@ module WithoutBottomDomain = struct
       )
       a1.curr
       { a1 with
+        locks_held = Lock.MultiSet.union a1.locks_held a2.locks_held;
+        atoms = Atom.Set.union a1.atoms a2.atoms;
         locked = a1.locked && a2.locked;
         curr = Field.Map.empty;
         this_refs = ExpSet.inter a1.this_refs a2.this_refs;

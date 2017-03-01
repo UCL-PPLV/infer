@@ -56,6 +56,8 @@ end
 module Constr : sig
   type t = Exp.t
 
+  val sum : Ident.t list -> t
+
   val mk_sum : Ident.t -> Ident.t list -> t
   val mk_add : Ident.t -> Ident.t -> Ident.t -> t
   val mk_lb : Ident.t -> t
@@ -105,18 +107,54 @@ module Lock : sig
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
 
+  module Set : PrettyPrintable.PPSet with type elt = t
+  module Map : PrettyPrintable.PPMap with type key = t
+
   module MultiSet : sig
+    type elt = t
     type t
     val empty : t
-    val subset : t -> t -> bool
+    val compare : t -> t -> int
     val equal : t -> t -> bool
+    val pp : Format.formatter -> t -> unit
+
+    val to_list : t -> elt list
+    val singleton : elt -> t
+
+(* val subset : t -> t -> bool *)
+    val union : t -> t -> t
+    val add : elt -> t -> t
+    val remove : elt -> t -> t
+    val mem : elt -> t -> bool
+
   end
+end
+
+module Atom : sig
+  module Access : sig
+    type t = Read | Write
+    val compare : t -> t -> int
+    val equal : t -> t -> bool
+    val pp : Format.formatter -> t -> unit
+  end
+
+  type t =
+    {
+      access : Access.t;
+      field : Field.t;
+      locks : Lock.MultiSet.t;
+    }
+  val compare : t -> t -> int
+  val equal : t -> t -> bool
+  val pp : Format.formatter -> t -> unit
+
+  module Set : PrettyPrintable.PPSet with type elt = t
 end
 
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
   locks_held : Lock.MultiSet.t;
-
+  atoms : Atom.Set.t;
   (* permission vars for the precondition; never changes during analysis of a method *)
   pre: perms_t;
 
@@ -146,12 +184,14 @@ module State : sig
   val remove_ref : Exp.t -> t -> t
   (* add a mapping to the curr state *)
   val add_fld : Field.t -> Ident.t -> t -> t
+  val add_atom : Atom.Access.t -> Field.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end
 
 (* summary type, omit transient parts of astate *)
 type summary =
   {
+    sum_atoms: Atom.Set.t;
     sum_pre: perms_t;
     sum_inv: perms_t;
     sum_post: perms_t;

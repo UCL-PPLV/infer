@@ -80,8 +80,9 @@ module Summary = struct
       payload.Specs.permsafety
     end)
 
-  let of_state { pre; inv; curr; constraints; locked } =
+  let of_state { atoms; pre; inv; curr; constraints; locked } =
     {
+      sum_atoms = atoms;
       sum_pre = pre;
       sum_inv = inv;
       sum_post = curr;
@@ -89,8 +90,9 @@ module Summary = struct
       sum_locked = locked;
     }
 
-  let subst theta { sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
+  let subst theta { sum_atoms; sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
     {
+      sum_atoms;
       sum_pre = Field.Map.map (Ident.subst theta) sum_pre;
       sum_inv = Field.Map.map (Ident.subst theta) sum_inv;
       sum_post = Field.Map.map (Ident.subst theta) sum_post;
@@ -98,8 +100,9 @@ module Summary = struct
       sum_constraints = Constr.Set.map (Constr.subst theta) sum_constraints
     }
 
-  let pp fmt { sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
-    F.fprintf fmt "{ sum_pre=%a; sum_inv=%a; sum_post=%a; sum_locked=%a sum_constraints=%a }"
+  let pp fmt { sum_atoms; sum_pre; sum_inv; sum_post; sum_locked; sum_constraints } =
+    F.fprintf fmt "{ sum_atoms=%a; sum_pre=%a; sum_inv=%a; sum_post=%a; sum_locked=%a sum_constraints=%a }"
+      Atom.Set.pp sum_atoms
       (Field.Map.pp ~pp_value:Ident.pp) sum_pre
       (Field.Map.pp ~pp_value:Ident.pp) sum_inv
       (Field.Map.pp ~pp_value:Ident.pp) sum_post
@@ -122,6 +125,12 @@ module Summary = struct
     let evars = Ident.Set.diff lhs_vars rhs_vars in
     if Ident.Set.is_empty evars then summary else assert false
 
+  let get_lockset s =
+    Atom.Set.fold
+      (fun a acc ->
+         Lock.Set.union (Lock.Set.of_list (Lock.MultiSet.to_list a.Atom.locks)) acc)
+      s.sum_atoms
+      Lock.Set.empty
 end
 
 
@@ -131,48 +140,69 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
 
-  let do_mem mk_constr fieldname astate =
+  let do_mem acc mk_constr fieldname astate =
     let fld_var = Field.Map.find fieldname astate.curr in
     let args =
       (if astate.locked then [Field.Map.find fieldname astate.inv] else []) @ [fld_var] in
-    Domain.NonBottom (State.add_constr (mk_constr args) astate)
+    Domain.NonBottom (State.add_constr (mk_constr args) (State.add_atom acc fieldname astate))
   let do_store fieldname astate =
-    do_mem Constr.mk_eq_one fieldname astate
+    do_mem Atom.Access.Write Constr.mk_eq_one fieldname astate
   let do_load fieldname astate =
-    do_mem Constr.mk_gt_zero fieldname astate
+    do_mem Atom.Access.Read Constr.mk_gt_zero fieldname astate
 
-  let lock_unlock astate to_lock =
+  (* let lock_unlock astate to_lock =
+    (* if not to_lock && not (Lock.MultiSet.mem lock astate.locks_held) then
+      Domain.Bottom
+    else
+      let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
+      Domain.NonBottom { astate with locks_held = f lock astate.locks_held } *)
     if phys_equal astate.locked to_lock then
       Domain.Bottom
     else
-      Domain.NonBottom { astate with locked = to_lock }
+      Domain.NonBottom { astate with locked = to_lock } *)
 
-  let is_lock_unlock pn args astate =
+  let is_un_lock pn =
+    match get_lock_model pn with
+    | NoEffect -> false
+    | _ -> true
+
+  let is_lock pn =
+    match get_lock_model pn with
+    | Lock -> true
+    | _ -> false
+
+  let get_lock pn _ =
+    if Procname.equal pn BuiltinDecl.__set_locked_attribute ||
+       Procname.equal pn BuiltinDecl.__delete_locked_attribute then
+      Lock.This
+    else
+      assert false
+
+  (* let is_lock_unlock pn args astate =
     let this_arg =
       match args with
       | (l, _)::_ -> ExpSet.mem l astate.this_refs
       | _ -> false in
     if not this_arg then false else
-    match get_lock_model pn with
-    | NoEffect -> false
-    | _ -> true
+    is_un_lock pn *)
 
   let do_call pdesc pn args astate =
-    if is_lock_unlock pn args astate then
+    (* if is_lock_unlock pn args astate then
       begin
         match get_lock_model pn with
         | Lock -> lock_unlock astate true
         | Unlock -> lock_unlock astate false
         | NoEffect -> assert false
       end
-    else
+    else *)
       (* method call other than lock/unlock *)
       match Summary.read_summary pdesc pn with
       | None ->
           L.out "Couldn't find summary for %a@." Procname.pp pn ;
           Domain.NonBottom astate
       | Some summary ->
-          if astate.locked then
+          assert false
+          (* if astate.locked then
             begin
               if summary.sum_locked then
                 Domain.Bottom
@@ -192,7 +222,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
                   constraints = Constr.Set.union astate.constraints summary.sum_constraints;
                   curr = summary.sum_post;
                 }
-            end
+            end *)
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
@@ -201,32 +231,53 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, _)
       when PatternMatch.is_subtype tenv classname tname ->
-      do_store fieldname astate
+        do_store fieldname astate
+
     | Sil.Store (l', _, l, _) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-      Domain.NonBottom (State.add_ref l' astate)
+        Domain.NonBottom (State.add_ref l' astate)
+
     | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _)
       when PatternMatch.is_subtype tenv classname tname ->
         do_load fieldname astate
+
     | Sil.Load (v,l,_,_) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-      Domain.NonBottom (State.add_ref (Exp.Var v) astate)
+        Domain.NonBottom (State.add_ref (Exp.Var v) astate)
+
     | Sil.Load (v,_,_,_) ->
-      Domain.NonBottom (State.remove_ref (Exp.Var v) astate)
+        Domain.NonBottom (State.remove_ref (Exp.Var v) astate)
+
     | Sil.Remove_temps (idents, _) ->
         Domain.NonBottom
           (List.fold ~f:(fun a v -> State.remove_ref (Exp.Var v) a) ~init:astate idents)
-    (* | Sil.Load (_,l,_,_) ->
-      L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
-      L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
-      astate *)
+
+    | Sil.Call (_, Const (Cfun pn), args, _, _)
+      when is_un_lock pn ->
+        let to_lock = is_lock pn in
+        let lock = get_lock pn args in
+        if not to_lock && not (Lock.MultiSet.mem lock astate.locks_held) then
+           Domain.Bottom
+        else
+          let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
+          Domain.NonBottom { astate with locks_held = f lock astate.locks_held }
+
+(* FIXME - not tracking references to fields *)
+
     | Sil.Call (_, Const (Cfun pn), (((l,_)::_) as args), _, _)
       when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
+        (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
         do_call pdesc pn args astate
+
     | Sil.Call (_, Const (Cfun pn), (((_, Typ.Tstruct tname)::_) as args), _, _)
       when PatternMatch.is_subtype tenv classname tname ->
-        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
+        (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
         do_call pdesc pn args astate
+
     | _ -> Domain.NonBottom astate
+
+(* | Sil.Load (_,l,_,_) ->
+   L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
+   L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
+   astate *)
 
   let exec_instr astate pdata x cmd =
     match astate with
@@ -317,6 +368,7 @@ let add_splits_and_flatten sums =
         new_pre
         constrs in
     {
+      sum_atoms = Atom.Set.empty; (* FIXME *)
       sum_inv = s.sum_inv;
       sum_pre = new_pre;
       sum_post = Field.Map.empty; (* we don't use posts for || rule *)
@@ -344,13 +396,72 @@ let file_analysis _ _ get_proc_desc file_env =
      currently expects a pair of summaries as we only consider two threads --
     this is meant to be generalised in the future to n threads *)
   let process_case = function
-    | [ ((_,_,p1,_), Some sum1); ((_,_,p2,_), Some sum2)] -> ([p1; p2], [sum1; sum2])
+    | [ (p1, Some sum1); (p2, Some sum2)] -> ([p1; p2], [sum1; sum2])
     | _ -> assert false
   in
 
   (* take a list of (proc info, summary) pairs *)
   let merge (pinfos, summaries) =
-    let thetas = mk_inv_thetas summaries in
+    let locks = List.fold summaries ~init:Lock.Set.empty
+        ~f:(fun acc s -> Lock.Set.union (Summary.get_lockset s) acc) in
+    let locks_lst = Lock.Set.fold (fun l acc -> l::acc) locks [] in
+    let get_fields tenv pname =
+      match Tenv.lookup tenv (get_class pname) with
+      | None -> assert false
+      | Some { StructTyp.fields } ->
+          Field.Set.of_list (List.map ~f:(fun (fld, _, _) -> fld) fields) in
+    let (_,tenv,pname,_) = List.hd_exn pinfos in
+    let fields = get_fields tenv pname in
+    let mk_lockmap () =
+      Lock.Set.fold (fun l acc -> Lock.Map.add l (Ident.mk ()) acc) locks Lock.Map.empty in
+    let invmap =
+      Field.Set.fold
+        (fun f acc -> Field.Map.add f (mk_lockmap ()) acc)
+        fields
+        Field.Map.empty in
+    let atom_to_expr premap { Atom.access; field; locks } =
+      let lmap = Field.Map.find field invmap in
+      let lks = Lock.Set.of_list (Lock.MultiSet.to_list locks) in
+      let invs = Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
+      let p = Field.Map.find field premap in
+      match access with
+      | Atom.Access.Read -> Constr.mk_gt_zero (p::invs)
+      | Atom.Access.Write -> Constr.mk_eq_one (p::invs)
+    in
+    let mk_sum_constr { sum_atoms } =
+      let premap = Field.Map.of_fields fields in
+      let ctrs =
+        Atom.Set.fold
+          (fun a acc -> Constr.Set.add (atom_to_expr premap a) acc)
+          sum_atoms
+          Constr.Set.empty in
+      (premap, ctrs)
+    in
+    let (premaps, ctrs) = List.fold summaries ~init:([], Constr.Set.empty)
+        ~f:(fun (premaps, acc) s ->
+            let (p, cs) = mk_sum_constr s in
+            (p::premaps, Constr.Set.union cs acc)
+          ) in
+    let premaps = List.rev premaps in
+    let split_pres = Field.Map.of_fields fields in
+    let split f =
+      let pres = List.map premaps ~f:(fun premap -> Field.Map.find f premap) in
+      let invs = Field.Map.find f invmap in
+      let lockinvs = List.map locks_lst ~f:(fun l -> Lock.Map.find l invs) in
+      Constr.mk_sum (Field.Map.find f split_pres) (pres @ lockinvs)
+    in
+    let ctrs = Field.Set.fold
+        (fun f acc -> Constr.Set.add (split f) acc)
+        fields
+        ctrs
+    in
+    let bounded =
+      Ident.Set.fold
+        (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
+        (Constr.Set.vars ctrs)
+        ctrs in
+    (pinfos, bounded)
+    (* let thetas = mk_inv_thetas summaries in
     let thetas = extend_with_pres thetas summaries in
     let thetas = extend_with_exists thetas summaries in
     let sums = apply_substs thetas summaries in
@@ -361,7 +472,7 @@ let file_analysis _ _ get_proc_desc file_env =
         (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
         (Constr.Set.vars constraints)
         constraints in
-    (pinfos, bounded)
+    (pinfos, bounded) *)
   in
 
   (* run z3 on a set of constraints
@@ -395,7 +506,8 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   let run_check (pinfos, merged) =
-    L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pinfos ;
+    let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
+    L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ;
     (* parse a z3 model (without the enclosing braces and model statement) *)
     let parse_z3_model varmap =
       let rec aux acc = function
