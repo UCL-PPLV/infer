@@ -154,8 +154,84 @@ module ExpSet = PrettyPrintable.MakePPSet(Exp)
 
 type perms_t = Ident.t Field.Map.t
 
+module Lock = struct
+  module L = struct
+    type t =
+      | This
+      | Fld of Field.t[@@deriving compare]
+    let equal = [%compare.equal : t]
+    let pp fmt = function
+      | This -> F.pp_print_string fmt "<This>"
+      | Fld f -> F.fprintf fmt "F(%a)" Field.pp f
+  end
+  include L
+
+  module MultiSet = struct
+    type nonrec t = t list
+
+    let empty = []
+
+    let compare m1 m2 = List.compare L.compare m1 m2
+    let equal = [%compare.equal : t]
+
+    let pp fmt m = Pp.seq L.pp fmt m
+    (* let mem_remove l m =
+      let rec aux (acc,found) = function
+        | [] -> if found then Some (List.rev acc) else None
+        | l'::ls when L.equal l l' -> aux (acc,true) ls
+        | l'::ls -> aux (l'::acc,found) ls
+      in
+      aux ([], false) m
+
+    let rec subset m1 m2 =
+      match m1 with
+      | [] -> true
+      | l::ls ->
+          match mem_remove l m2 with
+          | None -> false
+          | Some m2' -> subset ls m2'
+
+    let equal m1 m2 =
+      subset m1 m2 && subset m2 m1 *)
+  end
+end
+
+module Atom = struct
+  module A = struct
+    module Access = struct
+      type t = Read | Write [@@deriving compare]
+      let equal = [%compare.equal : t]
+      let pp fmt = function
+        | Read -> F.pp_print_string fmt "Read"
+        | Write -> F.pp_print_string fmt "Write"
+    end
+
+    type t =
+      {
+        access : Access.t;
+        field : Field.t;
+        locks : Lock.MultiSet.t;
+      } [@@deriving compare]
+    let equal = [%compare.equal : t]
+
+    let pp fmt {access; field; locks} =
+      F.fprintf fmt "Acc=%a; Fld=%a; Lks=%a"
+        Access.pp access
+        Field.pp field
+        Lock.MultiSet.pp locks
+
+  end
+  include A
+
+  module Set = PrettyPrintable.MakePPSet(A)
+end
+
+
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
+  locks_held : Lock.MultiSet.t;
+  atoms : Atom.Set.t;
+
   (* permission vars for the precondition; never changes during analysis of a method *)
   pre: perms_t;
 
@@ -180,6 +256,8 @@ module State = struct
 
   let empty =
     {
+      locks_held = Lock.MultiSet.empty;
+      atoms = Atom.Set.empty;
       pre = Field.Map.empty;
       curr = Field.Map.empty;
       locked = false;

@@ -96,8 +96,27 @@ module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
 
 type perms_t = Ident.t Field.Map.t
 
+
+module Lock : sig
+  type t =
+    | This
+    | Fld of Field.t
+  val compare : t -> t -> int
+  val equal : t -> t -> bool
+  val pp : Format.formatter -> t -> unit
+
+  module MultiSet : sig
+    type t
+    val empty : t
+    val subset : t -> t -> bool
+    val equal : t -> t -> bool
+  end
+end
+
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
+  locks_held : Lock.MultiSet.t;
+
   (* permission vars for the precondition; never changes during analysis of a method *)
   pre: perms_t;
 
