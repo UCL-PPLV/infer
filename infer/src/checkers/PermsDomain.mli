@@ -96,9 +96,6 @@ end
 
 module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
 
-type perms_t = Ident.t Field.Map.t
-
-
 module Lock : sig
   type t =
     | This
@@ -148,6 +145,8 @@ module Atom : sig
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
 
+  val add_locks : t -> Lock.MultiSet.t -> t
+
   module Set : PrettyPrintable.PPSet with type elt = t
 end
 
@@ -155,23 +154,9 @@ end
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-  (* permission vars for the precondition; never changes during analysis of a method *)
-  pre: perms_t;
-
-  (* permission vars for the current abstract state *)
-  curr: perms_t;
-
-  (* is the lock taken in the current state *)
-  locked: bool;
-
-  (* permission vars for the class invariant -- never changes during analysis of a method *)
-  inv: perms_t;
 
   (* var ids that hold a reference to "this" object at this point *)
   this_refs: ExpSet.t;
-
-  (* constraints abduced *)
-  constraints: Constr.Set.t;
 }
 
 module State : sig
@@ -179,11 +164,9 @@ module State : sig
 
   val empty : t
 
-  val add_constr : Exp.t -> t-> t
   val add_ref : Exp.t -> t -> t
   val remove_ref : Exp.t -> t -> t
   (* add a mapping to the curr state *)
-  val add_fld : Field.t -> Ident.t -> t -> t
   val add_atom : Atom.Access.t -> Field.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end
@@ -192,13 +175,7 @@ end
 type summary =
   {
     sum_atoms: Atom.Set.t;
-    sum_pre: perms_t;
-    sum_inv: perms_t;
-    sum_post: perms_t;
-    sum_constraints: Constr.Set.t;
-    (*NB sum_locked stands for whether the method definitely locks but does not
-      unlock on method exit *)
-    sum_locked: bool;
+    sum_locks: Lock.MultiSet.t;
   }
 
 (* Abstract domain *)

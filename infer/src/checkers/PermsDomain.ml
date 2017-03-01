@@ -152,8 +152,6 @@ end
 
 module ExpSet = PrettyPrintable.MakePPSet(Exp)
 
-type perms_t = Ident.t Field.Map.t
-
 module Lock = struct
   module L = struct
     type t =
@@ -245,6 +243,9 @@ module Atom = struct
   end
   include A
 
+  let add_locks a lks =
+    let lks = Lock.MultiSet.to_list lks in
+    { a with locks = List.fold lks ~init:a.locks ~f:(fun acc l -> Lock.MultiSet.add l acc)}
   module Set = PrettyPrintable.MakePPSet(A)
 end
 
@@ -254,23 +255,8 @@ type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
 
-  (* permission vars for the precondition; never changes during analysis of a method *)
-  pre: perms_t;
-
-  (* permission vars for the current abstract state *)
-  curr: perms_t;
-
-  (* is the lock taken in the current state *)
-  locked: bool;
-
-  (* permission vars for the class invariant -- never changes during analysis of a method *)
-  inv: perms_t;
-
   (* var ids that hold a reference to "this" object at this point *)
   this_refs: ExpSet.t;
-
-  (* constraints abduced *)
-  constraints: Constr.Set.t;
 }
 
 module State = struct
@@ -280,46 +266,28 @@ module State = struct
     {
       locks_held = Lock.MultiSet.empty;
       atoms = Atom.Set.empty;
-      pre = Field.Map.empty;
-      curr = Field.Map.empty;
-      locked = false;
-      inv = Field.Map.empty;
       this_refs = ExpSet.empty;
-      constraints = Constr.Set.empty;
     }
 
-  let add_constr c a =
-    { a with constraints = Constr.Set.add c a.constraints }
   let add_ref v a =
     { a with this_refs = ExpSet.add v a.this_refs }
   let remove_ref v a =
     { a with this_refs = ExpSet.remove v a.this_refs }
-  let add_fld f v a =
-    { a with curr = Field.Map.add f v a.curr }
   let add_atom access field a =
     { a with atoms = Atom.Set.add {access; field; locks=a.locks_held} a.atoms }
 
-  let pp fmt { locks_held; atoms; pre; inv; curr; locked; this_refs; constraints } =
-    F.fprintf fmt "{ locks_held=%a; atoms=%a; pre=%a; inv=%a; curr=%a; locked=%a; this_refs=%a; constraints=%a }"
+  let pp fmt { locks_held; atoms; this_refs } =
+    F.fprintf fmt "{ locks_held=%a; atoms=%a; this_refs=%a }"
       Lock.MultiSet.pp locks_held
       Atom.Set.pp atoms
-      (Field.Map.pp ~pp_value:Ident.pp) pre
-      (Field.Map.pp ~pp_value:Ident.pp) inv
-      (Field.Map.pp ~pp_value:Ident.pp) curr
-      Format.pp_print_bool locked
       ExpSet.pp this_refs
-      Constr.Set.pp constraints
 end
 
 (* summary type, omit transient parts of astate *)
 type summary =
   {
     sum_atoms: Atom.Set.t;
-    sum_pre: perms_t;
-    sum_inv: perms_t;
-    sum_post: perms_t;
-    sum_constraints: Constr.Set.t;
-    sum_locked: bool;
+    sum_locks: Lock.MultiSet.t;
   }
 
 (* Abstract domain *)
@@ -331,29 +299,9 @@ module WithoutBottomDomain = struct
      constraints that force this variable to be bound by the minimum of the two
      joined permissions. The lock state is and-ed together. *)
   let join a1 a2 =
-    assert (Field.Map.equal Ident.equal a1.pre a2.pre) ;
-    assert (Field.Map.equal Ident.equal a1.inv a2.inv) ;
-    let mk_constr f v a = Constr.mk_le v (Field.Map.find f a.curr) in
-    Field.Map.fold
-      (fun f _v acc ->
-         if Ident.equal _v (Field.Map.find f a2.curr) then
-           State.add_fld f _v acc
-         else
-           let v = Ident.mk () in
-           acc |>
-           State.add_constr (mk_constr f v a1) |>
-           State.add_constr (mk_constr f v a2) |>
-           State.add_fld f v
-      )
-      a1.curr
       { a1 with
         locks_held = Lock.MultiSet.union a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
-        locked = a1.locked && a2.locked;
-        curr = Field.Map.empty;
-        this_refs = ExpSet.inter a1.this_refs a2.this_refs;
-        (* FIXME following assumes disjointness of all vars except pre and inv *)
-        constraints = Constr.Set.union a1.constraints a2.constraints;
       }
 
   let widen ~prev ~next ~num_iters:_ =
