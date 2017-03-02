@@ -60,18 +60,6 @@ module Field = struct
         (fun f _ acc -> add f (Ident.mk ()) acc)
         m
         empty
-
-    let mk_theta theta ps qs =
-      fold
-        (fun f v acc -> Ident.Map.add v (find f qs) acc)
-        ps
-        theta
-
-    let fresh_theta theta ps =
-      fold
-        (fun _ v acc -> Ident.Map.add v (Ident.mk ()) acc)
-        ps
-        theta
   end
 end
 
@@ -194,7 +182,7 @@ module Lock = struct
     let mem l ls =
       List.mem ~equal:L.equal ls l
 
-    (* let mem_remove l m =
+    let mem_remove l m =
       let rec aux (acc,found) = function
         | [] -> if found then Some (List.rev acc) else None
         | l'::ls when L.equal l l' -> aux (acc,true) ls
@@ -210,9 +198,15 @@ module Lock = struct
           | None -> false
           | Some m2' -> subset ls m2'
 
-    let equal m1 m2 =
-       subset m1 m2 && subset m2 m1 *)
-
+    let intersect m1 m2 =
+      let rec aux acc m1 m2 =
+        match m1 with
+        | [] -> List.rev acc
+        | l::ls ->
+            match mem_remove l m2 with
+            | None -> aux acc ls m2
+            | Some m2' -> l::(aux acc ls m2') in
+      aux [] m1 m2
   end
 end
 
@@ -245,7 +239,10 @@ module Atom = struct
 
   let add_locks a lks =
     let lks = Lock.MultiSet.to_list lks in
-    { a with locks = List.fold lks ~init:a.locks ~f:(fun acc l -> Lock.MultiSet.add l acc)}
+    { a with
+      locks =
+        List.fold lks ~init:a.locks ~f:(fun acc l -> Lock.MultiSet.add l acc)}
+
   module Set = PrettyPrintable.MakePPSet(A)
 end
 
@@ -294,21 +291,18 @@ type summary =
 module WithoutBottomDomain = struct
   type nonrec astate = astate
 
-  (* join unions the constraints.  When the permission variable for a field
-     differs in the two abstract states, then a new variable is introduced plus
-     constraints that force this variable to be bound by the minimum of the two
-     joined permissions. The lock state is and-ed together. *)
   let join a1 a2 =
       { a1 with
-        locks_held = Lock.MultiSet.union a1.locks_held a2.locks_held;
+        locks_held = Lock.MultiSet.intersect a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
       }
 
   let widen ~prev ~next ~num_iters:_ =
     join prev next
 
-  let (<=) ~lhs:_ ~rhs:_ =
-    false (* silly <=, FIXME for loops *)
+  let (<=) ~lhs ~rhs =
+    Atom.Set.subset lhs.atoms rhs.atoms &&
+    Lock.MultiSet.subset lhs.locks_held rhs.locks_held
 
   let pp = State.pp
 end

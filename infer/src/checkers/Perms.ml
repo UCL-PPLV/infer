@@ -147,7 +147,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
     let classname = get_class (Procdesc.get_proc_name pdesc) in
-    L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
+    (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, _)
       when PatternMatch.is_subtype tenv classname tname ->

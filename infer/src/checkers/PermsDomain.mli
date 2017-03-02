@@ -41,15 +41,6 @@ module Field : sig
 
 (* make a new map from a set of fields into fresh logical var ids *)
     val of_fields : Set.t -> Ident.t t
-
-(* extend a given variable substitution sending, for each field in the two maps,
-   the variable from the first map to that of the second. *)
-    val mk_theta : Ident.t Ident.Map.t -> Ident.t t -> Ident.t t -> Ident.t Ident.Map.t
-
-(* extend a given variable substitution sending, for each field in the map,
-   the variable from the map to a fresh one (obtained by Ident.mk). *)
-    val fresh_theta : Ident.t Ident.Map.t -> Ident.t t -> Ident.t Ident.Map.t
-
   end
 end
 
@@ -115,6 +106,8 @@ module Lock : sig
     val equal : t -> t -> bool
     val pp : Format.formatter -> t -> unit
 
+    val subset : t -> t -> bool
+
     val to_list : t -> elt list
     val singleton : elt -> t
 
@@ -123,6 +116,7 @@ module Lock : sig
     val add : elt -> t -> t
     val remove : elt -> t -> t
     val mem : elt -> t -> bool
+    val intersect : t -> t -> t
 
   end
 end
@@ -177,20 +171,6 @@ type summary =
     sum_atoms: Atom.Set.t;
     sum_locks: Lock.MultiSet.t;
   }
-
-(* Abstract domain *)
-(* module Domain : sig
-  type nonrec astate = astate
-
-  (* join unions the constraints.  When the permission variable for a field
-     differs in the two abstract states, then a new variable is introduced plus
-     constraints that force this variable to be bound by the minimum of the two
-     joined permissions. The lock state is and-ed together. *)
-  val join : astate -> astate -> astate
-  val widen : prev:astate -> next:astate -> num_iters:int -> astate
-  val (<=) : lhs:astate -> rhs:astate -> bool
-  val pp : Format.formatter -> astate -> unit
-end *)
 
 module Domain : sig
   type nonrec astate =
