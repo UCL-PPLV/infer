@@ -100,10 +100,6 @@ module Constr = struct
     let map f s =
       fold (fun c a -> add (f c) a) s empty
 
-    (* variable substitution over a constraint set *)
-    (* let subst theta c =
-      map (subst theta) c *)
-
     let to_z3 fmt c =
       Ident.Set.to_z3 fmt (vars c) ;
       iter (F.fprintf fmt "(assert %a)@." to_z3) c
@@ -127,7 +123,7 @@ module Lock = struct
   module Set = PrettyPrintable.MakePPSet(L)
   module Map = PrettyPrintable.MakePPMap(L)
 
-  module MultiSet = struct
+  (* module MultiSet = struct
     type elt = t
     type t = elt list
 
@@ -180,7 +176,87 @@ module Lock = struct
             | None -> aux acc ls m2
             | Some m2' -> l::(aux acc ls m2') in
       aux [] m1 m2
+  end *)
+
+  module MultiSet = struct
+    module Map = PrettyPrintable.MakePPMap(L)
+
+    type elt = t
+    type t = int Map.t
+(* invariant:
+   l \in m iff m[l] is defined and m[l]>0
+*)
+
+    let empty = Map.empty
+
+    let singleton l = Map.add l 1 empty
+
+    let to_list m =
+      Map.fold
+        (fun l n acc ->
+           List.fold (List.range 0 n) ~init:acc ~f:(fun acc' _ -> l::acc')
+        )
+        m
+        []
+
+    (* let to_set m =
+      Map.fold
+        (fun l n acc ->
+
+        )
+        m
+        Set.empty *)
+
+
+    let compare m1 m2 =
+      Map.compare Int.compare m1 m2
+    let equal = [%compare.equal : t]
+    let pp fmt m =
+      Map.pp ~pp_value:Int.pp fmt m
+
+    let union m1 m2 =
+      Map.merge
+        (fun _ n1 n2 ->
+           match n1, n2 with
+             | None, None -> None
+             | Some n, None | None, Some n -> Some n
+             | Some n1, Some n2 -> Some (n1+n2)
+        )
+        m1
+        m2
+
+    let add l m =
+      union (singleton l) m
+
+    let mem l ls =
+      Map.mem l ls
+
+    let subset m1 m2 =
+      Map.for_all
+        (fun l n -> Map.mem l m2 && Map.find l m2 >= n)
+        m1
+
+    let inter m1 m2 =
+      Map.merge
+        (fun _ n1 n2 ->
+           match n1, n2 with
+           | None, _ | _, None -> None
+           | Some n1, Some n2 -> Some (min n1 n2)
+        )
+        m1
+        m2
+
+    let remove l m =
+      if not (Map.mem l m) then
+        m
+      else
+        let n = Map.find l m in
+        if n>1 then
+          Map.add l (n-1) m
+        else
+          Map.remove l m
   end
+
 end
 
 module Atom = struct
