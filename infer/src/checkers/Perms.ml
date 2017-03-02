@@ -1,10 +1,7 @@
 (* TODO
    (decreasing importance)
-   - Interprocedural
-   - generalise variable freshening
    - track breaking of soundness assumptions eg reentrancy
    - static fields?
-   - include only public methods in check
 *)
 
 
@@ -307,14 +304,17 @@ let file_analysis _ _ get_proc_desc file_env =
       let lockinvs = List.map locks_lst ~f:(fun l -> Lock.Map.find l invs) in
       Constr.mk_sum (Field.Map.find f split_pres) (pres @ lockinvs)
     in
-    let ctrs = Field.Set.fold
+    let ctrs =
+      Field.Set.fold
         (fun f acc -> Constr.Set.add (split f) acc)
         fields
         ctrs
     in
     let bounded =
       Ident.Set.fold
-        (fun v a -> Constr.Set.add (Constr.mk_lb v) a |> Constr.Set.add (Constr.mk_ub v))
+        (fun v a ->
+           Constr.Set.add (Constr.mk_lb [v]) a |>
+           Constr.Set.add (Constr.mk_ub [v]))
         (Constr.Set.vars ctrs)
         ctrs in
     (pinfos, bounded)

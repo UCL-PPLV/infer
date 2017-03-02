@@ -21,8 +21,6 @@ module Ident : sig
 
   (* get a new fresh logical var id *)
   val mk : unit -> t
-
-  val subst : t Map.t -> t -> t
 end
 
 (* class fields *)
@@ -36,9 +34,6 @@ module Field : sig
   module Map : sig
     include PrettyPrintable.PPMap with type key = t
 
-(* Create a field map with the same fields with argument, to fresh variables *)
-    val mk : Ident.t t -> Ident.t t
-
 (* make a new map from a set of fields into fresh logical var ids *)
     val of_fields : Set.t -> Ident.t t
   end
@@ -47,25 +42,13 @@ end
 module Constr : sig
   type t = Exp.t
 
-  val sum : Ident.t list -> t
-
   val mk_sum : Ident.t -> Ident.t list -> t
-  val mk_add : Ident.t -> Ident.t -> Ident.t -> t
-  val mk_lb : Ident.t -> t
-  val mk_ub : Ident.t -> t
-  (* val mk_eq_one : Ident.t -> t *)
+  val mk_lb : Ident.t list -> t
+  val mk_ub : Ident.t list -> t
   val mk_eq_one : Ident.t list -> t
-  (* val mk_gt_zero : Ident.t -> t *)
   val mk_gt_zero : Ident.t list -> t
-  val mk_minus : Ident.t -> Ident.t -> Ident.t -> t
-  val mk_le : Ident.t -> Ident.t -> t
-
-  (* substitution over permission constraints
-     NB: we only cater for operators introduced by this analyser *)
-  val subst : Ident.t Ident.Map.t -> t -> t
 
   val to_z3 : Format.formatter -> t -> unit
-
   val vars : t -> Ident.Set.t
 
   (* ordered set of permission constraints *)
@@ -74,18 +57,10 @@ module Constr : sig
 
     (* variables of a constraint set *)
     val vars : t -> Ident.Set.t
-
-    (* apply a function on every constraint in the set *)
-    val map : (elt -> elt) -> t -> t
-
     (* variable substitution over a constraint set *)
-    val subst : Ident.t Ident.Map.t -> t -> t
-
     val to_z3 : Format.formatter -> t -> unit
   end
 end
-
-module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
 
 module Lock : sig
   type t =
@@ -116,8 +91,7 @@ module Lock : sig
     val add : elt -> t -> t
     val remove : elt -> t -> t
     val mem : elt -> t -> bool
-    val intersect : t -> t -> t
-
+    val inter : t -> t -> t
   end
 end
 
@@ -135,6 +109,7 @@ module Atom : sig
       field : Field.t;
       locks : Lock.MultiSet.t;
     }
+
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
@@ -143,6 +118,8 @@ module Atom : sig
 
   module Set : PrettyPrintable.PPSet with type elt = t
 end
+
+module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
 
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
@@ -160,7 +137,6 @@ module State : sig
 
   val add_ref : Exp.t -> t -> t
   val remove_ref : Exp.t -> t -> t
-  (* add a mapping to the curr state *)
   val add_atom : Atom.Access.t -> Field.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end

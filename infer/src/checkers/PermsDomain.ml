@@ -3,7 +3,6 @@ open! IStd
 module F = Format
 module L = Logging
 
-
 (* permission variables as identifiers *)
 module Ident = struct
   module I = struct
@@ -24,7 +23,6 @@ module Ident = struct
       let l = fold (fun v a -> (I.to_string v, v)::a) vars [] in
       let m = String.Map.of_alist_exn l in
       m
-
   end
 
   module Map = PrettyPrintable.MakePPMap(I)
@@ -32,9 +30,6 @@ module Ident = struct
   (* get a new fresh logical var id *)
   let mk () =
     create_fresh Ident.kprimed
-
-  let subst theta v =
-    if Map.mem v theta then Map.find v theta else v
 end
 
 (* class fields *)
@@ -54,12 +49,6 @@ module Field = struct
     (* make a new map from a set of fields into fresh logical var ids *)
     let of_fields fields =
       Set.fold (fun f fm -> add f (Ident.mk ()) fm) fields empty
-
-    let mk m =
-      fold
-        (fun f _ acc -> add f (Ident.mk ()) acc)
-        m
-        empty
   end
 end
 
@@ -71,33 +60,16 @@ module Constr = struct
     | p::ps -> Exp.BinOp (Binop.PlusA, Exp.Var p, sum ps)
     | _ -> assert false
 
-  let mk_add p q r =
-    Exp.eq (Exp.Var p) (Exp.BinOp (Binop.PlusA, Exp.Var q, Exp.Var r))
   let mk_sum q ps =
     Exp.eq (Exp.Var q) (sum ps)
-  let mk_lb p =
-    Exp.BinOp (Binop.Ge, Exp.Var p, Exp.zero)
-  let mk_ub p =
-    Exp.BinOp (Binop.Le, Exp.Var p, Exp.one)
-  (* let mk_eq_one p =
-    Exp.eq (Exp.Var p) (Exp.one) *)
+  let mk_lb ps =
+    Exp.BinOp (Binop.Ge, sum ps, Exp.zero)
+  let mk_ub ps =
+    Exp.BinOp (Binop.Le, sum ps, Exp.one)
   let mk_eq_one ps =
     Exp.eq (sum ps) (Exp.one)
-  (* let mk_gt_zero p =
-    Exp.BinOp (Binop.Gt, Exp.Var p, Exp.zero) *)
   let mk_gt_zero ps =
     Exp.BinOp (Binop.Gt, sum ps, Exp.zero)
-  let mk_minus p q r =
-    Exp.eq (Exp.Var p) (Exp.BinOp (Binop.MinusA, Exp.Var q, Exp.Var r))
-  let mk_le p q =
-    Exp.BinOp (Binop.Le, (Exp.Var p), (Exp.Var q))
-
-  (* substitution over permission constraints
-     NB: we only cater for operators introduced by this analyser *)
-  let rec subst theta = function
-    | Exp.Var v -> Exp.Var (Ident.subst theta v)
-    | Exp.BinOp(op, t1, t2) -> Exp.BinOp(op, subst theta t1, subst theta t2)
-    | t -> t
 
   let rec to_z3 fmt e = match e with
     | Exp.Var id ->
@@ -129,8 +101,8 @@ module Constr = struct
       fold (fun c a -> add (f c) a) s empty
 
     (* variable substitution over a constraint set *)
-    let subst theta c =
-      map (subst theta) c
+    (* let subst theta c =
+      map (subst theta) c *)
 
     let to_z3 fmt c =
       Ident.Set.to_z3 fmt (vars c) ;
@@ -166,7 +138,8 @@ module Lock = struct
 
     let compare m1 m2 = List.compare L.compare m1 m2
     let equal = [%compare.equal : t]
-    let pp fmt m = F.fprintf fmt "{%a}" (Pp.seq L.pp) m
+    let pp fmt m =
+      F.fprintf fmt "{%a}" (Pp.semicolon_seq_oneline Pp.text L.pp) m
 
     let union m1 m2 =
       List.sort ~cmp:L.compare (m1 @ m2)
@@ -198,7 +171,7 @@ module Lock = struct
           | None -> false
           | Some m2' -> subset ls m2'
 
-    let intersect m1 m2 =
+    let inter m1 m2 =
       let rec aux acc m1 m2 =
         match m1 with
         | [] -> List.rev acc
@@ -233,15 +206,11 @@ module Atom = struct
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
-
   end
   include A
 
   let add_locks a lks =
-    let lks = Lock.MultiSet.to_list lks in
-    { a with
-      locks =
-        List.fold lks ~init:a.locks ~f:(fun acc l -> Lock.MultiSet.add l acc)}
+    { a with locks = Lock.MultiSet.union lks a.locks }
 
   module Set = PrettyPrintable.MakePPSet(A)
 end
@@ -292,9 +261,10 @@ module WithoutBottomDomain = struct
   type nonrec astate = astate
 
   let join a1 a2 =
-      { a1 with
-        locks_held = Lock.MultiSet.intersect a1.locks_held a2.locks_held;
+      {
+        locks_held = Lock.MultiSet.inter a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
+        this_refs = ExpSet.inter a1.this_refs a2.this_refs
       }
 
   let widen ~prev ~next ~num_iters:_ =
@@ -302,7 +272,7 @@ module WithoutBottomDomain = struct
 
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
-    Lock.MultiSet.subset rhs.locks_held lhs.locks_held 
+    Lock.MultiSet.subset rhs.locks_held lhs.locks_held
 
   let pp = State.pp
 end
