@@ -302,7 +302,7 @@ module WithoutBottomDomain = struct
 
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
-    Lock.MultiSet.subset lhs.locks_held rhs.locks_held
+    Lock.MultiSet.subset rhs.locks_held lhs.locks_held 
 
   let pp = State.pp
 end
