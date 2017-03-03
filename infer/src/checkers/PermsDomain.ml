@@ -124,61 +124,6 @@ module Lock = struct
   module Map = PrettyPrintable.MakePPMap(L)
 
   (* module MultiSet = struct
-    type elt = t
-    type t = elt list
-
-    let empty = []
-
-    let singleton x = [x]
-    let to_list m = m
-
-    let compare m1 m2 = List.compare L.compare m1 m2
-    let equal = [%compare.equal : t]
-    let pp fmt m =
-      F.fprintf fmt "{%a}" (Pp.semicolon_seq_oneline Pp.text L.pp) m
-
-    let union m1 m2 =
-      List.sort ~cmp:L.compare (m1 @ m2)
-
-    let add l m =
-      union (singleton l) m
-
-    let rec remove l = function
-      | [] -> raise Not_found
-      | l'::ls when L.equal l l' -> ls
-      | l'::ls -> l'::(remove l ls)
-
-    let mem l ls =
-      List.mem ~equal:L.equal ls l
-
-    let mem_remove l m =
-      let rec aux (acc,found) = function
-        | [] -> if found then Some (List.rev acc) else None
-        | l'::ls when L.equal l l' -> aux (acc,true) ls
-        | l'::ls -> aux (l'::acc,found) ls
-      in
-      aux ([], false) m
-
-    let rec subset m1 m2 =
-      match m1 with
-      | [] -> true
-      | l::ls ->
-          match mem_remove l m2 with
-          | None -> false
-          | Some m2' -> subset ls m2'
-
-    let inter m1 m2 =
-      let rec aux acc m1 m2 =
-        match m1 with
-        | [] -> List.rev acc
-        | l::ls ->
-            match mem_remove l m2 with
-            | None -> aux acc ls m2
-            | Some m2' -> l::(aux acc ls m2') in
-      aux [] m1 m2
-  end *)
-
-  module MultiSet = struct
     module Map = PrettyPrintable.MakePPMap(L)
 
     type elt = t
@@ -191,22 +136,13 @@ module Lock = struct
 
     let singleton l = Map.add l 1 empty
 
-    let to_list m =
+    let to_set m =
       Map.fold
         (fun l n acc ->
-           List.fold (List.range 0 n) ~init:acc ~f:(fun acc' _ -> l::acc')
+           List.fold (List.range 0 n) ~init:acc ~f:(fun acc' _ -> Set.add l acc')
         )
         m
-        []
-
-    (* let to_set m =
-      Map.fold
-        (fun l n acc ->
-
-        )
-        m
-        Set.empty *)
-
+        Set.empty
 
     let compare m1 m2 =
       Map.compare Int.compare m1 m2
@@ -255,8 +191,92 @@ module Lock = struct
           Map.add l (n-1) m
         else
           Map.remove l m
-  end
+  end *)
 
+  module MultiSet = struct
+    module Map = PrettyPrintable.MakePPMap(L)
+
+    type elt = t
+    type t = int Map.t
+    (* invariant:
+       l \in m iff m[l] is defined and m[l]>0
+       if m[l] is defined then m[l]<>0
+       canonical form required for easy equality/compare
+    *)
+
+    let empty = Map.empty
+
+    let singleton l = Map.add l 1 empty
+
+    let to_set m =
+      Map.fold
+        (fun l n acc ->
+           if n>0 then
+             List.fold (List.range 0 n) ~init:acc
+               ~f:(fun acc' _ -> Set.add l acc')
+           else
+             acc
+        )
+        m
+        Set.empty
+
+    let compare m1 m2 =
+      Map.compare Int.compare m1 m2
+    let equal = [%compare.equal : t]
+    let pp fmt m =
+      Map.pp ~pp_value:Int.pp fmt m
+
+    let union m1 m2 =
+      Map.merge
+        (fun _ n1 n2 ->
+           match n1, n2 with
+           | None, None -> None
+           | Some n, None | None, Some n -> Some n
+           | Some n1, Some n2 ->
+               if phys_equal (n1+n2) 0 then None else Some (n1+n2)
+        )
+        m1
+        m2
+
+    let add l m =
+      union (singleton l) m
+
+    let mem l ls =
+      Map.mem l ls && Map.find l ls > 0
+
+
+    let norm_wrt m1 m2 =
+      Map.fold
+        (fun l _ acc -> if Map.mem l m1 then acc else Map.add l 0 acc)
+        m2
+        m1
+
+    let subset m1 m2 =
+      let m1' = norm_wrt m1 m2 in
+      let m2' = norm_wrt m2 m1 in
+      Map.for_all (fun l n -> Map.find l m2' >= n) m1'
+
+    let inter m1 m2 =
+      Map.merge
+        (fun _ n1 n2 ->
+           match n1, n2 with
+           | None, _ | _, None -> None
+           | Some n1, Some n2 -> Some (min n1 n2)
+        )
+        m1
+        m2
+
+    let remove l m =
+      let n =
+        if not (Map.mem l m) then
+          0
+        else
+          Map.find l m in
+      if phys_equal n 1 then
+        Map.remove l m
+      else
+        Map.add l (n-1) m
+  end
 end
 
 module Atom = struct

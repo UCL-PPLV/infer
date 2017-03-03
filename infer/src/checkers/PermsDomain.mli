@@ -81,9 +81,7 @@ module Lock : sig
     val equal : t -> t -> bool
     val pp : Format.formatter -> t -> unit
 
-    val subset : t -> t -> bool
-
-    val to_list : t -> elt list
+    val to_set : t -> Set.t
     val singleton : elt -> t
 
 (* val subset : t -> t -> bool *)

@@ -85,11 +85,11 @@ module Summary = struct
       Atom.Set.pp sum_atoms
       Lock.MultiSet.pp sum_locks
 
-      (*FIXME should include sum_locks?? *)
+(* return set of locks that is used in accesses
+   (does not include other locks held)*)
   let get_lockset s =
     Atom.Set.fold
-      (fun a acc ->
-         Lock.Set.union (Lock.Set.of_list (Lock.MultiSet.to_list a.Atom.locks)) acc)
+      (fun a acc -> Lock.Set.union (Lock.MultiSet.to_set a.Atom.locks) acc)
       s.sum_atoms
       Lock.Set.empty
 end
@@ -171,11 +171,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       when is_un_lock pn ->
         let to_lock = is_lock pn in
         let lock = get_lock pn args in
-        if not to_lock && not (Lock.MultiSet.mem lock astate.locks_held) then
-           Domain.Bottom
-        else
-          let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
-          Domain.NonBottom { astate with locks_held = f lock astate.locks_held }
+        let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
+        Domain.NonBottom { astate with locks_held = f lock astate.locks_held }
 
 (* FIXME - not tracking references to fields *)
 
@@ -263,7 +260,10 @@ let file_analysis _ _ get_proc_desc file_env =
       match Tenv.lookup tenv (get_class pname) with
       | None -> assert false
       | Some { StructTyp.fields } ->
-          Field.Set.of_list (List.map ~f:(fun (fld, _, _) -> fld) fields) in
+          List.fold
+            fields
+            ~init:Field.Set.empty
+            ~f:(fun acc (fld, _, _) -> Field.Set.add fld acc) in
     let (_,tenv,pname,_) = List.hd_exn pinfos in
     let fields = get_fields tenv pname in
     let mk_lockmap () =
@@ -275,8 +275,9 @@ let file_analysis _ _ get_proc_desc file_env =
         Field.Map.empty in
     let atom_to_expr premap { Atom.access; field; locks } =
       let lmap = Field.Map.find field invmap in
-      let lks = Lock.Set.of_list (Lock.MultiSet.to_list locks) in
-      let invs = Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
+      let lks = Lock.MultiSet.to_set locks in
+      let invs =
+        Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
       let p = Field.Map.find field premap in
       match access with
       | Atom.Access.Read -> Constr.mk_gt_zero (p::invs)
