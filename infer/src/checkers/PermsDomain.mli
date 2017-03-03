@@ -88,7 +88,7 @@ module Lock : sig
     val union : t -> t -> t
     val add : elt -> t -> t
     val remove : elt -> t -> t
-    val mem : elt -> t -> bool
+    (* val mem : elt -> t -> bool *)
     val inter : t -> t -> t
   end
 end
@@ -106,6 +106,7 @@ module Atom : sig
       access : Access.t;
       field : Field.t;
       locks : Lock.MultiSet.t;
+      location : Location.t;
     }
 
   val compare : t -> t -> int
@@ -135,7 +136,7 @@ module State : sig
 
   val add_ref : Exp.t -> t -> t
   val remove_ref : Exp.t -> t -> t
-  val add_atom : Atom.Access.t -> Field.t -> t -> t
+  val add_atom : Atom.Access.t -> Field.t -> Location.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end
 

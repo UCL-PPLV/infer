@@ -97,7 +97,7 @@ module Constr = struct
       fold (fun exp a -> Ident.Set.union (vars exp) a) c Ident.Set.empty
 
     (* apply a function on every constraint in the set *)
-    let map f s =
+    let endomap f s =
       fold (fun c a -> add (f c) a) s empty
 
     let to_z3 fmt c =
@@ -122,76 +122,6 @@ module Lock = struct
 
   module Set = PrettyPrintable.MakePPSet(L)
   module Map = PrettyPrintable.MakePPMap(L)
-
-  (* module MultiSet = struct
-    module Map = PrettyPrintable.MakePPMap(L)
-
-    type elt = t
-    type t = int Map.t
-(* invariant:
-   l \in m iff m[l] is defined and m[l]>0
-*)
-
-    let empty = Map.empty
-
-    let singleton l = Map.add l 1 empty
-
-    let to_set m =
-      Map.fold
-        (fun l n acc ->
-           List.fold (List.range 0 n) ~init:acc ~f:(fun acc' _ -> Set.add l acc')
-        )
-        m
-        Set.empty
-
-    let compare m1 m2 =
-      Map.compare Int.compare m1 m2
-    let equal = [%compare.equal : t]
-    let pp fmt m =
-      Map.pp ~pp_value:Int.pp fmt m
-
-    let union m1 m2 =
-      Map.merge
-        (fun _ n1 n2 ->
-           match n1, n2 with
-             | None, None -> None
-             | Some n, None | None, Some n -> Some n
-             | Some n1, Some n2 -> Some (n1+n2)
-        )
-        m1
-        m2
-
-    let add l m =
-      union (singleton l) m
-
-    let mem l ls =
-      Map.mem l ls
-
-    let subset m1 m2 =
-      Map.for_all
-        (fun l n -> Map.mem l m2 && Map.find l m2 >= n)
-        m1
-
-    let inter m1 m2 =
-      Map.merge
-        (fun _ n1 n2 ->
-           match n1, n2 with
-           | None, _ | _, None -> None
-           | Some n1, Some n2 -> Some (min n1 n2)
-        )
-        m1
-        m2
-
-    let remove l m =
-      if not (Map.mem l m) then
-        m
-      else
-        let n = Map.find l m in
-        if n>1 then
-          Map.add l (n-1) m
-        else
-          Map.remove l m
-  end *)
 
   module MultiSet = struct
     module Map = PrettyPrintable.MakePPMap(L)
@@ -242,36 +172,38 @@ module Lock = struct
       union (singleton l) m
 
     let mem l ls =
-      Map.mem l ls && Map.find l ls > 0
-
-
-    let norm_wrt m1 m2 =
-      Map.fold
-        (fun l _ acc -> if Map.mem l m1 then acc else Map.add l 0 acc)
-        m2
-        m1
+      try Map.find l ls > 0 with Not_found -> false
 
     let subset m1 m2 =
-      let m1' = norm_wrt m1 m2 in
-      let m2' = norm_wrt m2 m1 in
-      Map.for_all (fun l n -> Map.find l m2' >= n) m1'
+      let f =
+        Map.merge
+          (fun _ n1 n2 ->
+             match n1, n2 with
+             | None, None -> None
+             | None, Some n2 when 0 <= n2 -> None
+             | Some n1, None when n1 <= 0 -> None
+             | Some n1, Some n2 when n1 <= n2 -> None
+             | _, _ -> Some false
+          )
+          m1
+          m2
+      in
+      Map.is_empty f
 
     let inter m1 m2 =
       Map.merge
         (fun _ n1 n2 ->
            match n1, n2 with
-           | None, _ | _, None -> None
+           | None, None -> None
+           | None, Some n2 -> Some (min 0 n2)
+           | Some n1, None -> Some (min n1 0)
            | Some n1, Some n2 -> Some (min n1 n2)
         )
         m1
         m2
 
     let remove l m =
-      let n =
-        if not (Map.mem l m) then
-          0
-        else
-          Map.find l m in
+      let n = try Map.find l m with Not_found -> 0 in
       if phys_equal n 1 then
         Map.remove l m
       else
@@ -294,14 +226,16 @@ module Atom = struct
         access : Access.t;
         field : Field.t;
         locks : Lock.MultiSet.t;
+        location : Location.t
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
-    let pp fmt {access; field; locks} =
-      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a>"
+    let pp fmt {access; field; locks; location} =
+      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Loc=%a>"
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
+        Location.pp location
   end
   include A
 
@@ -335,8 +269,8 @@ module State = struct
     { a with this_refs = ExpSet.add v a.this_refs }
   let remove_ref v a =
     { a with this_refs = ExpSet.remove v a.this_refs }
-  let add_atom access field a =
-    { a with atoms = Atom.Set.add {access; field; locks=a.locks_held} a.atoms }
+  let add_atom access field location a =
+    { a with atoms = Atom.Set.add {access; field; locks=a.locks_held; location} a.atoms }
 
   let pp fmt { locks_held; atoms; this_refs } =
     F.fprintf fmt "{ locks_held=%a; atoms=%a; this_refs=%a }"
