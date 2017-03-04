@@ -106,6 +106,7 @@ module Atom : sig
       access : Access.t;
       field : Field.t;
       locks : Lock.MultiSet.t;
+      procname : Procname.t;
       location : Location.t;
     }
 
@@ -113,6 +114,8 @@ module Atom : sig
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
 
+  val mk_read : Field.t -> Lock.MultiSet.t -> Procname.t -> Location.t -> t
+  val mk_write : Field.t -> Lock.MultiSet.t -> Procname.t -> Location.t -> t
   val add_locks : t -> Lock.MultiSet.t -> t
 
   module Set : PrettyPrintable.PPSet with type elt = t
@@ -136,7 +139,8 @@ module State : sig
 
   val add_ref : Exp.t -> t -> t
   val remove_ref : Exp.t -> t -> t
-  val add_atom : Atom.Access.t -> Field.t -> Location.t -> t -> t
+  val add_read : Field.t -> Procname.t -> Location.t -> t -> t
+  val add_write : Field.t -> Procname.t -> Location.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end
 
