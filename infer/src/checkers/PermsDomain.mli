@@ -52,14 +52,14 @@ module Constr : sig
   val vars : t -> Ident.Set.t
 
   (* ordered set of permission constraints *)
-  module Set : sig
+  (* module Set : sig
     include PrettyPrintable.PPSet with type elt = t
 
     (* variables of a constraint set *)
     val vars : t -> Ident.Set.t
     (* variable substitution over a constraint set *)
     val to_z3 : Format.formatter -> t -> unit
-  end
+  end *)
 end
 
 module Lock : sig
@@ -101,7 +101,7 @@ module Atom : sig
     val pp : Format.formatter -> t -> unit
   end
 
-  type t =
+  type t = private
     {
       access : Access.t;
       field : Field.t;
@@ -118,7 +118,16 @@ module Atom : sig
   val mk_write : Field.t -> Lock.MultiSet.t -> Procname.t -> Location.t -> t
   val add_locks : t -> Lock.MultiSet.t -> t
 
-  module Set : PrettyPrintable.PPSet with type elt = t
+(* Using a map from fields to precondition permissions and
+a map from fields to lock invariant permissions, compile the atom into a constraint *)
+  val compile : Ident.t Field.Map.t -> Ident.t Lock.Map.t Field.Map.t -> t -> Constr.t
+
+  module Set : sig
+    include PrettyPrintable.PPSet with type elt = t
+
+    val endomap : (elt -> elt) -> t -> t
+  end
+
 end
 
 module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t

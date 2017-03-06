@@ -81,7 +81,7 @@ module Constr = struct
     | Exp.Const _ ->
       F.pp_print_string fmt (if Exp.is_zero e then "0.0" else "1.0")
     | _ ->
-      assert false
+        assert false
 
   let rec vars = function
     | Exp.Var v -> Ident.Set.singleton v
@@ -89,7 +89,7 @@ module Constr = struct
     | _ -> Ident.Set.empty
 
   (* ordered set of permission constraints *)
-  module Set = struct
+  (* module Set = struct
     include PrettyPrintable.MakePPSet(Exp)
 
     (* variables of a constraint set *)
@@ -103,7 +103,7 @@ module Constr = struct
     let to_z3 fmt c =
       Ident.Set.to_z3 fmt (vars c) ;
       iter (F.fprintf fmt "(assert %a)@." to_z3) c
-  end
+  end *)
 end
 
 module ExpSet = PrettyPrintable.MakePPSet(Exp)
@@ -227,7 +227,7 @@ module Atom = struct
         field : Field.t;
         locks : Lock.MultiSet.t;
         procname : Procname.t;
-        location : Location.t
+        location : Location.t;
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
@@ -242,13 +242,30 @@ module Atom = struct
   include A
 
   let mk_read field locks procname location =
-    { access=Read; field; locks; procname; location }
+    let access = Access.Read in
+    { access; field; locks; procname; location }
   let mk_write field locks procname location =
-    { access=Write; field; locks; procname; location }
+    let access = Access.Write in
+    { access; field; locks; procname; location }
   let add_locks a lks =
     { a with locks = Lock.MultiSet.union lks a.locks }
 
-  module Set = PrettyPrintable.MakePPSet(A)
+  let compile premap invmap { access; field; locks } =
+    let lmap = Field.Map.find field invmap in
+    let lks = Lock.MultiSet.to_set locks in
+    let invs =
+      Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
+    let p = Field.Map.find field premap in
+    match access with
+    | Access.Read -> Constr.mk_gt_zero (p::invs)
+    | Access.Write -> Constr.mk_eq_one (p::invs)
+
+  module Set = struct
+    include PrettyPrintable.MakePPSet(A)
+
+    let endomap f s =
+      fold (fun a acc -> add (f a) acc) s empty
+  end
 end
 
 
@@ -310,7 +327,8 @@ module WithoutBottomDomain = struct
 
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
-    Lock.MultiSet.subset rhs.locks_held lhs.locks_held
+    Lock.MultiSet.subset rhs.locks_held lhs.locks_held &&
+    ExpSet.subset rhs.this_refs lhs.this_refs
 
   let pp = State.pp
 end
