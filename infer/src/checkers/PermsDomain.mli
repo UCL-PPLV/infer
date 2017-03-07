@@ -29,7 +29,12 @@ module Field : sig
 
   val pp : Format.formatter -> t -> unit
 
-  module Set : PrettyPrintable.PPSet with type elt = t
+  module Set : sig
+    include PrettyPrintable.PPSet with type elt = t
+
+    val endomap : (elt -> elt) -> t -> t
+    val map_to : (elt -> 'a) -> ('a -> 'b -> 'b) -> 'b -> t -> 'b
+  end
 
   module Map : sig
     include PrettyPrintable.PPMap with type key = t
@@ -52,14 +57,14 @@ module Constr : sig
   val vars : t -> Ident.Set.t
 
   (* ordered set of permission constraints *)
-  (* module Set : sig
+  module Set : sig
     include PrettyPrintable.PPSet with type elt = t
 
     (* variables of a constraint set *)
     val vars : t -> Ident.Set.t
     (* variable substitution over a constraint set *)
-    val to_z3 : Format.formatter -> t -> unit
-  end *)
+    (* val to_z3 : Format.formatter -> t -> unit *)
+  end
 end
 
 module Lock : sig
@@ -126,6 +131,7 @@ a map from fields to lock invariant permissions, compile the atom into a constra
     include PrettyPrintable.PPSet with type elt = t
 
     val endomap : (elt -> elt) -> t -> t
+    val map_to : (elt -> 'a) -> ('a -> 'b -> 'b) -> 'b -> t -> 'b
   end
 
 end

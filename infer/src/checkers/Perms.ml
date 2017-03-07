@@ -97,10 +97,11 @@ module Summary = struct
 (* return set of locks that is used in accesses
    (does not include other locks held)*)
   let get_lockset s =
-    Atom.Set.fold
-      (fun a acc -> Lock.Set.union (Lock.MultiSet.to_set a.Atom.locks) acc)
-      s.sum_atoms
+    Atom.Set.map_to
+      (fun a -> Lock.MultiSet.to_set a.Atom.locks)
+      Lock.Set.union
       Lock.Set.empty
+      s.sum_atoms
 end
 
 
@@ -270,6 +271,8 @@ let run_z3 vars merged =
   ignore (Unix.close_process (in_ch, out_ch)) ;
   output
 
+module IntMap = PrettyPrintable.MakePPMap(Int)
+
 
 let file_analysis _ _ get_proc_desc file_env =
   (* outsource checks for ctrs/public etc to ThreadSafety *)
@@ -289,61 +292,84 @@ let file_analysis _ _ get_proc_desc file_env =
      currently expects a pair of summaries as we only consider two threads --
     this is meant to be generalised in the future to n threads *)
   let process_case = function
-    | [ (p1, Some sum1); (p2, Some sum2)] -> ([p1; p2], [sum1; sum2])
+    | [ (_, Some sum1); (_, Some sum2)] -> [sum1; sum2]
     | _ -> assert false
   in
 
   (* take a list of (proc info, summary) pairs *)
-  let merge fields locks invmap (pinfos, summaries) =
-    let mk_sum_constr { sum_atoms } =
+  let compile_case fields locks invmap summaries =
+    let mk_sum_constr (premaps, ctr_map) { sum_atoms } =
       let premap = Field.Map.of_fields fields in
-      let ctrs =
+      let ctr_map =
         Atom.Set.fold
           (fun a acc ->
              let c = Atom.compile premap invmap a in
-             (Hashtbl.hash c, c)::acc
+             IntMap.add (Hashtbl.hash c) c acc
           )
           sum_atoms
-          [] in
-      (premap, ctrs)
+          ctr_map
+      in
+      (premap::premaps, ctr_map)
     in
-    let (premaps, ctrs) =
+    let (premaps, ctr_map) =
       List.fold summaries
-        ~init:([], [])
-        ~f:(fun (premaps, acc) s ->
-            let (p, cs) = mk_sum_constr s in
-            (p::premaps, cs @ acc)
-          ) in
-    let (premaps, ctrs) = (List.rev premaps, List.rev ctrs) in
+        ~init:([], IntMap.empty)
+        ~f:mk_sum_constr in
+    let premaps = List.rev premaps in
     let split f =
       let pres = List.map premaps ~f:(fun premap -> Field.Map.find f premap) in
       let invs = Field.Map.find f invmap in
       let lockinvs = List.map locks ~f:(fun l -> Lock.Map.find l invs) in
-      (-1, Constr.mk_eq_one (pres @ lockinvs))
+      Constr.mk_eq_one (pres @ lockinvs)
     in
-    let ctrs =
-      Field.Set.fold
-        (fun f acc -> (split f)::acc)
-        fields
-        ctrs
+    let extra_ctrs = Field.Set.map_to split List.cons [] fields in
+    let vars =
+      IntMap.fold
+        (fun _ c acc -> Ident.Set.union (Constr.vars c) acc)
+        ctr_map
+        Ident.Set.empty
     in
     let vars =
       List.fold
-        ctrs
-        ~init:Ident.Set.empty
-        ~f:(fun a (_,c) -> Ident.Set.union (Constr.vars c) a)
+        extra_ctrs
+        ~init:vars
+        ~f:(fun a c -> Ident.Set.union (Constr.vars c) a)
       in
-    let bounded =
+    let extra_ctrs =
       Ident.Set.fold
-        (fun v a -> (-1, Constr.mk_lb [v])::(-1, Constr.mk_ub [v])::a)
+        (fun v a -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::a)
         vars
-        ctrs in
-    (vars, pinfos, bounded)
+        extra_ctrs in
+    (vars, ctr_map, extra_ctrs)
   in
 
-  let run_check (vars, pinfos, merged) =
-    let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
-    L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ;
+  let merge compiled =
+    let aux (vars, ctr_map, extra_ctrs) (vars_, ctr_map_, extra_ctrs_) =
+      let vars' = Ident.Set.union vars vars_ in
+      let extra_ctrs' = extra_ctrs_ @ extra_ctrs in
+      let ctr_map' =
+        IntMap.merge
+          (fun _ c1 c2 ->
+             match c1, c2 with
+             | None, None | Some _, Some _ -> assert false
+             | None, Some c | Some c, None -> Some c
+          )
+          ctr_map
+          ctr_map_
+      in
+      (vars', ctr_map', extra_ctrs')
+    in
+    List.fold
+      compiled
+      ~init:(Ident.Set.empty, IntMap.empty, [])
+      ~f:aux
+  in
+
+
+
+  let run_check (vars, ctr_map, extra_ctrs) =
+    (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
+    L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ; *)
     (* parse a z3 model (without the enclosing braces and model statement) *)
     (* let parse_z3_model varmap =
       let rec aux acc = function
@@ -354,8 +380,26 @@ let file_analysis _ _ get_proc_desc file_env =
           let value = Scanf.sscanf l2 " %f" (fun v -> v) in
           aux (Ident.Map.add var value acc) ls in
       aux Ident.Map.empty
-    in *)
-    List.iter (run_z3 vars merged) ~f:(fun s -> L.out "Z3 says: %s.@." s)
+       in *)
+    let rec parse_unsat_core = function
+      | "unsat"::rest -> parse_unsat_core rest
+      | l::_ ->
+          (* L.out "to analyze %s" l ; *)
+          let l = String.slice l 1 ((String.length l) - 1) in
+          let ls = String.split l ~on:' ' in
+          let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
+          let is = List.map ls ~f:Int.of_string in
+          let ctrs = List.map is
+              ~f:(fun i -> try IntMap.find i ctr_map with Not_found ->
+                L.out "****%d*****@." i ; assert false) in
+          List.iter ctrs ~f:(fun c -> L.out "Z3: unsat core: %a@." Constr.to_z3 c)
+      | _ -> ()
+    in
+    let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in
+    let merged = IntMap.fold (fun i c acc -> (i,c)::acc) ctr_map merged in
+    let output = run_z3 vars merged in
+    List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
+    parse_unsat_core output
       (* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
         (* begin
           let varmap = Ident.Set.mk_string_map vars in
@@ -407,7 +451,8 @@ let file_analysis _ _ get_proc_desc file_env =
     in
     let pairs = all_pairs proc_sums in
     let cases = List.map ~f:process_case pairs in
-    let merged_cases = List.map ~f:(merge fields locks invmap) cases in
-    List.iter ~f:run_check merged_cases
+    let compiled = List.map ~f:(compile_case fields locks invmap) cases in
+    let merged = merge compiled in
+    run_check merged
   in
   ClassMap.iter analyse_class classmap

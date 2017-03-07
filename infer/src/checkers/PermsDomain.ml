@@ -41,7 +41,14 @@ module Field = struct
   end
   include F
 
-  module Set = PrettyPrintable.MakePPSet(F)
+  module Set = struct
+    include PrettyPrintable.MakePPSet(F)
+
+    let map_to f oadd oempty s =
+      fold (fun x acc -> oadd (f x) acc) s oempty
+    let endomap f s =
+      map_to f add empty s
+  end
 
   module Map = struct
     include PrettyPrintable.MakePPMap(F)
@@ -89,7 +96,7 @@ module Constr = struct
     | _ -> Ident.Set.empty
 
   (* ordered set of permission constraints *)
-  (* module Set = struct
+  module Set = struct
     include PrettyPrintable.MakePPSet(Exp)
 
     (* variables of a constraint set *)
@@ -97,13 +104,13 @@ module Constr = struct
       fold (fun exp a -> Ident.Set.union (vars exp) a) c Ident.Set.empty
 
     (* apply a function on every constraint in the set *)
-    let endomap f s =
+    (* let endomap f s =
       fold (fun c a -> add (f c) a) s empty
 
     let to_z3 fmt c =
       Ident.Set.to_z3 fmt (vars c) ;
-      iter (F.fprintf fmt "(assert %a)@." to_z3) c
-  end *)
+      iter (F.fprintf fmt "(assert %a)@." to_z3) c *)
+  end
 end
 
 module ExpSet = PrettyPrintable.MakePPSet(Exp)
@@ -263,8 +270,10 @@ module Atom = struct
   module Set = struct
     include PrettyPrintable.MakePPSet(A)
 
+    let map_to f oadd oempty s =
+      fold (fun x acc -> oadd (f x) acc) s oempty
     let endomap f s =
-      fold (fun a acc -> add (f a) acc) s empty
+      map_to f add empty s
   end
 end
 
