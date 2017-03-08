@@ -143,17 +143,22 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
           Domain.NonBottom {astate with atoms=new_atoms; locks_held=new_locks}
 
+  let resolve idenv node l =
+    Idenv.expand_expr_temps idenv (CFG.underlying_node node) l
+
   (* actual transfer function *)
-  let _exec_instr astate { ProcData.pdesc; ProcData.tenv } _ cmd =
+  let _exec_instr astate { ProcData.pdesc; tenv } node cmd =
     let classname = get_class (Procdesc.get_proc_name pdesc) in
     let procname = Procdesc.get_proc_name pdesc in
-    (* L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ; *)
+    let idenv = Idenv.create pdesc in
+    L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
       when PatternMatch.is_subtype tenv classname tname ->
         Domain.NonBottom (State.add_write fieldname procname location astate)
 
     | Sil.Store (l', _, l, _) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
+        L.out "resolve says %a@." Exp.pp (resolve idenv node l);
         Domain.NonBottom (State.add_ref l' astate)
 
     | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, location)
@@ -196,10 +201,10 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
    L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
    astate *)
 
-  let exec_instr astate pdata x cmd =
+  let exec_instr astate pdata node cmd =
     match astate with
     | Domain.Bottom -> Domain.Bottom
-    | Domain.NonBottom astate' -> _exec_instr astate' pdata x cmd
+    | Domain.NonBottom astate' -> _exec_instr astate' pdata node cmd
 
 end
 
@@ -382,6 +387,7 @@ let file_analysis _ _ get_proc_desc file_env =
       aux Ident.Map.empty
        in *)
     let rec parse_unsat_core = function
+      | "sat"::_ -> ()
       | "unsat"::rest -> parse_unsat_core rest
       | l::_ ->
           (* L.out "to analyze %s" l ; *)
