@@ -304,7 +304,7 @@ let file_analysis _ _ get_proc_desc file_env =
         Atom.Set.fold
           (fun a acc ->
              let c = Atom.compile premap invmap a in
-             IntMap.add (Hashtbl.hash c) c acc
+             IntMap.add (Hashtbl.hash c) (c, a) acc
           )
           sum_atoms
           ctr_map
@@ -325,7 +325,7 @@ let file_analysis _ _ get_proc_desc file_env =
     let extra_ctrs = Field.Set.map_to split List.cons [] fields in
     let vars =
       IntMap.fold
-        (fun _ c acc -> Ident.Set.union (Constr.vars c) acc)
+        (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
         ctr_map
         Ident.Set.empty
     in
@@ -390,13 +390,12 @@ let file_analysis _ _ get_proc_desc file_env =
           let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
           let is = List.map ls ~f:Int.of_string in
           let ctrs = List.map is
-              ~f:(fun i -> try IntMap.find i ctr_map with Not_found ->
-                L.out "****%d*****@." i ; assert false) in
-          List.iter ctrs ~f:(fun c -> L.out "Z3: unsat core: %a@." Constr.to_z3 c)
+              ~f:(fun i -> snd (IntMap.find i ctr_map)) in
+          List.iter ctrs ~f:(fun c -> L.out "Z3: unsat core: %a@." Atom.pp c)
       | _ -> ()
     in
     let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in
-    let merged = IntMap.fold (fun i c acc -> (i,c)::acc) ctr_map merged in
+    let merged = IntMap.fold (fun i (c,_) acc -> (i,c)::acc) ctr_map merged in
     let output = run_z3 vars merged in
     List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
     parse_unsat_core output
