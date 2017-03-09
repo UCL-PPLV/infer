@@ -143,37 +143,52 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
           Domain.NonBottom {astate with atoms=new_atoms; locks_held=new_locks}
 
-  let resolve idenv node l =
-    Idenv.expand_expr_temps idenv (CFG.underlying_node node) l
+  let resolve_id (id_map : IdAccessPathMapDomain.astate) id =
+    try Some (IdAccessPathMapDomain.find id id_map)
+    with Not_found -> None
+
+  let analyze_id_assignment lhs_id rhs_exp rhs_typ { id_map; } =
+    let f_resolve_id = resolve_id id_map in
+    match AccessPath.of_lhs_exp rhs_exp rhs_typ ~f_resolve_id with
+    | Some rhs_access_path -> IdAccessPathMapDomain.add lhs_id rhs_access_path id_map
+    | None -> id_map
 
   (* actual transfer function *)
   let _exec_instr astate { ProcData.pdesc; tenv } node cmd =
+    let idenv = Idenv.create pdesc in
+    let resolve l =
+      Idenv.expand_expr_temps idenv (CFG.underlying_node node) l in
     let classname = get_class (Procdesc.get_proc_name pdesc) in
     let procname = Procdesc.get_proc_name pdesc in
-    let idenv = Idenv.create pdesc in
     L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
       when PatternMatch.is_subtype tenv classname tname ->
         Domain.NonBottom (State.add_write fieldname procname location astate)
 
-    | Sil.Store (l', _, l, _) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-        L.out "resolve says %a@." Exp.pp (resolve idenv node l);
-        Domain.NonBottom (State.add_ref l' astate)
+    | Sil.Store (Exp.Lvar lhs_pvar, lhs_typ, rhs_exp, _)
+      when Pvar.is_frontend_tmp lhs_pvar (*&& not (is_constant rhs_exp)*) ->
+        let id_map' = analyze_id_assignment (Var.of_pvar lhs_pvar) rhs_exp lhs_typ astate in
+        Domain.NonBottom { astate with id_map = id_map'; }
 
-    | Sil.Load (_, Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, location)
-      when PatternMatch.is_subtype tenv classname tname ->
-        Domain.NonBottom (State.add_read fieldname procname location astate)
+    | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
+        let id_map = analyze_id_assignment (Var.of_id lhs_id) rhs_exp rhs_typ astate in
+        let astate = { astate with id_map } in
+        begin
+          match rhs_exp with
+            | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
+              when PatternMatch.is_subtype tenv classname tname ->
+                Domain.NonBottom (State.add_read fieldname procname location astate)
+            | _ -> Domain.NonBottom astate
+        end
 
-    | Sil.Load (v,l,_,_) when Exp.is_this l || ExpSet.mem l astate.this_refs ->
-        Domain.NonBottom (State.add_ref (Exp.Var v) astate)
-
-    | Sil.Load (v,_,_,_) ->
-        Domain.NonBottom (State.remove_ref (Exp.Var v) astate)
-
-    | Sil.Remove_temps (idents, _) ->
-        Domain.NonBottom
-          (List.fold ~f:(fun a v -> State.remove_ref (Exp.Var v) a) ~init:astate idents)
+    | Sil.Remove_temps (ids, _) ->
+        let id_map =
+          List.fold
+            ~f:(fun acc id -> IdAccessPathMapDomain.remove (Var.of_id id) acc)
+            ~init:astate.id_map
+            ids in
+        Domain.NonBottom { astate with id_map; }
 
     | Sil.Call (_, Const (Cfun pn), args, _, _)
       when is_un_lock pn ->
@@ -185,7 +200,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
 (* FIXME - not tracking references to fields *)
 
     | Sil.Call (_, Const (Cfun pn), ((l,_)::_), _, _)
-      when Exp.is_this l || ExpSet.mem l astate.this_refs ->
+      when Exp.is_this (resolve l) ->
         (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
         do_call pdesc pn astate
 

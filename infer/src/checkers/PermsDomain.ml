@@ -282,9 +282,7 @@ end
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-
-  (* var ids that hold a reference to "this" object at this point *)
-  this_refs: ExpSet.t;
+  id_map : IdAccessPathMapDomain.astate;
 }
 
 module State = struct
@@ -294,23 +292,23 @@ module State = struct
     {
       locks_held = Lock.MultiSet.empty;
       atoms = Atom.Set.empty;
-      this_refs = ExpSet.empty;
+      id_map = IdAccessPathMapDomain.empty
     }
 
-  let add_ref v a =
+  (* let add_ref v a =
     { a with this_refs = ExpSet.add v a.this_refs }
   let remove_ref v a =
-    { a with this_refs = ExpSet.remove v a.this_refs }
+    { a with this_refs = ExpSet.remove v a.this_refs } *)
   let add_read fieldname procname location a =
     { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held procname location) a.atoms }
   let add_write fieldname procname location a =
     { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held procname location) a.atoms }
 
-  let pp fmt { locks_held; atoms; this_refs } =
-    F.fprintf fmt "{ locks_held=%a; atoms=%a; this_refs=%a }"
+  let pp fmt { locks_held; atoms; id_map } =
+    F.fprintf fmt "{ locks_held=%a; atoms=%a; id_map=%a }"
       Lock.MultiSet.pp locks_held
       Atom.Set.pp atoms
-      ExpSet.pp this_refs
+      IdAccessPathMapDomain.pp id_map
 end
 
 (* summary type, omit transient parts of astate *)
@@ -328,7 +326,7 @@ module WithoutBottomDomain = struct
       {
         locks_held = Lock.MultiSet.inter a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
-        this_refs = ExpSet.inter a1.this_refs a2.this_refs
+        id_map = IdAccessPathMapDomain.join a1.id_map a2.id_map
       }
 
   let widen ~prev ~next ~num_iters:_ =
@@ -337,7 +335,8 @@ module WithoutBottomDomain = struct
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
     Lock.MultiSet.subset rhs.locks_held lhs.locks_held &&
-    ExpSet.subset rhs.this_refs lhs.this_refs
+    (* FIXME reeval suitability of Id.<= *)
+    IdAccessPathMapDomain.(<=) ~lhs:lhs.id_map ~rhs:rhs.id_map
 
   let pp = State.pp
 end

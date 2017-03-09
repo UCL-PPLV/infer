@@ -142,9 +142,7 @@ module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-
-  (* var ids that hold a reference to "this" object at this point *)
-  this_refs: ExpSet.t;
+  id_map : IdAccessPathMapDomain.astate;
 }
 
 module State : sig
@@ -152,8 +150,8 @@ module State : sig
 
   val empty : t
 
-  val add_ref : Exp.t -> t -> t
-  val remove_ref : Exp.t -> t -> t
+  (* val add_ref : Exp.t -> t -> t
+  val remove_ref : Exp.t -> t -> t *)
   val add_read : Field.t -> Procname.t -> Location.t -> t -> t
   val add_write : Field.t -> Procname.t -> Location.t -> t -> t
   val pp : Format.formatter -> t -> unit
