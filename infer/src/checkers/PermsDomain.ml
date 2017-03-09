@@ -317,7 +317,7 @@ type summary =
   }
 
 (* Abstract domain *)
-module WithoutBottomDomain = struct
+module Domain = struct
   type nonrec astate = astate
 
   let join a1 a2 =
@@ -339,4 +339,4 @@ module WithoutBottomDomain = struct
   let pp = State.pp
 end
 
-module Domain = AbstractDomain.BottomLifted(WithoutBottomDomain)
+(* module Domain = AbstractDomain.BottomLifted(WithoutBottomDomain) *)

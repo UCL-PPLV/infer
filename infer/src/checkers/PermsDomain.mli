@@ -164,9 +164,7 @@ type summary =
   }
 
 module Domain : sig
-  type nonrec astate =
-    | Bottom
-    | NonBottom of astate
+  type nonrec astate = astate
 
   include AbstractDomain.S with type astate := astate
 end

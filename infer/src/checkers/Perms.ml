@@ -133,7 +133,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       match Summary.read_summary pdesc pn with
       | None ->
           L.out "Couldn't find summary for %a@." Procname.pp pn ;
-          Domain.NonBottom astate
+          astate
       | Some { sum_atoms; sum_locks } ->
           let new_atoms =
             Atom.Set.endomap
@@ -141,7 +141,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
               sum_atoms
           in
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
-          Domain.NonBottom {astate with atoms=new_atoms; locks_held=new_locks}
+          {astate with atoms=new_atoms; locks_held=new_locks}
 
   let resolve_id (id_map : IdAccessPathMapDomain.astate) id =
     try Some (IdAccessPathMapDomain.find id id_map)
@@ -154,7 +154,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | None -> id_map
 
   (* actual transfer function *)
-  let _exec_instr astate { ProcData.pdesc; tenv } node cmd =
+  let exec_instr astate { ProcData.pdesc; tenv } node cmd =
     let idenv = Idenv.create pdesc in
     let resolve l =
       Idenv.expand_expr_temps idenv (CFG.underlying_node node) l in
@@ -165,12 +165,12 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
       when PatternMatch.is_subtype tenv classname tname ->
         let site = CallSite.make procname location in
-        Domain.NonBottom (State.add_write fieldname site astate)
+        (State.add_write fieldname site astate)
 
     | Sil.Store (Exp.Lvar lhs_pvar, lhs_typ, rhs_exp, _)
       when Pvar.is_frontend_tmp lhs_pvar (*&& not (is_constant rhs_exp)*) ->
         let id_map' = analyze_id_assignment (Var.of_pvar lhs_pvar) rhs_exp lhs_typ astate in
-        Domain.NonBottom { astate with id_map = id_map'; }
+        { astate with id_map = id_map'; }
 
     | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
         let id_map = analyze_id_assignment (Var.of_id lhs_id) rhs_exp rhs_typ astate in
@@ -180,8 +180,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
             | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
               when PatternMatch.is_subtype tenv classname tname ->
                 let site = CallSite.make procname location in
-                Domain.NonBottom (State.add_read fieldname site astate)
-            | _ -> Domain.NonBottom astate
+                (State.add_read fieldname site astate)
+            | _ -> astate
         end
 
     | Sil.Remove_temps (ids, _) ->
@@ -190,14 +190,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
             ~f:(fun acc id -> IdAccessPathMapDomain.remove (Var.of_id id) acc)
             ~init:astate.id_map
             ids in
-        Domain.NonBottom { astate with id_map; }
+        { astate with id_map; }
 
     | Sil.Call (_, Const (Cfun pn), args, _, _)
       when is_un_lock pn ->
         let to_lock = is_lock pn in
         let lock = get_lock pn args in
         let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
-        Domain.NonBottom { astate with locks_held = f lock astate.locks_held }
+        { astate with locks_held = f lock astate.locks_held }
 
 (* FIXME - not tracking references to fields *)
 
@@ -211,17 +211,12 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
         do_call pdesc pn astate
 
-    | _ -> Domain.NonBottom astate
+    | _ -> astate
 
 (* | Sil.Load (_,l,_,_) ->
    L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
    L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
    astate *)
-
-  let exec_instr astate pdata node cmd =
-    match astate with
-    | Domain.Bottom -> Domain.Bottom
-    | Domain.NonBottom astate' -> _exec_instr astate' pdata node cmd
 
 end
 
@@ -232,12 +227,11 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 let compute_and_store_post callback =
   L.out "Analyzing method %a@." Procname.pp callback.Callbacks.proc_name ;
   let compute_post pdesc =
-    let initial = Domain.NonBottom State.empty in
+    let initial = State.empty in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
     match Analyzer.compute_post ~initial pdata with
     | None -> L.out "No spec found@." ; None
-    | Some Domain.Bottom -> L.out "Bottom spec found@." ; None
-    | Some ((Domain.NonBottom s) as a) ->
+    | Some ((s) as a) ->
         L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
         Some (Summary.of_state s) in
   Interprocedural.compute_and_store_post
