@@ -111,16 +111,15 @@ module Atom : sig
       access : Access.t;
       field : Field.t;
       locks : Lock.MultiSet.t;
-      procname : Procname.t;
-      location : Location.t;
+      site : CallSite.t;
     }
 
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
 
-  val mk_read : Field.t -> Lock.MultiSet.t -> Procname.t -> Location.t -> t
-  val mk_write : Field.t -> Lock.MultiSet.t -> Procname.t -> Location.t -> t
+  val mk_read : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
+  val mk_write : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
   val add_locks : t -> Lock.MultiSet.t -> t
 
 (* Using a map from fields to precondition permissions and
@@ -152,8 +151,8 @@ module State : sig
 
   (* val add_ref : Exp.t -> t -> t
   val remove_ref : Exp.t -> t -> t *)
-  val add_read : Field.t -> Procname.t -> Location.t -> t -> t
-  val add_write : Field.t -> Procname.t -> Location.t -> t -> t
+  val add_read : Field.t -> CallSite.t -> t -> t
+  val add_write : Field.t -> CallSite.t -> t -> t
   val pp : Format.formatter -> t -> unit
 end
 

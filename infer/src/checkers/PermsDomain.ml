@@ -233,27 +233,25 @@ module Atom = struct
         access : Access.t;
         field : Field.t;
         locks : Lock.MultiSet.t;
-        procname : Procname.t;
-        location : Location.t;
+        site : CallSite.t;
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
-    let pp fmt {access; field; locks; procname; location} =
-      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Pn=%a; Loc=%a>"
+    let pp fmt {access; field; locks; site} =
+      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Site=%a>"
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
-        Procname.pp procname
-        Location.pp location
+        CallSite.pp site
   end
   include A
 
-  let mk_read field locks procname location =
+  let mk_read field locks site =
     let access = Access.Read in
-    { access; field; locks; procname; location }
-  let mk_write field locks procname location =
+    { access; field; locks; site }
+  let mk_write field locks site =
     let access = Access.Write in
-    { access; field; locks; procname; location }
+    { access; field; locks; site }
   let add_locks a lks =
     { a with locks = Lock.MultiSet.union lks a.locks }
 
@@ -299,10 +297,10 @@ module State = struct
     { a with this_refs = ExpSet.add v a.this_refs }
   let remove_ref v a =
     { a with this_refs = ExpSet.remove v a.this_refs } *)
-  let add_read fieldname procname location a =
-    { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held procname location) a.atoms }
-  let add_write fieldname procname location a =
-    { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held procname location) a.atoms }
+  let add_read fieldname site a =
+    { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held site) a.atoms }
+  let add_write fieldname site a =
+    { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held site) a.atoms }
 
   let pp fmt { locks_held; atoms; id_map } =
     F.fprintf fmt "{ locks_held=%a; atoms=%a; id_map=%a }"

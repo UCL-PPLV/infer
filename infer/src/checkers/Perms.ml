@@ -164,7 +164,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
       when PatternMatch.is_subtype tenv classname tname ->
-        Domain.NonBottom (State.add_write fieldname procname location astate)
+        let site = CallSite.make procname location in
+        Domain.NonBottom (State.add_write fieldname site astate)
 
     | Sil.Store (Exp.Lvar lhs_pvar, lhs_typ, rhs_exp, _)
       when Pvar.is_frontend_tmp lhs_pvar (*&& not (is_constant rhs_exp)*) ->
@@ -178,7 +179,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           match rhs_exp with
             | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
               when PatternMatch.is_subtype tenv classname tname ->
-                Domain.NonBottom (State.add_read fieldname procname location astate)
+                let site = CallSite.make procname location in
+                Domain.NonBottom (State.add_read fieldname site astate)
             | _ -> Domain.NonBottom astate
         end
 
