@@ -154,10 +154,12 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | None -> id_map
 
   (* actual transfer function *)
-  let exec_instr astate { ProcData.pdesc; tenv } node cmd =
-    let idenv = Idenv.create pdesc in
-    let resolve l =
-      Idenv.expand_expr_temps idenv (CFG.underlying_node node) l in
+  let exec_instr astate { ProcData.pdesc; tenv } _ cmd =
+    let is_this var =
+      L.out "***asked about %a***@." Var.pp var ;
+      match resolve_id astate.id_map var with
+      | Some ((v, _), []) -> Exp.is_this (Var.to_exp v)
+      | _ -> false in
     let classname = get_class (Procdesc.get_proc_name pdesc) in
     let procname = Procdesc.get_proc_name pdesc in
     L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
@@ -201,17 +203,19 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
 
 (* FIXME - not tracking references to fields *)
 
-    | Sil.Call (_, Const (Cfun pn), ((l,_)::_), location, _)
-      when Exp.is_this (resolve l) ->
-        (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
-        let site = CallSite.make procname location in
-        do_call pdesc pn astate site
-
-    | Sil.Call (_, Const (Cfun pn), ((_, Typ.Tstruct tname)::_), location, _)
-      when PatternMatch.is_subtype tenv classname tname ->
-        (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
-        let site = CallSite.make procname location in
-        do_call pdesc pn astate site
+    | Sil.Call (_, Const (Cfun pn), l::_, location, _) ->
+        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
+        if match l with
+          | (Exp.Lvar pvar, _) when is_this (Var.of_pvar pvar) -> true
+          | (Exp.Var id, _) when is_this (Var.of_id id) -> true
+          | (_, Typ.Tstruct tname) -> PatternMatch.is_subtype tenv classname tname
+          | _ -> false
+        then
+          (L.out "***doing call %a***@." (Sil.pp_instr Pp.text) cmd ;
+          let site = CallSite.make procname location in
+          do_call pdesc pn astate site)
+        else
+          astate
 
     | _ -> astate
 
