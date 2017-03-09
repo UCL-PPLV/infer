@@ -129,7 +129,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       (*FIXME!! we pretend everything is this *)
       Lock.This
 
-  let do_call pdesc pn astate =
+  let do_call pdesc pn astate site =
       match Summary.read_summary pdesc pn with
       | None ->
           L.out "Couldn't find summary for %a@." Procname.pp pn ;
@@ -137,7 +137,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       | Some { sum_atoms; sum_locks } ->
           let new_atoms =
             Atom.Set.endomap
-              (fun l -> Atom.add_locks l astate.locks_held)
+              (fun l -> Atom.adapt l astate.locks_held site)
               sum_atoms
           in
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
@@ -201,15 +201,17 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
 
 (* FIXME - not tracking references to fields *)
 
-    | Sil.Call (_, Const (Cfun pn), ((l,_)::_), _, _)
+    | Sil.Call (_, Const (Cfun pn), ((l,_)::_), location, _)
       when Exp.is_this (resolve l) ->
         (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
-        do_call pdesc pn astate
+        let site = CallSite.make procname location in
+        do_call pdesc pn astate site
 
-    | Sil.Call (_, Const (Cfun pn), ((_, Typ.Tstruct tname)::_), _, _)
+    | Sil.Call (_, Const (Cfun pn), ((_, Typ.Tstruct tname)::_), location, _)
       when PatternMatch.is_subtype tenv classname tname ->
         (* L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ; *)
-        do_call pdesc pn astate
+        let site = CallSite.make procname location in
+        do_call pdesc pn astate site
 
     | _ -> astate
 

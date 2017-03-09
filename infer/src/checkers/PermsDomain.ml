@@ -233,27 +233,29 @@ module Atom = struct
         access : Access.t;
         field : Field.t;
         locks : Lock.MultiSet.t;
-        site : CallSite.t;
+        (* call path to access location ; non-empty list whose last item is the access location
+           and every other item is the location of a method call leading to the access *)
+        path : CallSite.t list;
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
-    let pp fmt {access; field; locks; site} =
-      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Site=%a>"
+    let pp fmt {access; field; locks; path} =
+      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Path=%a>"
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
-        CallSite.pp site
+        (Pp.comma_seq CallSite.pp) path
   end
   include A
 
   let mk_read field locks site =
     let access = Access.Read in
-    { access; field; locks; site }
+    { access; field; locks; path=[site] }
   let mk_write field locks site =
     let access = Access.Write in
-    { access; field; locks; site }
-  let add_locks a lks =
-    { a with locks = Lock.MultiSet.union lks a.locks }
+    { access; field; locks; path =[site] }
+  let adapt a lks site =
+    { a with locks = Lock.MultiSet.union lks a.locks; path = site::a.path }
 
   let compile premap invmap { access; field; locks } =
     let lmap = Field.Map.find field invmap in

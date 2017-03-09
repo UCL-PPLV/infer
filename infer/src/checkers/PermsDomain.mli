@@ -111,7 +111,7 @@ module Atom : sig
       access : Access.t;
       field : Field.t;
       locks : Lock.MultiSet.t;
-      site : CallSite.t;
+      path : CallSite.t list;
     }
 
   val compare : t -> t -> int
@@ -120,7 +120,7 @@ module Atom : sig
 
   val mk_read : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
   val mk_write : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
-  val add_locks : t -> Lock.MultiSet.t -> t
+  val adapt : t -> Lock.MultiSet.t -> CallSite.t -> t
 
 (* Using a map from fields to precondition permissions and
 a map from fields to lock invariant permissions, compile the atom into a constraint *)
