@@ -143,40 +143,22 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
           {astate with atoms=new_atoms; locks_held=new_locks}
 
-  let resolve_id (id_map : IdAccessPathMapDomain.astate) id =
-    try Some (IdAccessPathMapDomain.find id id_map)
-    with Not_found -> None
-
-  let analyze_id_assignment lhs_id rhs_exp rhs_typ { id_map; } =
-    let f_resolve_id = resolve_id id_map in
-    match AccessPath.of_lhs_exp rhs_exp rhs_typ ~f_resolve_id with
-    | Some rhs_access_path -> IdAccessPathMapDomain.add lhs_id rhs_access_path id_map
-    | None -> id_map
-
   (* actual transfer function *)
   let exec_instr astate { ProcData.pdesc; tenv } _ cmd =
-    let is_this var =
-      L.out "***asked about %a***@." Var.pp var ;
-      match resolve_id astate.id_map var with
-      | Some ((v, _), []) -> Exp.is_this (Var.to_exp v)
-      | _ -> false in
     let classname = get_class (Procdesc.get_proc_name pdesc) in
     let procname = Procdesc.get_proc_name pdesc in
-    L.out "Analysing instruction %a@." (Sil.pp_instr Pp.text) cmd ;
     match cmd with
     | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
       when PatternMatch.is_subtype tenv classname tname ->
         let site = CallSite.make procname location in
-        (State.add_write fieldname site astate)
+        State.add_write fieldname site astate
 
     | Sil.Store (Exp.Lvar lhs_pvar, lhs_typ, rhs_exp, _)
       when Pvar.is_frontend_tmp lhs_pvar (*&& not (is_constant rhs_exp)*) ->
-        let id_map' = analyze_id_assignment (Var.of_pvar lhs_pvar) rhs_exp lhs_typ astate in
-        { astate with id_map = id_map'; }
+        State.update_pvar lhs_pvar rhs_exp lhs_typ astate
 
     | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
-        let id_map = analyze_id_assignment (Var.of_id lhs_id) rhs_exp rhs_typ astate in
-        let astate = { astate with id_map } in
+        let astate = State.update_id lhs_id rhs_exp rhs_typ astate in
         begin
           match rhs_exp with
             | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
@@ -187,12 +169,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         end
 
     | Sil.Remove_temps (ids, _) ->
-        let id_map =
-          List.fold
-            ~f:(fun acc id -> IdAccessPathMapDomain.remove (Var.of_id id) acc)
-            ~init:astate.id_map
-            ids in
-        { astate with id_map; }
+        State.remove_ids ids astate
 
     | Sil.Call (_, Const (Cfun pn), args, _, _)
       when is_un_lock pn ->
@@ -204,16 +181,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
 (* FIXME - not tracking references to fields *)
 
     | Sil.Call (_, Const (Cfun pn), l::_, location, _) ->
-        L.out "***about to analyse call %a***@." (Sil.pp_instr Pp.text) cmd ;
         if match l with
-          | (Exp.Lvar pvar, _) when is_this (Var.of_pvar pvar) -> true
-          | (Exp.Var id, _) when is_this (Var.of_id id) -> true
+          | (Exp.Lvar pvar, _) when State.may_be_this (Var.of_pvar pvar) astate -> true
+          | (Exp.Var id, _) when State.may_be_this (Var.of_id id) astate -> true
           | (_, Typ.Tstruct tname) -> PatternMatch.is_subtype tenv classname tname
           | _ -> false
         then
-          (L.out "***doing call %a***@." (Sil.pp_instr Pp.text) cmd ;
           let site = CallSite.make procname location in
-          do_call pdesc pn astate site)
+          do_call pdesc pn astate site
         else
           astate
 

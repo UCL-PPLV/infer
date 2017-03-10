@@ -17,17 +17,10 @@ module Ident = struct
     include PrettyPrintable.MakePPSet(I)
     let to_z3 fmt s =
       iter (F.fprintf fmt "(declare-const %a Real)@." to_z3) s
-
-    (* make a map from the names of variables in the set to the variables *)
-    let mk_string_map vars =
-      let l = fold (fun v a -> (I.to_string v, v)::a) vars [] in
-      let m = String.Map.of_alist_exn l in
-      m
   end
 
   module Map = PrettyPrintable.MakePPMap(I)
 
-  (* get a new fresh logical var id *)
   let mk () =
     create_fresh Ident.kprimed
 end
@@ -102,18 +95,8 @@ module Constr = struct
     (* variables of a constraint set *)
     let vars c =
       fold (fun exp a -> Ident.Set.union (vars exp) a) c Ident.Set.empty
-
-    (* apply a function on every constraint in the set *)
-    (* let endomap f s =
-      fold (fun c a -> add (f c) a) s empty
-
-    let to_z3 fmt c =
-      Ident.Set.to_z3 fmt (vars c) ;
-      iter (F.fprintf fmt "(assert %a)@." to_z3) c *)
   end
 end
-
-module ExpSet = PrettyPrintable.MakePPSet(Exp)
 
 module Lock = struct
   module L = struct
@@ -277,12 +260,70 @@ module Atom = struct
   end
 end
 
+module IdMap = struct
+  module M = Var.Map
+
+  type t = AccessPath.Raw.t M.t
+  let empty = M.empty
+
+  let pp fmt m = M.pp ~pp_value:AccessPath.Raw.pp fmt m
+  let add = M.add
+
+  let may_join m1 m2 =
+    M.merge
+      (fun _ ap1_opt ap2_opt ->
+         match ap1_opt, ap2_opt with
+         | Some _, None -> ap1_opt
+         | None, Some _ -> ap2_opt
+         | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> ap1_opt
+         | _, _ -> None
+      )
+      m1
+      m2
+
+  let must_join m1 m2 =
+    M.merge
+      (fun _ ap1_opt ap2_opt ->
+         match ap1_opt, ap2_opt with
+         | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> ap1_opt
+         | _, _ -> None
+      )
+      m1
+      m2
+
+  let submap m1 m2 =
+    let m =
+      M.merge
+        (fun _ ap1_opt ap2_opt ->
+           match ap1_opt, ap2_opt with
+           | None, _ -> None
+           | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> None
+           | _ -> ap1_opt
+        )
+        m1
+        m2
+    in
+    M.is_empty m
+
+  let resolve m id =
+    try Some (M.find id m) with Not_found -> None
+
+  let update lhs_id rhs_exp rhs_typ m =
+    let f_resolve_id = resolve m in
+    match AccessPath.of_lhs_exp rhs_exp rhs_typ ~f_resolve_id with
+    | Some rhs_access_path -> add lhs_id rhs_access_path m
+    | None -> m
+
+  let remove_id v m =
+    M.remove (Var.of_id v) m
+end
 
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-  id_map : IdAccessPathMapDomain.astate;
+  may_point : IdMap.t;
+  must_point : IdMap.t;
 }
 
 module State = struct
@@ -292,23 +333,50 @@ module State = struct
     {
       locks_held = Lock.MultiSet.empty;
       atoms = Atom.Set.empty;
-      id_map = IdAccessPathMapDomain.empty
+      may_point = IdMap.empty;
+      must_point = IdMap.empty;
     }
 
-  (* let add_ref v a =
-    { a with this_refs = ExpSet.add v a.this_refs }
-  let remove_ref v a =
-    { a with this_refs = ExpSet.remove v a.this_refs } *)
+  let update_pvar lhs_pvar rhs_exp lhs_typ a =
+    { a with
+      may_point = IdMap.update (Var.of_pvar lhs_pvar) rhs_exp lhs_typ a.may_point;
+      must_point = IdMap.update (Var.of_pvar lhs_pvar) rhs_exp lhs_typ a.must_point
+    }
+  let update_id lhs_id rhs_exp rhs_typ a =
+    { a with
+      may_point = IdMap.update (Var.of_id lhs_id) rhs_exp rhs_typ a.may_point;
+      must_point = IdMap.update (Var.of_id lhs_id) rhs_exp rhs_typ a.must_point
+    }
+  let remove_ids ids a =
+    { a with
+      may_point =
+        List.fold ~f:(fun acc id -> IdMap.remove_id id acc) ~init:a.may_point ids;
+      must_point =
+        List.fold ~f:(fun acc id -> IdMap.remove_id id acc) ~init:a.must_point ids
+    }
+
+  let is_this var m =
+    match IdMap.resolve m var with
+    | Some ((v, _), []) -> Exp.is_this (Var.to_exp v)
+    | _ -> false
+
+  let may_be_this var a =
+    is_this var a.may_point
+
+  let must_be_this var a =
+    is_this var a.must_point
+
   let add_read fieldname site a =
     { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held site) a.atoms }
   let add_write fieldname site a =
     { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held site) a.atoms }
 
-  let pp fmt { locks_held; atoms; id_map } =
-    F.fprintf fmt "{ locks_held=%a; atoms=%a; id_map=%a }"
+  let pp fmt { locks_held; atoms; may_point; must_point } =
+    F.fprintf fmt "{ locks_held=%a; atoms=%a; may_point=%a; must_point=%a }"
       Lock.MultiSet.pp locks_held
       Atom.Set.pp atoms
-      IdAccessPathMapDomain.pp id_map
+      IdMap.pp may_point
+      IdMap.pp must_point
 end
 
 (* summary type, omit transient parts of astate *)
@@ -326,7 +394,8 @@ module Domain = struct
       {
         locks_held = Lock.MultiSet.inter a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
-        id_map = IdAccessPathMapDomain.join a1.id_map a2.id_map
+        may_point = IdMap.may_join a1.may_point a2.may_point;
+        must_point = IdMap.must_join a1.must_point a2.must_point
       }
 
   let widen ~prev ~next ~num_iters:_ =
@@ -335,10 +404,8 @@ module Domain = struct
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
     Lock.MultiSet.subset rhs.locks_held lhs.locks_held &&
-    (* FIXME reeval suitability of Id.<= *)
-    IdAccessPathMapDomain.(<=) ~lhs:lhs.id_map ~rhs:rhs.id_map
+    IdMap.submap lhs.may_point rhs.may_point &&
+    IdMap.submap rhs.must_point lhs.must_point
 
   let pp = State.pp
 end
-
-(* module Domain = AbstractDomain.BottomLifted(WithoutBottomDomain) *)

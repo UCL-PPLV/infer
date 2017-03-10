@@ -2,7 +2,7 @@ open! IStd
 
 (* permission variables as identifiers *)
 module Ident : sig
-  type t
+  type t = Ident.t
   type fieldname = Ident.fieldname
 
   val pp : Format.formatter -> t -> unit
@@ -12,9 +12,6 @@ module Ident : sig
     include PrettyPrintable.PPSet with type elt = t
 
     val to_z3 : Format.formatter -> t -> unit
-
-    (* make a map from the names of variables in the set to the variables *)
-    val mk_string_map : t -> elt String.Map.t
   end
 
   module Map : PrettyPrintable.PPMap with type key = t
@@ -62,8 +59,6 @@ module Constr : sig
 
     (* variables of a constraint set *)
     val vars : t -> Ident.Set.t
-    (* variable substitution over a constraint set *)
-    (* val to_z3 : Format.formatter -> t -> unit *)
   end
 end
 
@@ -89,11 +84,9 @@ module Lock : sig
     val to_set : t -> Set.t
     val singleton : elt -> t
 
-(* val subset : t -> t -> bool *)
     val union : t -> t -> t
     val add : elt -> t -> t
     val remove : elt -> t -> t
-    (* val mem : elt -> t -> bool *)
     val inter : t -> t -> t
   end
 end
@@ -135,13 +128,48 @@ a map from fields to lock invariant permissions, compile the atom into a constra
 
 end
 
-module ExpSet : PrettyPrintable.PPSet with type elt = Exp.t
+module IdMap : sig
+  (* module M = Var.Map *)
+
+  type t = AccessPath.Raw.t Var.Map.t
+  val empty : t
+
+  val add : Var.t -> AccessPath.Raw.t -> t -> t
+  val resolve : t -> Var.t -> AccessPath.Raw.t option
+  val update : Var.t -> Exp.t -> Typ.t -> t -> t
+  (* let pp fmt m = M.pp ~pp_value:AccessPath.Raw.pp fmt m
+
+  let must_join m1 m2 =
+    M.merge
+      (fun _ ap1_opt ap2_opt ->
+         match ap1_opt, ap2_opt with
+         | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> ap1_opt
+         | _, _ -> None
+      )
+      m1
+      m2
+
+  let submap m1 m2 =
+    let m =
+      M.merge
+        (fun _ ap1_opt ap2_opt ->
+           match ap1_opt, ap2_opt with
+           | None, _ -> None
+           | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> None
+           | _ -> ap1_opt
+        )
+        m1
+        m2
+    in
+    M.is_empty m *)
+end
 
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-  id_map : IdAccessPathMapDomain.astate;
+  may_point : IdMap.t;
+  must_point : IdMap.t;
 }
 
 module State : sig
@@ -149,8 +177,13 @@ module State : sig
 
   val empty : t
 
-  (* val add_ref : Exp.t -> t -> t
-  val remove_ref : Exp.t -> t -> t *)
+  val update_pvar : Pvar.t -> Exp.t -> Typ.t -> t -> t
+  val update_id : Ident.t -> Exp.t -> Typ.t -> t -> t
+  val remove_ids : Ident.t list -> t -> t
+
+  val may_be_this : Var.t -> t -> bool
+  val must_be_this : Var.t -> t -> bool
+
   val add_read : Field.t -> CallSite.t -> t -> t
   val add_write : Field.t -> CallSite.t -> t -> t
   val pp : Format.formatter -> t -> unit
@@ -163,8 +196,4 @@ type summary =
     sum_locks: Lock.MultiSet.t;
   }
 
-module Domain : sig
-  type nonrec astate = astate
-
-  include AbstractDomain.S with type astate := astate
-end
+module Domain : AbstractDomain.S with type astate = astate
