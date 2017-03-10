@@ -12,7 +12,7 @@ open! IStd
 (** Case Proc *)
 type proc_origin =
   {
-    pname : Procname.t;
+    pname : Typ.Procname.t;
     loc: Location.t;
     annotated_signature : AnnotatedSignature.t;
     is_library : bool;
@@ -20,7 +20,7 @@ type proc_origin =
 
 type t =
   | Const of Location.t (** A constant in the source *)
-  | Field of Ident.fieldname * Location.t (** A field access *)
+  | Field of t * Ident.fieldname * Location.t (** A field access *)
   | Formal of Mangled.t (** A formal parameter *)
   | Proc of proc_origin (** A procedure call *)
   | New (** A new object creation *)

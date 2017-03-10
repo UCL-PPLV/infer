@@ -162,7 +162,7 @@ let method_signature_of_decl trans_unit_ctx tenv meth_decl block_data_opt =
   match meth_decl, block_data_opt with
   | FunctionDecl (decl_info, _, qt, fdi), _ ->
       let func_decl = Func_decl_info (fdi, qt.Clang_ast_t.qt_type_ptr) in
-      let procname = CGeneral_utils.procname_of_decl trans_unit_ctx meth_decl in
+      let procname = CProcname.from_decl trans_unit_ctx ~tenv meth_decl in
       let ms = build_method_signature trans_unit_ctx tenv decl_info procname func_decl None None in
       let extra_instrs = get_assume_not_null_calls fdi.Clang_ast_t.fdi_parameters in
       ms, fdi.Clang_ast_t.fdi_body, extra_instrs
@@ -170,7 +170,7 @@ let method_signature_of_decl trans_unit_ctx tenv meth_decl block_data_opt =
   | CXXConstructorDecl (decl_info, _, qt, fdi, mdi), _
   | CXXConversionDecl (decl_info, _, qt, fdi, mdi), _
   | CXXDestructorDecl (decl_info, _, qt, fdi, mdi), _ ->
-      let procname = CGeneral_utils.procname_of_decl trans_unit_ctx meth_decl in
+      let procname = CProcname.from_decl trans_unit_ctx ~tenv meth_decl in
       let parent_ptr = Option.value_exn decl_info.di_parent_pointer in
       let method_decl = Cpp_Meth_decl_info (fdi, mdi, parent_ptr, qt.Clang_ast_t.qt_type_ptr)  in
       let parent_pointer = decl_info.Clang_ast_t.di_parent_pointer in
@@ -180,7 +180,7 @@ let method_signature_of_decl trans_unit_ctx tenv meth_decl block_data_opt =
       let init_list_instrs = get_init_list_instrs mdi in (* it will be empty for methods *)
       ms, fdi.Clang_ast_t.fdi_body, (init_list_instrs @ non_null_instrs)
   | ObjCMethodDecl (decl_info, _, mdi), _ ->
-      let procname = CGeneral_utils.procname_of_decl trans_unit_ctx meth_decl in
+      let procname = CProcname.from_decl trans_unit_ctx ~tenv meth_decl in
       let parent_ptr = Option.value_exn decl_info.di_parent_pointer in
       let method_decl = ObjC_Meth_decl_info (mdi, parent_ptr) in
       let parent_pointer = decl_info.Clang_ast_t.di_parent_pointer in
@@ -217,9 +217,9 @@ let get_method_name_from_clang tenv ms_opt =
            else
              (ignore (CType_decl.add_types_from_decl_to_tenv tenv decl);
               match ObjcCategory_decl.get_base_class_name_from_category decl with
-              | Some class_name ->
+              | Some class_typename ->
                   let procname = CMethod_signature.ms_get_name ms in
-                  let new_procname = Procname.replace_class procname class_name in
+                  let new_procname = Typ.Procname.replace_class procname class_typename in
                   CMethod_signature.ms_set_name ms new_procname;
                   Some ms
               | None -> Some ms)
@@ -227,25 +227,31 @@ let get_method_name_from_clang tenv ms_opt =
   | None -> None
 
 let get_superclass_curr_class_objc context =
-  let retrive_super cname super_opt =
-    let iname = Typename.TN_csu (Csu.Class Csu.Objc, Mangled.from_string cname) in
-    Logging.out_debug "Checking for superclass = '%s'\n\n%!" (Typename.to_string iname);
-    match Tenv.lookup (CContext.get_tenv context) iname with
-    | Some { supers = super_name :: _ } ->
-        Typename.name super_name
-    | _ ->
-        Logging.err_debug "NOT FOUND superclass = '%s'\n\n%!" (Typename.to_string iname);
-        (match super_opt with
-         | Some super -> super
-         | _ -> assert false) in
+  let open Clang_ast_t in
+  let super_of_decl_ref_opt decl_ref =
+    match decl_ref
+          |> Option.value_map ~f:(fun dr -> dr.dr_name) ~default:None
+          |> Option.map ~f:CAst_utils.get_qualified_name with
+    | Some name -> name
+    | None -> assert false
+  in
+  let retreive_super_name ptr = match CAst_utils.get_decl ptr with
+    | Some ObjCInterfaceDecl (_, _, _, _, otdi) -> super_of_decl_ref_opt otdi.otdi_super
+    | Some ObjCImplementationDecl (_, _, _, _, oi) -> (
+        match oi.Clang_ast_t.oidi_class_interface
+              |> Option.map ~f:(fun dr -> dr.dr_decl_pointer)
+              |> Option.value_map ~f:CAst_utils.get_decl ~default:None with
+        | Some ObjCInterfaceDecl (_, _, _, _, otdi) -> super_of_decl_ref_opt otdi.otdi_super
+        | _ -> assert false
+      )
+    | Some ObjCCategoryDecl (_, _, _, _, ocdi) ->
+        super_of_decl_ref_opt ocdi.odi_class_interface
+    | Some ObjCCategoryImplDecl (_, _, _, _, ocidi) ->
+        super_of_decl_ref_opt ocidi.ocidi_class_interface
+    | _ -> assert false in
   match CContext.get_curr_class context with
-  | CContext.ContextCls (cname, super_opt, _) ->
-      retrive_super cname super_opt
-  | CContext.ContextCategory (_, cls) ->
-      retrive_super cls None
-  | CContext.ContextNoCls
-  | CContext.ContextClsDeclPtr _
-  | CContext.ContextProtocol _ -> assert false
+  | CContext.ContextClsDeclPtr ptr -> Typename.Objc.from_string (retreive_super_name ptr)
+  | CContext.ContextNoCls -> assert false
 
 (* Gets the class name from a method signature found by clang, if search is successful *)
 let get_class_name_method_call_from_clang trans_unit_ctx tenv obj_c_message_expr_info =
@@ -255,8 +261,8 @@ let get_class_name_method_call_from_clang trans_unit_ctx tenv obj_c_message_expr
        | Some ms ->
            begin
              match CMethod_signature.ms_get_name ms with
-             | Procname.ObjC_Cpp objc_cpp ->
-                 Some (Procname.objc_cpp_get_class_name objc_cpp)
+             | Typ.Procname.ObjC_Cpp objc_cpp ->
+                 Some (Typ.Procname.objc_cpp_get_class_type_name objc_cpp)
              | _ ->
                  None
            end
@@ -268,11 +274,11 @@ let get_class_name_method_call_from_receiver_kind context obj_c_message_expr_inf
   match obj_c_message_expr_info.Clang_ast_t.omei_receiver_kind with
   | `Class tp ->
       let sil_type = CType_decl.type_ptr_to_sil_type context.CContext.tenv tp in
-      (CType.classname_of_type sil_type)
+      (CType.objc_classname_of_type sil_type)
   | `Instance ->
       (match act_params with
        | (_, Typ.Tptr(t, _)):: _
-       | (_, t):: _ -> CType.classname_of_type t
+       | (_, t):: _ -> CType.objc_classname_of_type t
        | _ -> assert false)
   | `SuperInstance ->get_superclass_curr_class_objc context
   | `SuperClass -> get_superclass_curr_class_objc context
@@ -285,13 +291,6 @@ let get_objc_method_data obj_c_message_expr_info =
   | `SuperInstance -> (selector, pointer, MCNoVirtual)
   | `Class _
   | `SuperClass -> (selector, pointer, MCStatic)
-
-let skip_property_accessor ms =
-  let open Clang_ast_t in
-  let pointer_to_property_opt = CMethod_signature.ms_get_pointer_to_property_opt ms in
-  match CAst_utils.get_decl_opt pointer_to_property_opt with
-  | Some (ObjCPropertyDecl _) -> true
-  | _ -> false
 
 let get_formal_parameters tenv ms =
   let rec defined_parameters pl =
@@ -331,28 +330,20 @@ let sil_func_attributes_of_attributes attrs =
     | _:: tl -> do_translation acc tl in
   do_translation [] attrs
 
-let should_create_procdesc cfg procname defined =
+let should_create_procdesc cfg procname defined set_objc_accessor_attr =
   match Cfg.find_proc_desc_from_name cfg procname with
   | Some previous_procdesc ->
       let is_defined_previous = Procdesc.is_defined previous_procdesc in
-      if defined && (not is_defined_previous) then
+      if (defined || set_objc_accessor_attr) && (not is_defined_previous) then
         (Cfg.remove_proc_desc cfg (Procdesc.get_proc_name previous_procdesc);
          true)
       else false
   | None -> true
 
 let sil_method_annotation_of_args args method_type : Annot.Method.t =
-  let default_visibility = true in
-  let mk_annot annot_name =
-    let annot = { Annot.class_name = annot_name; parameters = []; } in
-    annot, default_visibility in
-  let sil_annot_of_type type_ptr =
-    if CAst_utils.is_type_nullable type_ptr then
-      [mk_annot Annotations.nullable]
-    else Annot.Item.empty in
   let args_types = List.map ~f:(fun (_, qt) -> qt.Clang_ast_t.qt_type_ptr) args in
-  let param_annots = List.map ~f:sil_annot_of_type args_types in
-  let retval_annot = sil_annot_of_type method_type in
+  let param_annots = List.map ~f:CAst_utils.sil_annot_of_type args_types in
+  let retval_annot = CAst_utils.sil_annot_of_type method_type in
   retval_annot, param_annots
 
 let is_pointer_to_const type_ptr = match CAst_utils.get_type type_ptr with
@@ -379,11 +370,28 @@ let get_const_args_indices ~shift args =
           aux result tl in
   aux [] args
 
+let get_objc_property_accessor ms =
+  let open Clang_ast_t in
+  match CAst_utils.get_decl_opt (CMethod_signature.ms_get_pointer_to_property_opt ms) with
+  | Some (ObjCPropertyDecl (_, _, obj_c_property_decl_info)) ->
+      let ivar_decl_ref = obj_c_property_decl_info.Clang_ast_t.opdi_ivar_decl in
+      (match CAst_utils.get_decl_opt_with_decl_ref ivar_decl_ref with
+       | Some ObjCIvarDecl (_, named_decl_info, _, _, _) ->
+           let field_name = CGeneral_utils.mk_class_field_name named_decl_info in
+           if CMethod_signature.ms_is_getter ms then
+             Some (ProcAttributes.Objc_getter field_name)
+           else if CMethod_signature.ms_is_setter ms then
+             Some (ProcAttributes.Objc_setter field_name)
+           else None
+       | _ -> None)
+  | _ -> None
+
 (** Creates a procedure description. *)
-let create_local_procdesc trans_unit_ctx cfg tenv ms fbody captured is_objc_inst_method =
+let create_local_procdesc ?(set_objc_accessor_attr=false) trans_unit_ctx cfg tenv ms
+    fbody captured is_objc_inst_method =
   let defined = not (Int.equal (List.length fbody) 0) in
   let proc_name = CMethod_signature.ms_get_name ms in
-  let pname = Procname.to_string proc_name in
+  let pname = Typ.Procname.to_string proc_name in
   let attributes = sil_func_attributes_of_attributes (CMethod_signature.ms_get_attributes ms) in
   let method_ret_type = CMethod_signature.ms_get_ret_type ms in
   let method_annotation =
@@ -405,35 +413,37 @@ let create_local_procdesc trans_unit_ctx cfg tenv ms fbody captured is_objc_inst
     let loc_start = CLocation.get_sil_location_from_range trans_unit_ctx source_range true in
     let loc_exit = CLocation.get_sil_location_from_range trans_unit_ctx source_range false in
     let ret_type = get_return_type tenv ms in
-    if skip_property_accessor ms then ()
-    else
-      let procdesc =
-        let proc_attributes =
-          { (ProcAttributes.default proc_name Config.Clang) with
-            ProcAttributes.captured = captured_mangled;
-            formals;
-            const_formals;
-            func_attributes = attributes;
-            is_defined = defined;
-            is_objc_instance_method = is_objc_inst_method;
-            is_cpp_instance_method = is_cpp_inst_method;
-            is_model = Config.models_mode;
-            loc = loc_start;
-            translation_unit = Some trans_unit_ctx.CFrontend_config.source_file;
-            method_annotation;
-            ret_type;
-          } in
-        Cfg.create_proc_desc cfg proc_attributes in
-      if defined then
-        (if !Config.arc_mode then
-           Procdesc.set_flag procdesc Mleak_buckets.objc_arc_flag "true";
-         let start_kind = Procdesc.Node.Start_node proc_name in
-         let start_node = Procdesc.create_node procdesc loc_start start_kind [] in
-         let exit_kind = Procdesc.Node.Exit_node proc_name in
-         let exit_node = Procdesc.create_node procdesc loc_exit exit_kind [] in
-         Procdesc.set_start_node procdesc start_node;
-         Procdesc.set_exit_node procdesc exit_node) in
-  if should_create_procdesc cfg proc_name defined then
+    let objc_property_accessor =
+      if set_objc_accessor_attr then get_objc_property_accessor ms
+      else None in
+    let procdesc =
+      let proc_attributes =
+        { (ProcAttributes.default proc_name Config.Clang) with
+          ProcAttributes.captured = captured_mangled;
+          formals;
+          const_formals;
+          func_attributes = attributes;
+          is_defined = defined;
+          is_objc_instance_method = is_objc_inst_method;
+          is_cpp_instance_method = is_cpp_inst_method;
+          is_model = Config.models_mode;
+          loc = loc_start;
+          objc_accessor = objc_property_accessor;
+          translation_unit = Some trans_unit_ctx.CFrontend_config.source_file;
+          method_annotation;
+          ret_type;
+        } in
+      Cfg.create_proc_desc cfg proc_attributes in
+    if defined then
+      (if !Config.arc_mode then
+         Procdesc.set_flag procdesc Mleak_buckets.objc_arc_flag "true";
+       let start_kind = Procdesc.Node.Start_node proc_name in
+       let start_node = Procdesc.create_node procdesc loc_start start_kind [] in
+       let exit_kind = Procdesc.Node.Exit_node proc_name in
+       let exit_node = Procdesc.create_node procdesc loc_exit exit_kind [] in
+       Procdesc.set_start_node procdesc start_node;
+       Procdesc.set_exit_node procdesc exit_node) in
+  if should_create_procdesc cfg proc_name defined set_objc_accessor_attr then
     (create_new_procdesc (); true)
   else false
 
@@ -468,16 +478,17 @@ let create_procdesc_with_pointer context pointer class_name_opt name =
       let callee_name =
         match class_name_opt with
         | Some class_name ->
-            CGeneral_utils.mk_procname_from_cpp_method class_name name None
+            CProcname.NoAstDecl.cpp_method_of_string context.tenv class_name name
         | None ->
-            CGeneral_utils.mk_procname_from_function context.translation_unit_context name None in
+            CProcname.NoAstDecl.c_function_of_string
+              context.translation_unit_context context.tenv name in
       create_external_procdesc context.cfg callee_name false None;
       callee_name
 
 let add_default_method_for_class trans_unit_ctx class_name decl_info =
   let loc = CLocation.get_sil_location_from_range trans_unit_ctx
       decl_info.Clang_ast_t.di_source_range true in
-  let proc_name = Procname.get_default_objc_class_method class_name in
+  let proc_name = Typ.Procname.get_default_objc_class_method class_name in
   let attrs = { (ProcAttributes.default proc_name Config.Clang) with loc = loc; } in
   AttributesTable.store_attributes attrs
 

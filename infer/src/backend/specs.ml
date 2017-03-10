@@ -225,9 +225,9 @@ let normalized_specs_to_specs =
 
 module CallStats = struct (** module for tracing stats of function calls *)
   module PnameLocHash = Hashtbl.Make (struct
-      type t = Procname.t * Location.t
-      let hash (pname, loc) = Hashtbl.hash (Procname.hash_pname pname, loc.Location.line)
-      let equal = [%compare.equal: Procname.t * Location.t]
+      type t = Typ.Procname.t * Location.t
+      let hash (pname, loc) = Hashtbl.hash (Typ.Procname.hash_pname pname, loc.Location.line)
+      let equal = [%compare.equal: Typ.Procname.t * Location.t]
     end)
 
   (** kind of result of a procedure call *)
@@ -278,14 +278,14 @@ module CallStats = struct (** module for tracing stats of function calls *)
     PnameLocHash.iter (fun x tr -> elems := (x, tr) :: !elems) t;
     let sorted_elems =
       let compare (pname_loc1, _) (pname_loc2, _) =
-        [%compare: Procname.t * Location.t] pname_loc1 pname_loc2 in
+        [%compare: Typ.Procname.t * Location.t] pname_loc1 pname_loc2 in
       List.sort ~cmp:compare !elems in
     List.iter ~f:(fun (x, tr) -> f x tr) sorted_elems
 
 (*
   let pp fmt t =
     let do_call (pname, loc) tr =
-      F.fprintf fmt "%a %a: %a@\n" Procname.pp pname Location.pp loc pp_trace tr in
+      F.fprintf fmt "%a %a: %a@\n" Typ.Procname.pp pname Location.pp loc pp_trace tr in
     iter do_call t
 *)
 end
@@ -298,14 +298,21 @@ type stats =
   { stats_time: float; (** Analysis time for the procedure *)
     stats_failure:
       SymOp.failure_kind option; (** what type of failure stopped the analysis (if any) *)
-    stats_calls: Cg.in_out_calls; (** num of procs calling, and called *)
     symops: int; (** Number of SymOp's throughout the whole analysis of the function *)
     mutable nodes_visited_fp : IntSet.t; (** Nodes visited during the footprint phase *)
     mutable nodes_visited_re : IntSet.t; (** Nodes visited during the re-execution phase *)
     call_stats : call_stats;
   }
 
-type status = ACTIVE | INACTIVE | STALE [@@deriving compare]
+type status = Initialized | Active | Analyzed [@@deriving compare]
+
+let string_of_status = function
+  | Initialized -> "Initialized"
+  | Active -> "Active"
+  | Analyzed -> "Analyzed"
+
+let pp_status fmt status =
+  F.fprintf fmt "%s" (string_of_status status)
 
 let equal_status = [%compare.equal : status]
 
@@ -336,17 +343,16 @@ type summary = {
   payload: payload;  (** payload containing the result of some analysis *)
   sessions: int ref; (** Session number: how many nodes went trough symbolic execution *)
   stats: stats;  (** statistics: execution time and list of errors *)
-  status: status; (** ACTIVE when the proc is being analyzed *)
-  timestamp: int; (** Timestamp of the specs, >= 0, increased every time the specs change *)
+  status: status; (** Analysis status of the procedure *)
   attributes : ProcAttributes.t; (** Attributes of the procedure *)
   proc_desc_option : Procdesc.t option;
 }
 
-type spec_tbl = summary Procname.Hash.t
+type spec_tbl = summary Typ.Procname.Hash.t
 
-let spec_tbl: spec_tbl = Procname.Hash.create 128
+let spec_tbl: spec_tbl = Typ.Procname.Hash.create 128
 
-let clear_spec_tbl () = Procname.Hash.clear spec_tbl
+let clear_spec_tbl () = Typ.Procname.Hash.clear spec_tbl
 
 (** pretty print analysis time; if [whole_seconds] is true, only print time in seconds *)
 let pp_time whole_seconds fmt t =
@@ -362,9 +368,8 @@ let pp_errlog fmt err_log =
   F.fprintf fmt "WARNINGS: @[<h>%a@]" Errlog.pp_warnings err_log
 
 let pp_stats whole_seconds fmt stats =
-  F.fprintf fmt "TIME:%a FAILURE:%a SYMOPS:%d CALLS:%d,%d@\n" (pp_time whole_seconds)
+  F.fprintf fmt "TIME:%a FAILURE:%a SYMOPS:%d@\n" (pp_time whole_seconds)
     stats.stats_time pp_failure_kind_opt stats.stats_failure stats.symops
-    stats.stats_calls.Cg.in_calls stats.stats_calls.Cg.out_calls
 
 
 (** Print the spec *)
@@ -408,12 +413,6 @@ let pp_specs pe fmt specs =
                      F.fprintf fmt "\\subsection*{Spec %d of %d}@\n\\(%a\\)@\n"
                        !cnt total (pp_spec pe None) spec) specs
 
-let describe_timestamp summary =
-  ("Timestamp", Printf.sprintf "%d" summary.timestamp)
-
-let describe_status summary =
-  ("Status", if equal_status summary.status ACTIVE then "ACTIVE" else "INACTIVE")
-
 let describe_phase summary =
   ("Phase", if equal_phase summary.phase FOOTPRINT then "FOOTPRINT" else "RE_EXECUTION")
 
@@ -432,7 +431,7 @@ let get_signature summary =
       "%a %a"
       (Typ.pp_full Pp.text)
       summary.attributes.ProcAttributes.ret_type
-      Procname.pp summary.attributes.ProcAttributes.proc_name in
+      Typ.Procname.pp summary.attributes.ProcAttributes.proc_name in
   let decl = F.asprintf "%t" pp in
   decl ^ "(" ^ !s ^ ")"
 
@@ -445,8 +444,7 @@ let get_specs_from_payload summary =
 let pp_summary_no_stats_specs fmt summary =
   let pp_pair fmt (x, y) = F.fprintf fmt "%s: %s" x y in
   F.fprintf fmt "%s@\n" (get_signature summary);
-  F.fprintf fmt "%a@\n" pp_pair (describe_timestamp summary);
-  F.fprintf fmt "%a@\n" pp_pair (describe_status summary);
+  F.fprintf fmt "%a@\n" pp_status summary.status;
   F.fprintf fmt "%a@\n" pp_pair (describe_phase summary)
 
 let pp_payload pe fmt { preposts; typestate; crashcontext_frame; quandary; siof; threadsafety; buffer_overrun } =
@@ -495,13 +493,9 @@ let pp_summary_html ~whole_seconds source color fmt summary =
   pp_specs pe fmt (get_specs_from_payload summary);
   F.fprintf fmt "</LISTING>@\n"
 
-let empty_stats calls in_out_calls_opt =
+let empty_stats calls =
   { stats_time = 0.0;
     stats_failure = None;
-    stats_calls =
-      (match in_out_calls_opt with
-       | Some in_out_calls -> in_out_calls
-       | None -> { Cg.in_calls = 0; Cg.out_calls = 0 });
     symops = 0;
     nodes_visited_fp = IntSet.empty;
     nodes_visited_re = IntSet.empty;
@@ -522,14 +516,14 @@ let summary_compact sh summary =
   { summary with payload = payload_compact sh summary.payload }
 
 (** Add the summary to the table for the given function *)
-let add_summary (proc_name : Procname.t) (summary: summary) : unit =
+let add_summary (proc_name : Typ.Procname.t) (summary: summary) : unit =
   L.out "Adding summary for %a@\n@[<v 2>  %a@]@."
-    Procname.pp proc_name
+    Typ.Procname.pp proc_name
     (pp_summary_text ~whole_seconds:false) summary;
-  Procname.Hash.replace spec_tbl proc_name summary
+  Typ.Procname.Hash.replace spec_tbl proc_name summary
 
 let specs_filename pname =
-  let pname_file = Procname.to_filename pname in
+  let pname_file = Typ.Procname.to_filename pname in
   pname_file ^ Config.specs_files_suffix
 
 (** path to the .specs file for the given procedure in the current results directory *)
@@ -552,23 +546,9 @@ let summary_exists_in_models pname =
 let summary_serializer : summary Serialization.serializer =
   Serialization.create_serializer Serialization.Key.summary
 
-(** Save summary for the procedure into the spec database *)
-let store_summary pname (summ1: summary) =
-  let summ2 = if Config.save_compact_summaries
-    then summary_compact (Sil.create_sharing_env ()) summ1
-    else summ1 in
-  let summ3 = if Config.save_time_in_summaries
-    then summ2
-    else
-      { summ2 with
-        stats = { summ1.stats with stats_time = 0.0} } in
-  add_summary pname summ3 (* Make sure the summary in memory is identical to the saved one *);
-  Serialization.write_to_file summary_serializer (res_dir_specs_filename pname) summ3
-
 (** Load procedure summary from the given file *)
 let load_summary specs_file =
   Serialization.read_from_file summary_serializer specs_file
-
 
 (** Load procedure summary for the given procedure name and update spec table *)
 let load_summary_to_spec_table proc_name =
@@ -603,7 +583,7 @@ let load_summary_to_spec_table proc_name =
 
 let rec get_summary proc_name =
   try
-    Some (Procname.Hash.find spec_tbl proc_name)
+    Some (Typ.Procname.Hash.find spec_tbl proc_name)
   with Not_found ->
     if load_summary_to_spec_table proc_name then
       get_summary proc_name
@@ -612,7 +592,7 @@ let rec get_summary proc_name =
 let get_summary_unsafe s proc_name =
   match get_summary proc_name with
   | None ->
-      failwithf "[%s] Specs.get_summary_unsafe: %a Not found" s Procname.pp proc_name
+      failwithf "[%s] Specs.get_summary_unsafe: %a Not found" s Typ.Procname.pp proc_name
   | Some summary -> summary
 
 (** Check if the procedure is from a library:
@@ -669,13 +649,7 @@ let get_status summary =
   summary.status
 
 let is_active summary =
-  equal_status (get_status summary) ACTIVE
-
-let get_timestamp summary =
-  summary.timestamp
-
-let increment_timestamp summary =
-  { summary with timestamp = summary.timestamp + 1 }
+  equal_status (get_status summary) Active
 
 let get_proc_name summary =
   summary.attributes.ProcAttributes.proc_name
@@ -700,7 +674,7 @@ let get_flag summary key =
 let get_specs_formals proc_name =
   match get_summary proc_name with
   | None ->
-      raise (Failure ("Specs.get_specs_formals: " ^ (Procname.to_string proc_name) ^ "Not_found"))
+      raise (Failure ("Specs.get_specs_formals: " ^ (Typ.Procname.to_string proc_name) ^ "Not_found"))
   | Some summary ->
       let specs = get_specs_from_payload summary in
       let formals = get_formals summary in
@@ -714,10 +688,29 @@ let get_specs proc_name =
 let get_phase summary =
   summary.phase
 
+(** Save summary for the procedure into the spec database *)
+let store_summary (summ1: summary) =
+  let summ2 = if Config.save_compact_summaries
+    then summary_compact (Sil.create_sharing_env ()) summ1
+    else summ1 in
+  let summ3 = if Config.save_time_in_summaries
+    then summ2
+    else
+      { summ2 with
+        stats = { summ1.stats with stats_time = 0.0} } in
+  let final_summary = { summ3 with status = Analyzed } in
+  let proc_name = get_proc_name final_summary in
+  (* Make sure the summary in memory is identical to the saved one *)
+  add_summary proc_name final_summary;
+  Serialization.write_to_file
+    summary_serializer
+    (res_dir_specs_filename proc_name)
+    ~data:final_summary
+
 (** Set the current status for the proc *)
 let set_status proc_name status =
   match get_summary proc_name with
-  | None -> raise (Failure ("Specs.set_status: " ^ (Procname.to_string proc_name) ^ " Not_found"))
+  | None -> raise (Failure ("Specs.set_status: " ^ (Typ.Procname.to_string proc_name) ^ " Not_found"))
   | Some summary -> add_summary proc_name { summary with status = status }
 
 let empty_payload =
@@ -738,7 +731,7 @@ let empty_payload =
     initializes the summary for [proc_name] given dependent procs in list [depend_list]. *)
 let init_summary
     (nodes,
-     proc_flags, calls, in_out_calls_opt,
+     proc_flags, calls,
      proc_attributes,
      proc_desc_option) =
   let summary =
@@ -747,18 +740,17 @@ let init_summary
       phase = FOOTPRINT;
       sessions = ref 0;
       payload = empty_payload;
-      stats = empty_stats calls in_out_calls_opt;
-      status = INACTIVE;
-      timestamp = 0;
+      stats = empty_stats calls;
+      status = Initialized;
       attributes =
         { proc_attributes with
           ProcAttributes.proc_flags = proc_flags; };
       proc_desc_option;
     } in
-  Procname.Hash.replace spec_tbl proc_attributes.ProcAttributes.proc_name summary
+  Typ.Procname.Hash.replace spec_tbl proc_attributes.ProcAttributes.proc_name summary
 
 (** Reset a summary rebuilding the dependents and preserving the proc attributes if present. *)
-let reset_summary call_graph proc_name attributes_opt proc_desc_option =
+let reset_summary proc_name attributes_opt proc_desc_option =
   let proc_attributes = match attributes_opt with
     | Some attributes ->
         attributes
@@ -768,7 +760,6 @@ let reset_summary call_graph proc_name attributes_opt proc_desc_option =
     [],
     ProcAttributes.proc_flags_empty (),
     [],
-    Some (Cg.get_calls call_graph proc_name),
     proc_attributes,
     proc_desc_option
   )

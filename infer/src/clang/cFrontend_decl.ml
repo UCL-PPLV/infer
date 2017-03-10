@@ -21,8 +21,12 @@ struct
   (* Translates the method/function's body into nodes of the cfg. *)
   let add_method trans_unit_ctx tenv cg cfg class_decl_opt procname body has_return_param
       is_objc_method outer_context_opt extra_instrs =
+    let handle_translation_failure () =
+      Cfg.remove_proc_desc cfg procname;
+      CMethod_trans.create_external_procdesc cfg procname is_objc_method None
+    in
     Logging.out_debug
-      "@\n@\n>>---------- ADDING METHOD: '%s' ---------<<@\n@." (Procname.to_string procname);
+      "@\n@\n>>---------- ADDING METHOD: '%s' ---------<<@\n@." (Typ.Procname.to_string procname);
     try
       (match Cfg.find_proc_desc_from_name cfg procname with
        | Some procdesc ->
@@ -34,7 +38,7 @@ struct
               let exit_node = Procdesc.get_exit_node procdesc in
               Logging.out_debug
                 "\n\n>>---------- Start translating body of function: '%s' ---------<<\n@."
-                (Procname.to_string procname);
+                (Typ.Procname.to_string procname);
               let meth_body_nodes = T.instructions_trans context body extra_instrs exit_node in
               let proc_attributes = Procdesc.get_attributes procdesc in
               Procdesc.Node.add_locals_ret_declaration
@@ -48,11 +52,12 @@ struct
         (* this shouldn't happen, because self or [a class] should always be arguments of
            functions. This is to make sure I'm not wrong. *)
         assert false
-    | Assert_failure (file, line, column) ->
+    | CTrans_utils.TemplatedCodeException _ ->
+        Logging.out "Fatal error: frontend doesn't support translation of templated code\n";
+        handle_translation_failure ()
+    | Assert_failure (file, line, column) when Config.failures_allowed ->
         Logging.out "Fatal error: exception Assert_failure(%s, %d, %d)\n%!" file line column;
-        Cfg.remove_proc_desc cfg procname;
-        CMethod_trans.create_external_procdesc cfg procname is_objc_method None;
-        ()
+        handle_translation_failure ()
 
   let function_decl trans_unit_ctx tenv cfg cg func_decl block_data_opt =
     let captured_vars, outer_context_opt =
@@ -72,49 +77,38 @@ struct
             return_param_typ_opt false outer_context_opt extra_instrs
     | None -> ()
 
-  let process_method_decl trans_unit_ctx tenv cg cfg curr_class meth_decl ~is_objc =
+  let process_method_decl ?(set_objc_accessor_attr=false) trans_unit_ctx tenv cg cfg
+      curr_class meth_decl ~is_objc =
     let ms, body_opt, extra_instrs =
       CMethod_trans.method_signature_of_decl trans_unit_ctx tenv meth_decl None in
+    let is_instance = CMethod_signature.ms_is_instance ms in
+    let is_objc_inst_method = is_instance && is_objc in
     match body_opt with
     | Some body ->
-        let is_instance = CMethod_signature.ms_is_instance ms in
         let procname = CMethod_signature.ms_get_name ms in
-        let is_objc_inst_method = is_instance && is_objc in
         let return_param_typ_opt = CMethod_signature.ms_get_return_param_typ ms in
-        if CMethod_trans.create_local_procdesc
+        if CMethod_trans.create_local_procdesc ~set_objc_accessor_attr
             trans_unit_ctx cfg tenv ms [body] [] is_objc_inst_method then
           add_method trans_unit_ctx tenv cg cfg curr_class procname body return_param_typ_opt
             is_objc None extra_instrs
-    | None -> ()
+    | None ->
+        if set_objc_accessor_attr then
+          ignore (CMethod_trans.create_local_procdesc ~set_objc_accessor_attr trans_unit_ctx
+                    cfg tenv ms [] [] is_objc_inst_method)
 
-  let process_property_implementation cfg trans_unit_ctx obj_c_property_impl_decl_info =
+  let process_property_implementation trans_unit_ctx tenv cg cfg curr_class
+      obj_c_property_impl_decl_info =
     let property_decl_opt = obj_c_property_impl_decl_info.Clang_ast_t.opidi_property_decl in
     match CAst_utils.get_decl_opt_with_decl_ref property_decl_opt with
     | Some ObjCPropertyDecl (_, _, obj_c_property_decl_info) ->
-        let ivar_decl_ref = obj_c_property_decl_info.Clang_ast_t.opdi_ivar_decl in
-        (match CAst_utils.get_decl_opt_with_decl_ref ivar_decl_ref with
-         | Some ObjCIvarDecl (_, named_decl_info, _, _, _) ->
-             let field_name = CGeneral_utils.mk_class_field_name named_decl_info in
-             let process_accessor pointer ~getter =
-               (match CAst_utils.get_decl_opt_with_decl_ref pointer with
-                | Some (ObjCMethodDecl (decl_info, _, _) as d) ->
-                    let source_range = decl_info.Clang_ast_t.di_source_range in
-                    let loc =
-                      CLocation.get_sil_location_from_range trans_unit_ctx source_range true in
-                    let property_accessor =
-                      if getter then
-                        Some (ProcAttributes.Objc_getter field_name)
-                      else
-                        Some (ProcAttributes.Objc_setter field_name) in
-                    let procname = CGeneral_utils.procname_of_decl trans_unit_ctx d in
-                    let attrs = { (ProcAttributes.default procname Config.Clang) with
-                                  loc = loc;
-                                  objc_accessor = property_accessor; } in
-                    ignore (Cfg.create_proc_desc cfg attrs)
-                | _ -> ()) in
-             process_accessor obj_c_property_decl_info.Clang_ast_t.opdi_getter_method ~getter:true;
-             process_accessor obj_c_property_decl_info.Clang_ast_t.opdi_setter_method ~getter:false
-         | _ -> ())
+        let process_accessor pointer =
+          (match CAst_utils.get_decl_opt_with_decl_ref pointer with
+           | Some (ObjCMethodDecl _ as dec) ->
+               process_method_decl ~set_objc_accessor_attr:true trans_unit_ctx tenv cg cfg
+                 curr_class dec ~is_objc:true
+           | _ -> ()) in
+        process_accessor obj_c_property_decl_info.Clang_ast_t.opdi_getter_method;
+        process_accessor obj_c_property_decl_info.Clang_ast_t.opdi_setter_method
     | _ -> ()
 
   let process_one_method_decl trans_unit_ctx tenv cg cfg curr_class dec =
@@ -125,7 +119,8 @@ struct
     | ObjCMethodDecl _ ->
         process_method_decl trans_unit_ctx tenv cg cfg curr_class dec ~is_objc:true
     | ObjCPropertyImplDecl (_, obj_c_property_impl_decl_info) ->
-        process_property_implementation cfg trans_unit_ctx obj_c_property_impl_decl_info
+        process_property_implementation trans_unit_ctx tenv cg cfg curr_class
+          obj_c_property_impl_decl_info
     | EmptyDecl _
     | ObjCIvarDecl _ | ObjCPropertyDecl _ -> ()
     | _ ->
@@ -181,41 +176,38 @@ struct
     Ident.NameGenerator.reset ();
     let translate = translate_one_declaration trans_unit_ctx tenv cg cfg decl_trans_context in
     (if should_translate_decl trans_unit_ctx dec decl_trans_context then
+       let dec_ptr = (Clang_ast_proj.get_decl_tuple dec).di_pointer in
        match dec with
        | FunctionDecl(_, _, _, _) ->
            function_decl trans_unit_ctx tenv cfg cg dec None
 
-       | ObjCInterfaceDecl(_, name_info, decl_list, _, oi_decl_info) ->
-           let name = CAst_utils.get_qualified_name name_info in
-           let curr_class = ObjcInterface_decl.get_curr_class name oi_decl_info in
+       | ObjCInterfaceDecl(_, _, decl_list, _, _) ->
+           let curr_class = CContext.ContextClsDeclPtr dec_ptr in
            ignore
              (ObjcInterface_decl.interface_declaration CType_decl.type_ptr_to_sil_type tenv dec);
            process_methods trans_unit_ctx tenv cg cfg curr_class decl_list
 
-       | ObjCProtocolDecl(_, name_info, decl_list, _, _) ->
-           let name = CAst_utils.get_qualified_name name_info in
-           let curr_class = CContext.ContextProtocol name in
+       | ObjCProtocolDecl(_, _, decl_list, _, _) ->
+           let curr_class = CContext.ContextClsDeclPtr dec_ptr in
            ignore (ObjcProtocol_decl.protocol_decl CType_decl.type_ptr_to_sil_type tenv dec);
            process_methods trans_unit_ctx tenv cg cfg curr_class decl_list
 
-       | ObjCCategoryDecl(_, name_info, decl_list, _, ocdi) ->
-           let name = CAst_utils.get_qualified_name name_info in
-           let curr_class = ObjcCategory_decl.get_curr_class_from_category_decl name ocdi in
+       | ObjCCategoryDecl(_, _, decl_list, _, _) ->
+           let curr_class =  CContext.ContextClsDeclPtr dec_ptr in
            ignore (ObjcCategory_decl.category_decl CType_decl.type_ptr_to_sil_type tenv dec);
            process_methods trans_unit_ctx tenv cg cfg curr_class decl_list
 
-       | ObjCCategoryImplDecl(_, name_info, decl_list, _, ocidi) ->
-           let name = CAst_utils.get_qualified_name name_info in
-           let curr_class = ObjcCategory_decl.get_curr_class_from_category_impl name ocidi in
+       | ObjCCategoryImplDecl(_, _, decl_list, _, _) ->
+           let curr_class = CContext.ContextClsDeclPtr dec_ptr in
            ignore (ObjcCategory_decl.category_impl_decl CType_decl.type_ptr_to_sil_type tenv dec);
            process_methods trans_unit_ctx tenv cg cfg curr_class decl_list;
 
-       | ObjCImplementationDecl(decl_info, _, decl_list, _, idi) ->
-           let curr_class = ObjcInterface_decl.get_curr_class_impl idi in
-           let class_name = CContext.get_curr_class_name curr_class in
+       | ObjCImplementationDecl(decl_info, _, decl_list, _, _) ->
+           let curr_class = CContext.ContextClsDeclPtr dec_ptr in
+           let class_typename = CType_decl.get_record_typename dec in
            let type_ptr_to_sil_type = CType_decl.type_ptr_to_sil_type in
            ignore (ObjcInterface_decl.interface_impl_declaration type_ptr_to_sil_type tenv dec);
-           CMethod_trans.add_default_method_for_class trans_unit_ctx class_name decl_info;
+           CMethod_trans.add_default_method_for_class trans_unit_ctx class_typename decl_info;
            process_methods trans_unit_ctx tenv cg cfg curr_class decl_list;
 
        | CXXMethodDecl (decl_info, _, _, _, _)

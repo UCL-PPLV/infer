@@ -123,9 +123,9 @@ struct
       | Binop.LOr -> Val.lor_sem v1 v2
       | Binop.PtrFld -> raise Not_implemented
 
-  let get_allocsite : Procname.t -> CFG.node -> int -> int -> string
+  let get_allocsite : Typ.Procname.t -> CFG.node -> int -> int -> string
     = fun proc_name node inst_num dimension ->
-      let proc_name = Procname.to_string proc_name in
+      let proc_name = Typ.Procname.to_string proc_name in
       let node_num = CFG.hash node |> string_of_int in
       let inst_num = string_of_int inst_num in
       let dimension = string_of_int dimension in
@@ -133,7 +133,7 @@ struct
       |> Allocsite.make
 
   let eval_array_alloc
-    : Procname.t -> CFG.node -> Typ.t -> Itv.t -> Itv.t -> int -> int -> Val.t
+    : Typ.Procname.t -> CFG.node -> Typ.t -> Itv.t -> Itv.t -> int -> int -> Val.t
     = fun pdesc node typ offset size inst_num dimension ->
       let allocsite = get_allocsite pdesc node inst_num dimension in
       let stride = sizeof typ |> Itv.of_int in
@@ -298,7 +298,7 @@ struct
         | Typ.Tptr (Typ.Tstruct typename, _) ->
             (match Tenv.lookup tenv typename with
              | Some str ->
-                 let fns = List.map ~f:get_field_name str.StructTyp.fields in
+                 let fns = List.map ~f:get_field_name str.Typ.Struct.fields in
                  List.fold ~f:(add_pair_field v1 v2) ~init:pairs fns
              | _ -> pairs)
         | Typ.Tptr (_ ,_) ->

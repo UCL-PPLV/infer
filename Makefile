@@ -22,6 +22,10 @@ BUILD_SYSTEMS_TESTS += \
   clang_translation \
   clang_unknown_ext \
   delete_results_dir \
+	differential_resolve_infer_eradicate_conflict \
+	differential_skip_anonymous_class_renamings \
+	differential_skip_duplicated_types_on_filenames \
+	differential_skip_duplicated_types_on_filenames_with_renamings \
   fail_on_issue \
   j1 \
   linters \
@@ -84,7 +88,7 @@ configure: configure.ac $(wildcard m4/*.m4)
 
 Makefile.autoconf: configure
 #	rerun ./configure with the flags that were used last time it was run (if available)
-	./configure $(shell cat config.flags 2> /dev/null || true)
+	./configure $(shell ./config.status --config || true)
 
 .PHONY: src_build
 src_build: $(MAKEFILE_LIST)
@@ -117,7 +121,8 @@ clang_setup:
 	@export CC="$(CC)" CFLAGS="$(CFLAGS)"; \
 	export CXX="$(CXX)" CXXFLAGS="$(CXXFLAGS)"; \
 	export CPP="$(CPP)" LDFLAGS="$(LDFLAGS)" LIBS="$(LIBS)"; \
-	$(FCP_DIR)/clang/setup.sh $(INFER_FCP_SETUP_OPTS) > /dev/null
+	$(FCP_DIR)/clang/setup.sh --only-check-install || \
+	$(FCP_DIR)/clang/setup.sh $(INFER_FCP_SETUP_OPTS)
 
 .PHONY: clang_plugin
 clang_plugin: clang_setup

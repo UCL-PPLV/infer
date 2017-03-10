@@ -22,7 +22,7 @@ let check_library_calls = false
 
 let get_field_annotation tenv fn typ =
   let lookup = Tenv.lookup tenv in
-  match StructTyp.get_field_type_and_annotation ~lookup fn typ with
+  match Typ.Struct.get_field_type_and_annotation ~lookup fn typ with
   | None -> None
   | Some (t, ia) ->
       let ia' =
@@ -45,7 +45,7 @@ let explain_expr tenv node e =
 (** Classify a procedure. *)
 let classify_procedure proc_attributes =
   let pn = proc_attributes.ProcAttributes.proc_name in
-  let unique_id = Procname.to_unique_id pn in
+  let unique_id = Typ.Procname.to_unique_id pn in
   let classification =
     if Models.is_modelled_nullable pn then "M" (* modelled *)
     else if Specs.proc_is_library proc_attributes then "L" (* library *)
@@ -123,7 +123,7 @@ let check_condition tenv case_zero find_canonical_duplicate curr_pdesc
       | _ -> false in
     let do_instr = function
       | Sil.Call (_, Exp.Const (Const.Cfun pn), [_; (Exp.Sizeof(t, _, _), _)], _, _) when
-          Procname.equal pn BuiltinDecl.__instanceof && typ_is_throwable t ->
+          Typ.Procname.equal pn BuiltinDecl.__instanceof && typ_is_throwable t ->
           throwable_found := true
       | _ -> () in
     let do_node n =
@@ -199,8 +199,8 @@ let check_field_assignment tenv
       | Some (_, ia) -> Annotations.ia_is_mutable ia
       | _ -> false in
     Config.eradicate_field_not_mutable &&
-    not (Procname.is_constructor curr_pname) &&
-    not (Procname.is_class_initializer curr_pname) &&
+    not (Typ.Procname.is_constructor curr_pname) &&
+    not (Typ.Procname.is_class_initializer curr_pname) &&
     not (field_is_mutable ()) in
   if should_report_nullable || should_report_absent then
     begin
@@ -237,7 +237,7 @@ let check_constructor_initialization tenv
     final_constructor_typestates
     loc: unit =
   State.set_node start_node;
-  if Procname.is_constructor curr_pname
+  if Typ.Procname.is_constructor curr_pname
   then begin
     match PatternMatch.get_this_type (Procdesc.get_attributes curr_pdesc) with
     | Some (Tptr (Tstruct name as ts, _)) -> (
@@ -268,10 +268,8 @@ let check_constructor_initialization tenv
                 let origin_is_initialized = function
                   | TypeOrigin.Undef ->
                       false
-                  | TypeOrigin.Field (f, _) ->
-                      (* field initialized with another field needing initialization *)
-                      let circular =
-                        List.exists ~f:(fun (f', _, _) -> Ident.equal_fieldname f f') fields in
+                  | TypeOrigin.Field (TypeOrigin.Formal name, _, _) ->
+                      let circular = String.equal (Mangled.to_string name) "this" in
                       not circular
                   | _ ->
                       true in

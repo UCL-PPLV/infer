@@ -40,6 +40,25 @@ val ml_bucket_symbols :
   (string * [ `MLeak_all | `MLeak_arc | `MLeak_cf | `MLeak_cpp | `MLeak_no_arc | `MLeak_unknown ])
     list
 
+val issues_fields_symbols :
+  (string * [`Issue_field_bug_class
+            | `Issue_field_kind
+            | `Issue_field_bug_type
+            | `Issue_field_qualifier
+            | `Issue_field_severity
+            | `Issue_field_visibility
+            | `Issue_field_line
+            | `Issue_field_column
+            | `Issue_field_procedure
+            | `Issue_field_procedure_id
+            | `Issue_field_procedure_start_line
+            | `Issue_field_file
+            | `Issue_field_bug_trace
+            | `Issue_field_key
+            | `Issue_field_hash
+            | `Issue_field_line_offset
+            | `Issue_field_procedure_id_without_crc]) list
+
 
 type os_type = Unix | Win32 | Cygwin
 
@@ -206,8 +225,10 @@ val fail_on_bug : bool
 val failures_allowed : bool
 val fcp_apple_clang : string option
 val fcp_syntax_only : bool
+val file_renamings : string option
 val filter_paths : bool
 val filtering : bool
+val final_parse_action : CommandLineOption.parse_action
 val flavors : bool
 val from_json_report : string option
 val frontend_debug : bool
@@ -218,6 +239,23 @@ val headers : bool
 val icfg_dotty_outfile : string option
 val infer_cache : string option
 val iphoneos_target_sdk_version : string option
+val issues_fields : [`Issue_field_bug_class
+                    | `Issue_field_kind
+                    | `Issue_field_bug_type
+                    | `Issue_field_qualifier
+                    | `Issue_field_severity
+                    | `Issue_field_visibility
+                    | `Issue_field_line
+                    | `Issue_field_column
+                    | `Issue_field_procedure
+                    | `Issue_field_procedure_id
+                    | `Issue_field_procedure_start_line
+                    | `Issue_field_file
+                    | `Issue_field_bug_trace
+                    | `Issue_field_key
+                    | `Issue_field_hash
+                    | `Issue_field_line_offset
+                    | `Issue_field_procedure_id_without_crc] list
 val iterations : int
 val java_jar_compiler : string option
 val javac_classes_out : string
@@ -245,7 +283,6 @@ val pmd_xml : bool
 val precondition_stats : bool
 val print_logs : bool
 val print_builtins : bool
-val print_traces_in_tests : bool
 val print_types : bool
 val print_using_diff : bool
 val procs_csv : string option
@@ -258,9 +295,12 @@ val quiet : bool
 val reactive_mode : bool
 val reactive_capture : bool
 val report : string option
+val report_current : string option
 val report_hook : string option
+val report_previous : string option
 val report_runtime_exceptions : bool
 val reports_include_ml_loc : bool
+val resolve_infer_eradicate_conflict : bool
 val results_dir : string
 val save_analysis_results : string option
 val seconds_per_iteration : float option
@@ -268,6 +308,7 @@ val show_buckets : bool
 val show_progress_bar : bool
 val siof_safe_methods : string list
 val skip_analysis_in_path : string list
+val skip_duplicated_types : bool
 val skip_translation_headers : string list
 val spec_abs_level : int
 val specs_library : string list
@@ -281,6 +322,7 @@ val test : bool
 val test_filtering : bool
 val testing_mode : bool
 val threadsafety : bool
+val threadsafe_aliases : Yojson.Basic.json
 val permsafety : bool
 val trace_error : bool
 val trace_ondemand : bool

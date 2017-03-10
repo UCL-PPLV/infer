@@ -232,7 +232,7 @@ let has_objc_ref_counter tenv hpred =>
   switch hpred {
   | Hpointsto _ _ (Sizeof (Tstruct name) _ _) =>
     switch (Tenv.lookup tenv name) {
-    | Some {fields} => List.exists f::StructTyp.is_objc_ref_counter_field fields
+    | Some {fields} => List.exists f::Typ.Struct.is_objc_ref_counter_field fields
     | _ => false
     }
   | _ => false
@@ -515,7 +515,7 @@ let pp_instr pe0 f instr => {
 let is_block_pvar pvar => Typ.has_block_prefix (Mangled.to_string (Pvar.get_name pvar));
 
 /* A block pvar used to explain retain cycles */
-let block_pvar = Pvar.mk (Mangled.from_string "block") (Procname.from_string_c_fun "");
+let block_pvar = Pvar.mk (Mangled.from_string "block") (Typ.Procname.from_string_c_fun "");
 
 
 /** Dump an instruction. */

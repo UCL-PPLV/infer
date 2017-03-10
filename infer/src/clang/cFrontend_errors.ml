@@ -73,6 +73,9 @@ let rec expand_message_string message an =
     expand_message_string message' an
   with Not_found -> message
 
+let remove_new_lines message =
+  String.substr_replace_all ~pattern:"\n" ~with_:" " message
+
 let string_to_err_kind = function
   | "WARNING" -> Exceptions.Kwarning
   | "ERROR" -> Exceptions.Kerror
@@ -175,8 +178,8 @@ let expand_checkers checkers =
 
 let get_err_log translation_unit_context method_decl_opt =
   let procname = match method_decl_opt with
-    | Some method_decl -> CGeneral_utils.procname_of_decl translation_unit_context method_decl
-    | None -> Procname.Linters_dummy_method in
+    | Some method_decl -> CProcname.from_decl translation_unit_context method_decl
+    | None -> Typ.Procname.Linters_dummy_method in
   LintIssues.get_err_log procname
 
 (* Add a frontend warning with a description desc at location loc to the errlog of a proc desc *)
@@ -206,7 +209,8 @@ let get_current_method context (an : Ctl_parser_types.ast_node) =
   | _ -> context.CLintersContext.current_method
 
 let fill_issue_desc_info_and_log context an key issue_desc loc =
-  let desc = expand_message_string issue_desc.CIssue.description an in
+  let desc = remove_new_lines
+      (expand_message_string issue_desc.CIssue.description an) in
   let issue_desc' =
     {issue_desc with CIssue.description = desc; CIssue.loc = loc } in
   log_frontend_issue context.CLintersContext.translation_unit_context

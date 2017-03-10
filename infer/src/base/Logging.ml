@@ -31,6 +31,7 @@ let dup_formatter fmt1 fmt2 =
 (** Name of dir for logging the output in the specific executable *)
 let log_dir_of_action (action : CLOpt.parse_action) = match action with
   | Infer (Analysis | BufferOverrun | Checkers | Crashcontext | Quandary) -> "analyze"
+  | Differential -> "differential"
   | Infer Driver -> "driver"
   | Infer Clang
   | Infer Java
@@ -298,7 +299,7 @@ let log_progress_procedure () =
   log_progress_simple Config.log_analysis_procedure
 
 let log_progress_timeout_event failure_kind =
-  if Config.stats_mode then
+  if Config.stats_mode || Config.debug_mode then
     begin
       match failure_kind with
       | SymOp.FKtimeout ->

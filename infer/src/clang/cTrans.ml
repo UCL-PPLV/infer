@@ -29,7 +29,7 @@ struct
     let (selector, method_pointer_opt, mc_type) =
       CMethod_trans.get_objc_method_data obj_c_message_expr_info in
     let is_instance = mc_type <> CMethod_trans.MCStatic in
-    let method_kind = Procname.objc_method_kind_of_bool is_instance in
+    let method_kind = Typ.Procname.objc_method_kind_of_bool is_instance in
     let ms_opt =
       match method_pointer_opt with
       | Some pointer ->
@@ -43,12 +43,12 @@ struct
       | None ->  (* fall back to our method resolution if clang's fails *)
           let class_name = CMethod_trans.get_class_name_method_call_from_receiver_kind context
               obj_c_message_expr_info act_params in
-          CGeneral_utils.mk_procname_from_objc_method class_name selector method_kind in
+          CProcname.NoAstDecl.objc_method_of_string_kind class_name selector method_kind in
     let predefined_ms_opt = match proc_name with
-      | Procname.ObjC_Cpp objc_cpp ->
-          let class_name = Procname.objc_cpp_get_class_name objc_cpp in
+      | Typ.Procname.ObjC_Cpp objc_cpp ->
+          let class_name = Typ.Procname.objc_cpp_get_class_type_name objc_cpp in
           CTrans_models.get_predefined_model_method_signature class_name selector
-            CGeneral_utils.mk_procname_from_objc_method CFrontend_config.ObjC
+            CProcname.NoAstDecl.objc_method_of_string_kind CFrontend_config.ObjC
       | _ ->
           None in
     match predefined_ms_opt, ms_opt with
@@ -69,7 +69,7 @@ struct
 
 
   let add_autorelease_call context exp typ sil_loc =
-    let method_name = Procname.get_method (Procdesc.get_proc_name context.CContext.procdesc) in
+    let method_name = Typ.Procname.get_method (Procdesc.get_proc_name context.CContext.procdesc) in
     if !Config.arc_mode &&
        not (CTrans_utils.is_owning_name method_name) &&
        ObjcInterface_decl.is_pointer_to_objc_class typ then
@@ -116,16 +116,16 @@ struct
     Logging.out_debug "Block %s field:\n" block_name;
     List.iter ~f:(fun (fn, _, _) ->
         Logging.out_debug "-----> field: '%s'\n" (Ident.fieldname_to_string fn)) fields;
-    let mblock = Mangled.from_string block_name in
-    let block_name = Typename.TN_csu (Csu.Class Csu.Objc, mblock) in
-    ignore (Tenv.mk_struct tenv ~fields block_name);
-    let block_type = Typ.Tstruct block_name in
+    let block_typename = Typename.Objc.from_string block_name in
+    ignore (Tenv.mk_struct tenv ~fields block_typename);
+    let block_type = Typ.Tstruct block_typename in
     let trans_res =
       CTrans_utils.alloc_trans
         trans_state loc (Ast_expressions.dummy_stmt_info ()) block_type true None in
     let id_block = match trans_res.exps with
       | [(Exp.Var id, _)] -> id
       | _ -> assert false in
+    let mblock = Mangled.from_string block_name in
     let block_var = Pvar.mk mblock procname in
     let declare_block_local =
       Sil.Declare_locals ([(block_var, Typ.Tptr (block_type, Typ.Pk_pointer))], loc) in
@@ -147,7 +147,7 @@ struct
   let extract_block_from_tuple procname exps loc =
     let insts = ref [] in
     let make_function_name typ bn =
-      let bn'= Procname.to_string bn in
+      let bn'= Typ.Procname.to_string bn in
       let bn''= Mangled.from_string bn' in
       let block = Exp.Lvar (Pvar.mk bn'' procname) in
       let id = Ident.create_fresh Ident.knormal in
@@ -207,8 +207,7 @@ struct
     try
       f trans_state stmt
     with Self.SelfClassException class_name ->
-      let typ =
-        CType_decl.objc_class_name_to_sil_type trans_state.context.CContext.tenv class_name in
+      let typ = Typ.Tstruct class_name in
       { empty_res_trans with
         exps = [(Exp.Sizeof (typ, None, Subtype.exact), Tint IULong)] }
 
@@ -455,9 +454,9 @@ struct
     let function_attr_opt = Option.bind decl_opt get_deprecated_attr_arg in
     match function_attr_opt with
     | Some attr when CTrans_models.is_modeled_attribute attr ->
-        Some (Procname.from_string_c_fun attr)
+        Some (Typ.Procname.from_string_c_fun attr)
     | _ when CTrans_models.is_modeled_builtin name ->
-        Some (Procname.from_string_c_fun (CFrontend_config.infer ^ name))
+        Some (Typ.Procname.from_string_c_fun (CFrontend_config.infer ^ name))
     | _ when CTrans_models.is_release_builtin name type_ptr ->
         Some BuiltinDecl.__objc_release_cf
     | _ when CTrans_models.is_retain_builtin name type_ptr ->
@@ -527,7 +526,6 @@ struct
     let decl_opt = CAst_utils.get_function_decl_with_body decl_ptr in
     Option.iter ~f:(call_translation context) decl_opt;
     let method_name = CAst_utils.get_unqualified_name name_info in
-    let class_name = CAst_utils.get_class_name_from_member name_info in
     Logging.out_debug "!!!!! Dealing with method '%s' @." method_name;
     let method_typ = CType_decl.type_ptr_to_sil_type context.tenv type_ptr in
     let ms_opt = CMethod_trans.method_signature_of_pointer
@@ -568,7 +566,9 @@ struct
               type_ptr with
       | Some builtin_pname -> builtin_pname
       | None ->
-          CMethod_trans.create_procdesc_with_pointer context decl_ptr (Some class_name)
+          let class_typename = Typename.Cpp.from_string
+              (CAst_utils.get_class_name_from_member name_info) in
+          CMethod_trans.create_procdesc_with_pointer context decl_ptr (Some class_typename)
             method_name in
     let method_exp = (Exp.Const (Const.Cfun pname), method_typ) in
     { pre_trans_result with
@@ -657,10 +657,11 @@ struct
       else empty_res_trans in
     let exps = if Self.is_var_self pvar (CContext.is_objc_method context) then
         let curr_class = CContext.get_curr_class context in
+        let class_typename = CContext.get_curr_class_typename curr_class in
         if (CType.is_class typ) then
-          raise (Self.SelfClassException (CContext.get_curr_class_name curr_class))
+          raise (Self.SelfClassException class_typename)
         else
-          let typ = CType.add_pointer_to_typ (CType_decl.get_type_curr_class_objc curr_class) in
+          let typ = CType.add_pointer_to_typ (Typ.Tstruct class_typename) in
           [(var_exp, typ)]
       else [(var_exp, typ)] in
     Logging.out_debug "\n\n PVAR ='%s'\n\n" (Pvar.to_string pvar);
@@ -1056,11 +1057,11 @@ struct
           try
             let fst_res_trans = instruction trans_state_param stmt in
             obj_c_message_expr_info, fst_res_trans
-          with Self.SelfClassException class_name ->
+          with Self.SelfClassException class_typename ->
             let pointer = obj_c_message_expr_info.Clang_ast_t.omei_decl_pointer in
             let selector = obj_c_message_expr_info.Clang_ast_t.omei_selector in
             let obj_c_message_expr_info =
-              Ast_expressions.make_obj_c_message_expr_info_class selector class_name pointer in
+              Ast_expressions.make_obj_c_message_expr_info_class selector class_typename pointer in
             obj_c_message_expr_info, empty_res_trans in
         let instruction' =
           exec_with_self_exception (exec_with_glvalue_as_reference instruction) in
@@ -1120,7 +1121,7 @@ struct
   and block_enumeration_trans trans_state stmt_info stmt_list ei =
     Logging.out_debug "\n Call to a block enumeration function treated as special case...\n@.";
     let procname = Procdesc.get_proc_name trans_state.context.CContext.procdesc in
-    let pvar = CGeneral_utils.get_next_block_pvar procname in
+    let pvar = CProcname.get_next_block_pvar procname in
     let transformed_stmt, _ =
       Ast_expressions.translate_block_enumerate (Pvar.to_string pvar) stmt_info stmt_list ei in
     instruction trans_state transformed_stmt
@@ -1995,7 +1996,7 @@ struct
       CType_decl.class_from_pointer_type
         trans_state.context.CContext.tenv info.Clang_ast_t.ei_type_ptr in
     let dictionary_literal_pname = BuiltinDecl.__objc_dictionary_literal in
-    let dictionary_literal_s = Procname.get_method dictionary_literal_pname in
+    let dictionary_literal_s = Typ.Procname.get_method dictionary_literal_pname in
     let obj_c_message_expr_info =
       Ast_expressions.make_obj_c_message_expr_info_class dictionary_literal_s typ None in
     let stmts = CGeneral_utils.swap_elements_list stmts in
@@ -2061,7 +2062,7 @@ struct
     | Clang_ast_t.BlockDecl (_, block_decl_info) ->
         let open CContext in
         let type_ptr = expr_info.Clang_ast_t.ei_type_ptr in
-        let block_pname = CGeneral_utils.mk_fresh_block_procname procname in
+        let block_pname = CProcname.mk_fresh_block_procname procname in
         let typ = CType_decl.type_ptr_to_sil_type context.tenv type_ptr in
         (* We need to set the explicit dependency between the newly created block and the *)
         (* defining procedure. We add an edge in the call graph.*)
@@ -2076,7 +2077,7 @@ struct
         let captured_vars =
           List.map2_exn ~f:(fun id (pvar, typ) -> (Exp.Var id, pvar, typ)) ids captureds in
         let closure = Exp.Closure { name=block_pname; captured_vars } in
-        let block_name = Procname.to_string block_pname in
+        let block_name = Typ.Procname.to_string block_pname in
         let static_vars = CContext.static_vars_for_block context block_pname in
         let captured_static_vars = captureds @ static_vars in
         let alloc_block_instr =
@@ -2281,13 +2282,13 @@ struct
     { res_trans_to_parent with exps = res_trans_call.exps }
 
   and gccAsmStmt_trans trans_state =
-    let pname = Procname.from_string_c_fun CFrontend_config.infer_skip_gcc_asm_stmt in
+    let pname = Typ.Procname.from_string_c_fun CFrontend_config.infer_skip_gcc_asm_stmt in
     call_function_with_args "GCCAsmStmt" pname trans_state
   and objc_cxx_throw_trans trans_state =
     call_function_with_args "ObjCCPPThrow" BuiltinDecl.objc_cpp_throw trans_state
 
   and cxxPseudoDestructorExpr_trans () =
-    let fun_name = Procname.from_string_c_fun CFrontend_config.infer_skip_fun in
+    let fun_name = Typ.Procname.from_string_c_fun CFrontend_config.infer_skip_fun in
     { empty_res_trans with exps = [(Exp.Const (Const.Cfun fun_name), Typ.Tvoid)] }
 
   and cxxTypeidExpr_trans trans_state stmt_info stmts expr_info =
@@ -2325,7 +2326,7 @@ struct
     let sil_loc = CLocation.get_sil_location stmt_info trans_state.context in
     let type_pointer = expr_info.Clang_ast_t.ei_type_ptr in
     let typ = CType_decl.type_ptr_to_sil_type tenv type_pointer in
-    let fun_name = Procname.from_string_c_fun CFrontend_config.infer_skip_fun in
+    let fun_name = Typ.Procname.from_string_c_fun CFrontend_config.infer_skip_fun in
     let trans_state_pri = PriorityNode.try_claim_priority_node trans_state stmt_info in
     let trans_state_param = { trans_state_pri with succ_nodes = [] } in
     let res_trans_subexpr_list = List.map ~f:(instruction trans_state_param) stmts in
@@ -2663,6 +2664,13 @@ struct
     | OffsetOfExpr (_, _, expr_info)
     | VAArgExpr (_, _, expr_info) ->
         trans_into_undefined_expr trans_state expr_info
+
+
+    (* Infer somehow ended up in templated non instantiated code - right now
+       it's not supported and failure in those cases is expected. *)
+    | SubstNonTypeTemplateParmExpr _
+    | SubstNonTypeTemplateParmPackExpr _
+    | CXXDependentScopeMemberExpr _ -> raise (CTrans_utils.TemplatedCodeException instr)
 
     | s -> (Logging.out
               "\n!!!!WARNING: found statement %s. \nACTION REQUIRED: \

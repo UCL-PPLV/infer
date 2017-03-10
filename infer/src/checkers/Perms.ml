@@ -18,9 +18,9 @@ type lock_model =
   | NoEffect
 
 let get_lock_model = function
-  | Procname.Java java_pname ->
+  | Typ.Procname.Java java_pname ->
       begin
-        match Procname.java_get_class_name java_pname, Procname.java_get_method java_pname with
+        match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
         | "java.util.concurrent.locks.Lock", "lock" ->
             Lock
         | ("java.util.concurrent.locks.ReentrantLock"
@@ -37,17 +37,17 @@ let get_lock_model = function
         | _ ->
             NoEffect
       end
-  | pname when Procname.equal pname BuiltinDecl.__set_locked_attribute ->
+  | pname when Typ.Procname.equal pname BuiltinDecl.__set_locked_attribute ->
       Lock
-  | pname when Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
+  | pname when Typ.Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
       Unlock
   | _ ->
       NoEffect
 
 let should_analyze_proc pdesc _ =
   let pn = Procdesc.get_proc_name pdesc in
-  not (Procname.is_constructor pn) &&
-  not (Procname.is_class_initializer pn) &&
+  not (Typ.Procname.is_constructor pn) &&
+  not (Typ.Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn)
   (* not (is_call_to_builder_class_method pn) &&
   not (is_call_to_immutable_collection_method tenv pn) &&
@@ -56,18 +56,18 @@ let should_analyze_proc pdesc _ =
   not (pdesc_is_assumed_thread_safe pdesc tenv) *)
 
 let should_report_on_proc (_, _, proc_name, proc_desc) =
-  not (Procname.java_is_autogen_method proc_name) &&
+  not (Typ.Procname.java_is_autogen_method proc_name) &&
   Procdesc.get_access proc_desc <> PredSymb.Private &&
   not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting)
 
 let get_class = function
-  | Procname.Java java_pname -> Procname.java_get_class_type_name java_pname
+  | Typ.Procname.Java java_pname -> Typ.Procname.java_get_class_type_name java_pname
   | _ -> assert false
 
 let get_fields tenv pname =
   match Tenv.lookup tenv (get_class pname) with
   | None -> assert false
-  | Some { StructTyp.fields } ->
+  | Some { Typ.Struct.fields } ->
       List.fold
         fields
         ~init:Field.Set.empty
@@ -122,8 +122,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | _ -> false
 
   let get_lock pn _ =
-    if Procname.equal pn BuiltinDecl.__set_locked_attribute ||
-       Procname.equal pn BuiltinDecl.__delete_locked_attribute then
+    if Typ.Procname.equal pn BuiltinDecl.__set_locked_attribute ||
+       Typ.Procname.equal pn BuiltinDecl.__delete_locked_attribute then
       Lock.This
     else
       (*FIXME!! we pretend everything is this *)
@@ -132,7 +132,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   let do_call pdesc pn astate site =
       match Summary.read_summary pdesc pn with
       | None ->
-          L.out "Couldn't find summary for %a@." Procname.pp pn ;
+          L.out "Couldn't find summary for %a@." Typ.Procname.pp pn ;
           astate
       | Some { sum_atoms; sum_locks } ->
           let new_atoms =
@@ -164,7 +164,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
             | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
               when PatternMatch.is_subtype tenv classname tname ->
                 let site = CallSite.make procname location in
-                (State.add_read fieldname site astate)
+                State.add_read fieldname site astate
             | _ -> astate
         end
 
@@ -206,7 +206,7 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 
 (* compute the summary of a method *)
 let compute_and_store_post callback =
-  L.out "Analyzing method %a@." Procname.pp callback.Callbacks.proc_name ;
+  L.out "Analyzing method %a@." Typ.Procname.pp callback.Callbacks.proc_name ;
   let compute_post pdesc =
     let initial = State.empty in
     let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in

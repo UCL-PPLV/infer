@@ -22,14 +22,14 @@ let module TypenameHash = Hashtbl.Make {
 
 
 /** Type for type environment. */
-type t = TypenameHash.t StructTyp.t;
+type t = TypenameHash.t Typ.Struct.t;
 
 let pp fmt (tenv: t) =>
   TypenameHash.iter
     (
       fun name typ => {
         Format.fprintf fmt "@[<6>NAME: %s@." (Typename.to_string name);
-        Format.fprintf fmt "@[<6>TYPE: %a@." (StructTyp.pp Pp.text name) typ
+        Format.fprintf fmt "@[<6>TYPE: %a@." (Typ.Struct.pp Pp.text name) typ
       }
     )
     tenv;
@@ -48,15 +48,17 @@ let mk_struct
     methods::methods=?
     supers::supers=?
     annots::annots=?
+    specialization::specialization=?
     name => {
   let struct_typ =
-    StructTyp.internal_mk_struct
+    Typ.Struct.internal_mk_struct
       default::?default
       fields::?fields
       statics::?statics
       methods::?methods
       supers::?supers
       annots::?annots
+      specialization::?specialization
       ();
   TypenameHash.replace tenv name struct_typ;
   struct_typ
@@ -68,7 +70,7 @@ let mem tenv name => TypenameHash.mem tenv name;
 
 
 /** Look up a name in the global type environment. */
-let lookup tenv name :option StructTyp.t =>
+let lookup tenv name :option Typ.Struct.t =>
   try (Some (TypenameHash.find tenv name)) {
   | Not_found =>
     /* ToDo: remove the following additional lookups once C/C++ interop is resolved */
@@ -92,22 +94,24 @@ let add tenv name struct_typ => TypenameHash.replace tenv name struct_typ;
 
 /** Get method that is being overriden by java_pname (if any) **/
 let get_overriden_method tenv pname_java => {
-  let struct_typ_get_method_by_name (struct_typ: StructTyp.t) method_name =>
+  let struct_typ_get_method_by_name (struct_typ: Typ.Struct.t) method_name =>
     List.find_exn
-      f::(fun meth => String.equal method_name (Procname.get_method meth)) struct_typ.methods;
+      f::(fun meth => String.equal method_name (Typ.Procname.get_method meth)) struct_typ.methods;
   let rec get_overriden_method_in_supers pname_java supers =>
     switch supers {
     | [superclass, ...supers_tail] =>
       switch (lookup tenv superclass) {
       | Some struct_typ =>
-        try (Some (struct_typ_get_method_by_name struct_typ (Procname.java_get_method pname_java))) {
+        try (
+          Some (struct_typ_get_method_by_name struct_typ (Typ.Procname.java_get_method pname_java))
+        ) {
         | Not_found => get_overriden_method_in_supers pname_java (supers_tail @ struct_typ.supers)
         }
       | None => get_overriden_method_in_supers pname_java supers_tail
       }
     | [] => None
     };
-  switch (lookup tenv (Procname.java_get_class_type_name pname_java)) {
+  switch (lookup tenv (Typ.Procname.java_get_class_type_name pname_java)) {
   | Some {supers} => get_overriden_method_in_supers pname_java supers
   | _ => None
   }
@@ -139,7 +143,7 @@ let store_to_file (filename: DB.filename) (tenv: t) => {
   if (DB.equal_filename filename DB.global_tenv_fname) {
     global_tenv := Some tenv
   };
-  Serialization.write_to_file tenv_serializer filename tenv;
+  Serialization.write_to_file tenv_serializer filename data::tenv;
   if Config.debug_mode {
     let debug_filename = DB.filename_to_string (DB.filename_add_suffix filename ".debug");
     let out_channel = open_out debug_filename;

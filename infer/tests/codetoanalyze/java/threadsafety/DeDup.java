@@ -15,6 +15,18 @@ import javax.annotation.concurrent.ThreadSafe;
 class DeDup{
 
 Integer field;
+Integer fielda, fieldb;
+
+  /* Only want one rather than two reports */
+  void two_fields(){
+    foo();
+  }
+
+  private void foo() {
+    fielda = 88;
+    fieldb = 99;
+   }
+
 
   /*Only the first write should be reported*/
   void two_writes(){
@@ -46,5 +58,23 @@ Integer field;
   private void writeToField() {
     field = 33;
   }
+
+  Integer colocated_read, colocated_write;
+
+  /*Should  only report colocated write, not read, from readandwrite()*/
+  void colocated_read_write(){
+    read_and_write();
+  }
+
+  /*Should report*/
+  void separate_write_to_colocated_read(){
+    colocated_read= 88;
+  }
+
+  private void read_and_write() {
+    Integer x = colocated_read;
+    colocated_write= 99;
+   }
+
 
 }

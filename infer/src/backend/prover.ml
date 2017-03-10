@@ -395,7 +395,7 @@ end = struct
       | Sil.Estruct (fsel, _), t ->
           let get_field_type f =
             Option.bind t (fun t' ->
-                Option.map ~f:fst @@ StructTyp.get_field_type_and_annotation ~lookup f t'
+                Option.map ~f:fst @@ Typ.Struct.get_field_type_and_annotation ~lookup f t'
               ) in
           List.iter ~f:(fun (f, se) -> strexp_extract (se, get_field_type f)) fsel
       | Sil.Earray (len, isel, _), t ->
@@ -1333,8 +1333,8 @@ let rec sexp_imply tenv source calc_index_frame calc_missing subs se1 se2 typ2 :
       let se2' = Sil.Earray (len, [(Exp.zero, se2)], inst) in
       let typ2' = Typ.Tarray (typ2, None) in
       (* In the sexp_imply, struct_imply, array_imply, and sexp_imply_nolhs functions, the typ2
-         argument is only used by eventually passing its value to StructTyp.fld, Exp.Lfield,
-         StructTyp.fld, or Typ.array_elem.  None of these are sensitive to the length field
+         argument is only used by eventually passing its value to Typ.Struct.fld, Exp.Lfield,
+         Typ.Struct.fld, or Typ.array_elem.  None of these are sensitive to the length field
          of Tarray, so forgetting the length of typ2' here is not a problem. *)
       sexp_imply tenv source true calc_missing subs se1 se2' typ2' (* calculate index_frame because the rhs is a singleton array *)
   | _ ->
@@ -1349,7 +1349,7 @@ and struct_imply tenv source calc_missing subs fsel1 fsel2 typ2 : subst2 * ((Ide
       begin
         match Ident.compare_fieldname f1 f2 with
         | 0 ->
-            let typ' = StructTyp.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
+            let typ' = Typ.Struct.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
             let subs', se_frame, se_missing =
               sexp_imply tenv (Exp.Lfield (source, f2, typ2)) false calc_missing subs se1 se2 typ' in
             let subs'', fld_frame, fld_missing = struct_imply tenv source calc_missing subs' fsel1' fsel2' typ2 in
@@ -1364,7 +1364,7 @@ and struct_imply tenv source calc_missing subs fsel1 fsel2 typ2 : subst2 * ((Ide
             let subs', fld_frame, fld_missing = struct_imply tenv source calc_missing subs fsel1' fsel2 typ2 in
             subs', ((f1, se1) :: fld_frame), fld_missing
         | _ ->
-            let typ' = StructTyp.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
+            let typ' = Typ.Struct.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
             let subs' =
               sexp_imply_nolhs tenv (Exp.Lfield (source, f2, typ2)) calc_missing subs se2 typ' in
             let subs', fld_frame, fld_missing = struct_imply tenv source calc_missing subs' fsel1 fsel2' typ2 in
@@ -1372,7 +1372,7 @@ and struct_imply tenv source calc_missing subs fsel1 fsel2 typ2 : subst2 * ((Ide
             subs', fld_frame, fld_missing'
       end
   | [], (f2, se2) :: fsel2' ->
-      let typ' = StructTyp.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
+      let typ' = Typ.Struct.fld_typ ~lookup ~default:Typ.Tvoid f2 typ2 in
       let subs' = sexp_imply_nolhs tenv (Exp.Lfield (source, f2, typ2)) calc_missing subs se2 typ' in
       let subs'', fld_frame, fld_missing = struct_imply tenv source calc_missing subs' [] fsel2' typ2 in
       subs'', fld_frame, (f2, se2):: fld_missing
@@ -1506,8 +1506,7 @@ let expand_hpred_pointer =
                 | Sizeof (cnt_typ, len, st) ->
                     (* type of struct at adr_base is unknown (typically Tvoid), but
                        type of contents is known, so construct struct type for single fld:cnt_typ *)
-                    let mangled = Mangled.from_string ("counterfeit" ^ string_of_int !count) in
-                    let name = Typename.TN_csu (Struct, mangled) in
+                    let name = Typename.C.from_string ("counterfeit" ^ string_of_int !count) in
                     incr count ;
                     let fields = [(fld, cnt_typ, Annot.Item.empty)] in
                     ignore (Tenv.mk_struct tenv ~fields name) ;
@@ -1639,7 +1638,7 @@ let get_overrides_of tenv supertype pname =
     | Tstruct name -> (
         match Tenv.lookup tenv name with
         | Some { methods } ->
-            List.exists ~f:(fun m -> Procname.equal pname m) methods
+            List.exists ~f:(fun m -> Typ.Procname.equal pname m) methods
         | None ->
             false
       )
@@ -1650,7 +1649,7 @@ let get_overrides_of tenv supertype pname =
     if not (Typ.equal typ supertype) && Subtyping_check.check_subtype tenv typ supertype then
       (* only select the ones that implement [pname] as overrides *)
       let resolved_pname =
-        Procname.replace_class pname (Typename.name tname) in
+        Typ.Procname.replace_class pname tname in
       if typ_has_method resolved_pname typ then (typ, resolved_pname) :: overrides_acc
       else overrides_acc
     else overrides_acc in

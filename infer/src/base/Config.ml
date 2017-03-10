@@ -75,6 +75,25 @@ let ml_bucket_symbols = [
   ("unknown_origin", `MLeak_unknown);
 ]
 
+let issues_fields_symbols = [
+  ("bug_class", `Issue_field_bug_class);
+  ("kind", `Issue_field_kind);
+  ("bug_type", `Issue_field_bug_type);
+  ("qualifier", `Issue_field_qualifier);
+  ("severity", `Issue_field_severity);
+  ("visibility", `Issue_field_visibility);
+  ("line", `Issue_field_line);
+  ("column", `Issue_field_column);
+  ("procedure", `Issue_field_procedure);
+  ("procedure_id", `Issue_field_procedure_id);
+  ("procedure_start_line", `Issue_field_procedure_start_line);
+  ("file", `Issue_field_file);
+  ("bug_trace", `Issue_field_bug_trace);
+  ("key", `Issue_field_key);
+  ("hash", `Issue_field_hash);
+  ("line_offset", `Issue_field_line_offset);
+  ("procedure_id_without_crc", `Issue_field_procedure_id_without_crc);
+]
 
 type os_type = Unix | Win32 | Cygwin
 
@@ -413,6 +432,10 @@ let inferconfig_path =
    different examples. *)
 
 let anon_args = CLOpt.mk_anon ()
+
+and () =
+  CLOpt.mk_switch_parse_action CLOpt.Differential ~usage:"infer --diff [options]"
+    ~long:"diff" "[experimental] compute differential report"
 
 and abs_struct =
   CLOpt.mk_int ~deprecated:["absstruct"] ~long:"abs-struct" ~default:1
@@ -798,6 +821,11 @@ and (
     write_html,
     write_dotty
   )
+
+and default_linters =
+  CLOpt.mk_bool ~long:"default-linters" ~parse_mode:CLOpt.(Infer [Clang]) ~default:true
+    "Use the default linters for the analysis."
+
 and dependencies =
   CLOpt.mk_bool ~deprecated:["dependencies"] ~long:"dependencies"
     ~parse_mode:CLOpt.(Infer [Java])
@@ -880,6 +908,11 @@ and fcp_syntax_only =
   CLOpt.mk_bool ~long:"fcp-syntax-only"
     "Skip creation of object files"
 
+and file_renamings =
+  CLOpt.mk_path_opt
+    ~long:"file-renamings" ~parse_mode:CLOpt.Differential
+    "JSON with a list of file renamings to use while computing differential reports"
+
 and filter_paths =
   CLOpt.mk_bool ~long:"filter-paths" ~default:true
     "Filters specified in .inferconfig"
@@ -934,6 +967,19 @@ and iphoneos_target_sdk_version =
   CLOpt.mk_string_opt ~long:"iphoneos-target-sdk-version" ~parse_mode:CLOpt.(Infer [Clang])
     "Specify the target SDK version to use for iphoneos"
 
+and issues_fields =
+  CLOpt.mk_symbol_seq ~long:"issues-fields"
+    ~parse_mode:CLOpt.(Infer [Print])
+    ~default:[
+      `Issue_field_file;
+      `Issue_field_procedure;
+      `Issue_field_line_offset;
+      `Issue_field_bug_type;
+      `Issue_field_bug_trace;
+    ]
+    ~symbols:issues_fields_symbols ~eq:PVariant.(=)
+    "Fields to emit with --issues-tests"
+
 and iterations =
   CLOpt.mk_int ~deprecated:["iterations"] ~long:"iterations" ~default:1
     ~meta:"int"
@@ -962,9 +1008,14 @@ and latex =
     "Write a latex report of the analysis results to a file"
 
 and linters_def_file =
-  CLOpt.mk_path_list ~default:[linters_def_default_file]
+  CLOpt.mk_path_list ~default:[]
     ~long:"linters-def-file" ~parse_mode:CLOpt.(Infer [Clang])
     ~meta:"file" "Specify the file containing linters definition (e.g. 'linters.al')"
+
+and linters_developer_mode =
+  CLOpt.mk_bool ~long:"linters-developer-mode" ~parse_mode:CLOpt.(Infer [Clang])
+    "Debug mode for developing new linters. Sets the linters analyzer, disables other \
+     default linters and also sets --print-logs, --debug and --no-allowed-failures."
 
 and load_average =
   CLOpt.mk_float_opt ~long:"load-average" ~short:"l"
@@ -1067,11 +1118,6 @@ and print_builtins =
   CLOpt.mk_bool ~deprecated:["print_builtins"] ~long:"print-builtins"
     "Print the builtin functions and exit"
 
-and print_traces_in_tests =
-  CLOpt.mk_bool ~long:"print-traces-in-tests" ~default:true
-    ~parse_mode:CLOpt.(Infer [Print])
-    "Include symbolic traces summaries in the output of --issues-tests"
-
 and print_using_diff =
   CLOpt.mk_bool ~deprecated_no:["noprintdiff"] ~long:"print-using-diff" ~default:true
     "Highlight the difference w.r.t. the previous prop when printing symbolic execution debug info"
@@ -1118,6 +1164,10 @@ and report =
   CLOpt.mk_path_opt ~deprecated:["report"] ~long:"report"
     ~meta:"file" "Write a report of the analysis results to a file"
 
+and report_current =
+  CLOpt.mk_path_opt ~long:"report-current" ~parse_mode:CLOpt.Differential
+    "report of the latest revision"
+
 and report_custom_error =
   CLOpt.mk_bool ~long:"report-custom-error"
     ""
@@ -1129,6 +1179,15 @@ and report_hook =
     "Specify a script to be executed after the analysis results are written.  This script will be \
      passed --issues-csv, --issues-json, --issues-txt, --issues-xml, --project-root, and \
      --results-dir."
+
+and report_previous =
+  CLOpt.mk_path_opt ~long:"report-previous"  ~parse_mode:CLOpt.Differential
+    "report of the base revision to use for comparison"
+
+and resolve_infer_eradicate_conflict =
+  CLOpt.mk_bool ~long:"resolve-infer-eradicate-conflict"
+    ~default:false ~parse_mode:CLOpt.Differential
+    "Filter out Null Dereferences reported by Infer if Eradicate is enabled"
 
 and rest =
   CLOpt.mk_rest_actions
@@ -1167,6 +1226,10 @@ and skip_analysis_in_path =
     ~parse_mode:CLOpt.(Infer [Driver])
     ~meta:"path prefix OCaml regex"
     "Ignore files whose path matches the given prefix (can be specified multiple times)"
+
+and skip_duplicated_types =
+  CLOpt.mk_bool ~long:"skip-duplicated-types" ~default:true ~parse_mode:CLOpt.Differential
+    "Skip fixed-then-introduced duplicated types while computing differential reports"
 
 and skip_translation_headers =
   CLOpt.mk_string_list ~deprecated:["skip_translation_headers"] ~long:"skip-translation-headers"
@@ -1248,6 +1311,11 @@ and test_filtering =
 and testing_mode =
   CLOpt.mk_bool ~deprecated:["testing_mode"; "-testing_mode"] ~long:"testing-mode" ~short:"tm"
     "Mode for testing, where no headers are translated, and dot files are created (clang only)"
+
+and threadsafe_aliases =
+  CLOpt.mk_json ~long:"threadsafe-aliases"
+    ~parse_mode:CLOpt.(Infer [Checkers])
+    "Specify custom annotations that should be considered aliases of @ThreadSafe"
 
 and trace_join =
   CLOpt.mk_bool ~deprecated:["trace_join"] ~long:"trace-join"
@@ -1429,6 +1497,17 @@ let post_parsing_initialization () =
     List.rev_map ~f:(fun x -> `Raw x) !compilation_database
     |> List.rev_map_append ~f:(fun x -> `Escaped x) !compilation_database_escaped;
 
+  (* set linters developer flags *)
+  if !linters_developer_mode then (
+    debug := true;
+    failures_allowed := false;
+    print_logs := true;
+    analyzer := Some Linters;
+    default_linters := false
+  );
+  if !default_linters then
+    linters_def_file := linters_def_default_file :: !linters_def_file;
+
   match !analyzer with
   | Some Checkers -> checkers := true
   | Some Crashcontext -> checkers := true; crashcontext := true
@@ -1524,8 +1603,10 @@ and fail_on_bug = !fail_on_bug
 and failures_allowed = !failures_allowed
 and fcp_apple_clang = !fcp_apple_clang
 and fcp_syntax_only = !fcp_syntax_only
+and file_renamings = !file_renamings
 and filter_paths = !filter_paths
 and filtering = !filtering
+and final_parse_action = parse_action
 and flavors = !flavors
 and from_json_report = !from_json_report
 and frontend_debug = !frontend_debug
@@ -1534,6 +1615,7 @@ and headers = !headers
 and icfg_dotty_outfile = !icfg_dotty_outfile
 and infer_cache = !infer_cache
 and iphoneos_target_sdk_version = !iphoneos_target_sdk_version
+and issues_fields = !issues_fields
 and iterations = !iterations
 and java_jar_compiler = !java_jar_compiler
 and javac_classes_out = !javac_classes_out
@@ -1566,7 +1648,6 @@ and pmd_xml = !pmd_xml
 and precondition_stats = !precondition_stats
 and print_logs = !print_logs
 and print_builtins = !print_builtins
-and print_traces_in_tests = !print_traces_in_tests
 and print_types = !print_types
 and print_using_diff = !print_using_diff
 and procs_csv = !procs_csv
@@ -1578,10 +1659,13 @@ and quiet = !quiet
 and reactive_mode = !reactive
 and reactive_capture = !reactive_capture
 and report = !report
+and report_current = !report_current
 and report_custom_error = !report_custom_error
 and report_hook = !report_hook
+and report_previous = !report_previous
 and report_runtime_exceptions = !tracing
 and reports_include_ml_loc = !reports_include_ml_loc
+and resolve_infer_eradicate_conflict = !resolve_infer_eradicate_conflict
 and results_dir = !results_dir
 and save_analysis_results = !save_results
 and seconds_per_iteration = !seconds_per_iteration
@@ -1589,6 +1673,7 @@ and show_buckets = !print_buckets
 and show_progress_bar = !progress_bar
 and siof_safe_methods = !siof_safe_methods
 and skip_analysis_in_path = !skip_analysis_in_path
+and skip_duplicated_types = !skip_duplicated_types
 and skip_translation_headers = !skip_translation_headers
 and sources = !sources
 and sourcepath = !sourcepath
@@ -1603,6 +1688,7 @@ and test = !test
 and test_filtering = !test_filtering
 and testing_mode = !testing_mode
 and threadsafety = !threadsafety
+and threadsafe_aliases = !threadsafe_aliases
 and permsafety = !permsafety
 and trace_error = !trace_error
 and trace_ondemand = !trace_ondemand

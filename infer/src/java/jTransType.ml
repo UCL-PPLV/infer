@@ -188,15 +188,15 @@ let method_signature_names ms =
 
 let get_method_kind m =
   if Javalib.is_static_method m
-  then Procname.Static
-  else Procname.Non_Static
+  then Typ.Procname.Static
+  else Typ.Procname.Non_Static
 
 let get_method_procname cn ms method_kind =
   let return_type_name, method_name, args_type_name = method_signature_names ms in
-  let class_name = cn_to_java_type cn in
+  let class_name = Typename.Java.from_string (JBasics.cn_name cn) in
   let proc_name_java =
-    Procname.java class_name return_type_name method_name args_type_name method_kind in
-  Procname.Java proc_name_java
+    Typ.Procname.java class_name return_type_name method_name args_type_name method_kind in
+  Typ.Procname.Java proc_name_java
 
 (* create a mangled procname from an abstract or concrete method *)
 let translate_method_name m =
@@ -282,7 +282,7 @@ let add_model_fields program classpath_fields cn =
 
 let rec get_all_fields program tenv cn =
   let extract_class_fields classname =
-    let { StructTyp.fields; statics } = get_class_struct_typ program tenv classname in
+    let { Typ.Struct.fields; statics } = get_class_struct_typ program tenv classname in
     (statics, fields) in
   let trans_fields classname =
     match JClasspath.lookup_node classname program with

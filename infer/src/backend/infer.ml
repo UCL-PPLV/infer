@@ -8,6 +8,7 @@
  *)
 
 open! IStd
+open! PVariant
 
 (** Top-level driver that orchestrates build system integration, frontends, backend, and
     reporting *)
@@ -160,14 +161,15 @@ let register_perf_stats_report () =
   Unix.mkdir_p stats_dir;
   PerfStats.register_report_at_exit stats_file
 
-
-let touch_start_file () =
+(* Create the .start file, and update the timestamp unless in continue mode *)
+let touch_start_file_unless_continue () =
   let start = Config.results_dir ^/ Config.start_filename in
-  let flags =
-    Unix.O_CREAT :: Unix.O_WRONLY :: (if Config.continue_capture then [Unix.O_EXCL] else []) in
-  (* create new file, or open existing file for writing to update modified timestamp *)
-  try Unix.close (Unix.openfile ~perm:0o0666 ~mode:flags start)
-  with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+  let delete () =
+    Unix.unlink start in
+  let create () =
+    Unix.close (Unix.openfile ~perm:0o0666 ~mode:[Unix.O_CREAT; Unix.O_WRONLY] start) in
+  if not (Sys.file_exists start = `Yes) then create ()
+  else if not Config.continue_capture then (delete (); create ())
 
 
 let run_command ~prog ~args cleanup =
@@ -432,7 +434,7 @@ let get_driver_mode () =
   | None ->
       driver_mode_of_build_cmd (List.rev Config.rest)
 
-let () =
+let infer_mode () =
   let driver_mode = get_driver_mode () in
   if not (equal_driver_mode driver_mode Analyze ||
           Config.(buck || continue_capture || maven || reactive_mode)) then
@@ -451,7 +453,7 @@ let () =
   if not Config.buck_cache_mode then register_perf_stats_report () ;
   if Config.buck_cache_mode && Config.reactive_mode then
     failwith "The reactive analysis mode is not compatible with the Buck integration for Java";
-  if not Config.buck_cache_mode then touch_start_file () ;
+  if not Config.buck_cache_mode then touch_start_file_unless_continue () ;
   capture driver_mode ;
   analyze driver_mode ;
   if CLOpt.is_originator then (
@@ -464,3 +466,28 @@ let () =
   );
   if Config.buck_cache_mode then
     clean_results_dir ()
+
+let differential_mode () =
+  let arg_or_fail arg_name arg_opt =
+    match arg_opt with
+    | Some arg -> arg
+    | None -> failwithf "Expected '%s' argument not found" arg_name in
+  let load_report filename : Jsonbug_t.report =
+    Jsonbug_j.report_of_string (In_channel.read_all filename) in
+  let current_report = load_report (arg_or_fail "report-current" Config.report_current) in
+  let previous_report = load_report (arg_or_fail "report-previous" Config.report_previous) in
+  let file_renamings = match Config.file_renamings with
+    | Some f -> DifferentialFilters.FileRenamings.from_json_file f
+    | None -> DifferentialFilters.FileRenamings.empty in
+  let diff = DifferentialFilters.do_filter
+      (Differential.of_reports ~current_report ~previous_report)
+      file_renamings
+      ~skip_duplicated_types:Config.skip_duplicated_types in
+  let out_path = Config.results_dir ^/ "differential" in
+  Unix.mkdir_p out_path;
+  Differential.to_files diff out_path
+
+let () =
+  match Config.final_parse_action with
+  | Differential -> differential_mode ()
+  | _ -> infer_mode ()

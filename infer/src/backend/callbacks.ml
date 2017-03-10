@@ -14,11 +14,11 @@ module L = Logging
 (** Module to register and invoke callbacks *)
 
 type proc_callback_args = {
-  get_proc_desc : Procname.t -> Procdesc.t option;
-  get_procs_in_file : Procname.t -> Procname.t list;
+  get_proc_desc : Typ.Procname.t -> Procdesc.t option;
+  get_procs_in_file : Typ.Procname.t -> Typ.Procname.t list;
   idenv : Idenv.t;
   tenv : Tenv.t;
-  proc_name : Procname.t;
+  proc_name : Typ.Procname.t;
   proc_desc : Procdesc.t;
 }
 
@@ -26,9 +26,9 @@ type proc_callback_t = proc_callback_args -> unit
 
 type cluster_callback_t =
   Exe_env.t ->
-  Procname.t list ->
-  (Procname.t -> Procdesc.t option) ->
-  (Idenv.t * Tenv.t * Procname.t * Procdesc.t) list ->
+  Typ.Procname.t list ->
+  (Typ.Procname.t -> Procdesc.t option) ->
+  (Idenv.t * Tenv.t * Typ.Procname.t * Procdesc.t) list ->
   unit
 
 let procedure_callbacks = ref []
@@ -44,7 +44,6 @@ let unregister_all_callbacks () =
   procedure_callbacks := [];
   cluster_callbacks := []
 
-
 (** Collect what we need to know about a procedure for the analysis. *)
 let get_procedure_definition exe_env proc_name =
   let tenv = Exe_env.get_tenv exe_env proc_name in
@@ -55,7 +54,18 @@ let get_procedure_definition exe_env proc_name =
         (idenv, tenv, proc_name, proc_desc, language))
     (Exe_env.get_proc_desc exe_env proc_name)
 
-let get_language proc_name = if Procname.is_java proc_name then Config.Java else Config.Clang
+let get_language proc_name = if Typ.Procname.is_java proc_name then Config.Java else Config.Clang
+
+
+let reset_summary proc_name =
+  let should_reset =
+    is_none (Specs.get_summary proc_name) in
+  if should_reset
+  then
+    let attributes_opt =
+      Specs.proc_resolve_attributes proc_name in
+    Specs.reset_summary proc_name attributes_opt None
+
 
 (** Invoke all registered procedure callbacks on the given procedure. *)
 let iterate_procedure_callbacks exe_env caller_pname =
@@ -132,19 +142,29 @@ let iterate_cluster_callbacks all_procs exe_env proc_names =
           cluster_callback exe_env all_procs get_procdesc environment)
     !cluster_callbacks
 
+
 (** Invoke all procedure and cluster callbacks on a given environment. *)
 let iterate_callbacks call_graph exe_env =
+  let saved_language = !Config.curr_language in
   let procs_to_analyze =
     (* analyze all the currently defined procedures *)
     Cg.get_defined_nodes call_graph in
+
+  (* Make sure summaries exists. *)
+  List.iter ~f:reset_summary procs_to_analyze;
+
+  (* Invoke procedure callbacks. *)
+  List.iter
+    ~f:(iterate_procedure_callbacks exe_env)
+    procs_to_analyze;
+
   let originally_defined_procs =
     Cg.get_defined_nodes call_graph in
-  let saved_language = !Config.curr_language in
 
   let cluster_id proc_name =
     match proc_name with
-    | Procname.Java pname_java ->
-        Procname.java_get_class_name pname_java
+    | Typ.Procname.Java pname_java ->
+        Typ.Procname.java_get_class_name pname_java
     | _ ->
         "unknown" in
   let cluster proc_names =
@@ -158,22 +178,8 @@ let iterate_callbacks call_graph exe_env =
         proc_names in
     (* Return all values of the map *)
     String.Map.data cluster_map in
-  let reset_summary proc_name =
-    let attributes_opt =
-      Specs.proc_resolve_attributes proc_name in
-    let should_reset =
-      is_none (Specs.get_summary proc_name) in
-    if should_reset
-    then Specs.reset_summary call_graph proc_name attributes_opt None in
 
-  (* Make sure summaries exists. *)
-  List.iter ~f:reset_summary procs_to_analyze;
-
-  (* Invoke callbacks. *)
-  List.iter
-    ~f:(iterate_procedure_callbacks exe_env)
-    procs_to_analyze;
-
+  (* Invoke cluster callbacks. *)
   List.iter
     ~f:(iterate_cluster_callbacks originally_defined_procs exe_env)
     (cluster procs_to_analyze);
@@ -181,9 +187,7 @@ let iterate_callbacks call_graph exe_env =
   (* Store all the summaries to disk *)
   List.iter
     ~f:(fun pname ->
-        let updated_summary_opt =
-          Option.map (Specs.get_summary pname) ~f:Specs.increment_timestamp in
-        Option.iter ~f:(Specs.store_summary pname) updated_summary_opt)
+        Specs.store_summary (Specs.get_summary_unsafe "Checkers: store summaries" pname))
     procs_to_analyze;
 
   Config.curr_language := saved_language

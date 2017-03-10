@@ -35,11 +35,8 @@ let load_specfiles () => {
     let all_filepaths = List.map f::(fun fname => Filename.concat dir fname) all_filenames;
     List.filter f::is_specs_file all_filepaths
   };
-  let specs_dirs = {
-    let result_specs_dir = DB.filename_to_string DB.Results_dir.specs_dir;
-    [result_specs_dir, ...Config.specs_library]
-  };
-  List.concat_map f::specs_files_in_dir specs_dirs
+  let result_specs_dir = DB.filename_to_string DB.Results_dir.specs_dir;
+  specs_files_in_dir result_specs_dir
 };
 
 
@@ -137,9 +134,6 @@ type summary_val = {
   vsignature: string,
   vweight: int,
   vproof_coverage: string,
-  vrank: string,
-  vin_calls: int,
-  vout_calls: int,
   vproof_trace: string
 };
 
@@ -174,20 +168,10 @@ let summary_values summary => {
     } else {
       float_of_int nr_nodes_visited /. float_of_int nodes_nr
     };
-  let logscale x => log10 (float_of_int (x + 1));
-  let (in_calls, out_calls) = {
-    let calls = stats.Specs.stats_calls;
-    (calls.Cg.in_calls, calls.Cg.out_calls)
-  };
-  let call_rank = {
-    let c1 = 1
-    and c2 = 1;
-    logscale (c1 * in_calls + c2 * out_calls)
-  };
   let pp_failure failure => F.asprintf "%a" SymOp.pp_failure_kind failure;
   {
-    vname: Procname.to_string proc_name,
-    vname_id: Procname.to_filename proc_name,
+    vname: Typ.Procname.to_string proc_name,
+    vname_id: Typ.Procname.to_filename proc_name,
     vspecs: List.length specs,
     vtime: Printf.sprintf "%.0f" stats.Specs.stats_time,
     vto: Option.value_map f::pp_failure default::"NONE" stats.Specs.stats_failure,
@@ -205,9 +189,6 @@ let summary_values summary => {
     vsignature: signature,
     vweight: nodes_nr,
     vproof_coverage: Printf.sprintf "%2.2f" node_coverage,
-    vrank: Printf.sprintf "%2.2f" call_rank,
-    vin_calls: in_calls,
-    vout_calls: out_calls,
     vproof_trace: proof_trace
   }
 };
@@ -254,9 +235,6 @@ let module ProcsCsv = {
     pp "\"%s\"," (Escape.escape_csv sv.vsignature);
     pp "%d," sv.vweight;
     pp "%s," sv.vproof_coverage;
-    pp "%s," sv.vrank;
-    pp "%d," sv.vin_calls;
-    pp "%d," sv.vout_calls;
     pp "%s@\n" sv.vproof_trace
   };
 };
@@ -284,9 +262,6 @@ let module ProcsXml = {
         subtree Io_infer.Xml.tag_signature (Escape.escape_xml sv.vsignature),
         subtree Io_infer.Xml.tag_weight (string_of_int sv.vweight),
         subtree Io_infer.Xml.tag_proof_coverage sv.vproof_coverage,
-        subtree Io_infer.Xml.tag_rank sv.vrank,
-        subtree Io_infer.Xml.tag_in_calls (string_of_int sv.vin_calls),
-        subtree Io_infer.Xml.tag_out_calls (string_of_int sv.vin_calls),
         subtree Io_infer.Xml.tag_proof_trace sv.vproof_trace,
         subtree Io_infer.Xml.tag_flags (string_of_int (Hashtbl.length sv.vflags))
       ];
@@ -427,7 +402,7 @@ let module IssuesCsv = {
         };
         let kind = Exceptions.err_kind_string ekind;
         let type_str = Localise.to_string error_name;
-        let procedure_id = Procname.to_filename procname;
+        let procedure_id = Typ.Procname.to_filename procname;
         let filename = SourceFile.to_string source_file;
         let always_report =
           switch (Localise.error_desc_extract_tag_value error_desc "always_report") {
@@ -442,7 +417,7 @@ let module IssuesCsv = {
         pp "\"%s\"," err_desc_string;
         pp "%s," severity;
         pp "%d," loc.Location.line;
-        pp "\"%s\"," (Escape.escape_csv (Procname.to_string procname));
+        pp "\"%s\"," (Escape.escape_csv (Typ.Procname.to_string procname));
         pp "\"%s\"," (Escape.escape_csv procedure_id);
         pp "%s," filename;
         pp "\"%s\"," (Escape.escape_csv trace);
@@ -493,7 +468,7 @@ let module IssuesJson = {
       ) {
         let kind = Exceptions.err_kind_string ekind;
         let bug_type = Localise.to_string error_name;
-        let procedure_id = Procname.to_filename procname;
+        let procedure_id = Typ.Procname.to_filename procname;
         let file = SourceFile.to_string source_file;
         let json_ml_loc =
           switch ml_loc_opt {
@@ -511,7 +486,7 @@ let module IssuesJson = {
           visibility,
           line: loc.Location.line,
           column: loc.Location.col,
-          procedure: Procname.to_string procname,
+          procedure: Typ.Procname.to_string procname,
           procedure_id,
           procedure_start_line,
           file,
@@ -534,26 +509,50 @@ let module IssuesJson = {
   };
 };
 
-let pp_tests_of_report fmt report => {
-  open Jsonbug_t;
-  let pp_trace_elem fmt {description} => F.fprintf fmt "%s" description;
-  let pp_trace fmt trace =>
-    if Config.print_traces_in_tests {
+let pp_custom_of_report fmt report fields => {
+  let pp_custom_of_issue fmt issue => {
+    open Jsonbug_t;
+    let comma_separator index =>
+      if (index > 0) {
+        ", "
+      } else {
+        ""
+      };
+    let pp_trace fmt trace comma => {
+      let pp_trace_elem fmt {description} => F.fprintf fmt "%s" description;
       let trace_without_empty_descs =
         List.filter f::(fun {description} => description != "") trace;
-      F.fprintf fmt ", [%a]" (Pp.comma_seq pp_trace_elem) trace_without_empty_descs
+      F.fprintf fmt "%s[%a]" comma (Pp.comma_seq pp_trace_elem) trace_without_empty_descs
     };
-  let pp_row jsonbug =>
-    F.fprintf
-      fmt
-      "%s, %s, %d, %s%a@."
-      jsonbug.file
-      jsonbug.procedure
-      (jsonbug.line - jsonbug.procedure_start_line)
-      jsonbug.bug_type
-      pp_trace
-      jsonbug.bug_trace;
-  List.iter f::pp_row report
+    let pp_field index field =>
+      switch field {
+      | `Issue_field_bug_class => Format.fprintf fmt "%s%s" (comma_separator index) issue.bug_class
+      | `Issue_field_kind => Format.fprintf fmt "%s%s" (comma_separator index) issue.kind
+      | `Issue_field_bug_type => Format.fprintf fmt "%s%s" (comma_separator index) issue.bug_type
+      | `Issue_field_qualifier => Format.fprintf fmt "%s%s" (comma_separator index) issue.qualifier
+      | `Issue_field_severity => Format.fprintf fmt "%s%s" (comma_separator index) issue.severity
+      | `Issue_field_visibility =>
+        Format.fprintf fmt "%s%s" (comma_separator index) issue.visibility
+      | `Issue_field_line => Format.fprintf fmt "%s%d" (comma_separator index) issue.line
+      | `Issue_field_column => Format.fprintf fmt "%s%d" (comma_separator index) issue.column
+      | `Issue_field_procedure => Format.fprintf fmt "%s%s" (comma_separator index) issue.procedure
+      | `Issue_field_procedure_id =>
+        Format.fprintf fmt "%s%s" (comma_separator index) issue.procedure_id
+      | `Issue_field_procedure_start_line =>
+        Format.fprintf fmt "%s%d" (comma_separator index) issue.procedure_start_line
+      | `Issue_field_file => Format.fprintf fmt "%s%s" (comma_separator index) issue.file
+      | `Issue_field_bug_trace => pp_trace fmt issue.bug_trace (comma_separator index)
+      | `Issue_field_key => Format.fprintf fmt "%s%d" (comma_separator index) issue.key
+      | `Issue_field_hash => Format.fprintf fmt "%s%d" (comma_separator index) issue.hash
+      | `Issue_field_line_offset =>
+        Format.fprintf fmt "%s%d" (comma_separator index) (issue.line - issue.procedure_start_line)
+      | `Issue_field_procedure_id_without_crc =>
+        Format.fprintf fmt "%s%s" (comma_separator index) (SourceFile.strip_crc issue.procedure_id)
+      };
+    List.iteri f::pp_field fields;
+    Format.fprintf fmt "@."
+  };
+  List.iter f::(pp_custom_of_issue fmt) report
 };
 
 let tests_jsonbug_compare bug1 bug2 =>
@@ -653,8 +652,8 @@ let module IssuesXml = {
           let attributes = [("id", string_of_int !xml_issues_id)];
           let error_class = Exceptions.err_class_string eclass;
           let error_line = string_of_int loc.Location.line;
-          let procedure_name = Procname.to_string proc_name;
-          let procedure_id = Procname.to_filename proc_name;
+          let procedure_name = Typ.Procname.to_string proc_name;
+          let procedure_id = Typ.Procname.to_filename proc_name;
           let filename = SourceFile.to_string source_file;
           let bug_hash = get_bug_hash kind type_str procedure_id filename node_key error_desc;
           let forest = [
@@ -696,10 +695,10 @@ let module CallsCsv = {
     let stats = summary.Specs.stats;
     let caller_name = Specs.get_proc_name summary;
     let do_call (callee_name, loc) trace => {
-      pp "\"%s\"," (Escape.escape_csv (Procname.to_string caller_name));
-      pp "\"%s\"," (Escape.escape_csv (Procname.to_filename caller_name));
-      pp "\"%s\"," (Escape.escape_csv (Procname.to_string callee_name));
-      pp "\"%s\"," (Escape.escape_csv (Procname.to_filename callee_name));
+      pp "\"%s\"," (Escape.escape_csv (Typ.Procname.to_string caller_name));
+      pp "\"%s\"," (Escape.escape_csv (Typ.Procname.to_filename caller_name));
+      pp "\"%s\"," (Escape.escape_csv (Typ.Procname.to_string callee_name));
+      pp "\"%s\"," (Escape.escape_csv (Typ.Procname.to_filename callee_name));
       pp "%s," (SourceFile.to_string summary.Specs.attributes.ProcAttributes.loc.Location.file);
       pp "%d," loc.Location.line;
       pp "%a@\n" Specs.CallStats.pp_trace trace
@@ -866,7 +865,7 @@ let module Summary = {
     } else {
       L.stdout
         "Procedure: %a@\n%a@."
-        Procname.pp
+        Typ.Procname.pp
         proc_name
         (Specs.pp_summary_text whole_seconds::Config.whole_seconds)
         summary
@@ -877,7 +876,7 @@ let module Summary = {
   let write_summary_latex fmt summary => {
     let proc_name = Specs.get_proc_name summary;
     Latex.pp_section
-      fmt ("Analysis of function " ^ Latex.convert_string (Procname.to_string proc_name));
+      fmt ("Analysis of function " ^ Latex.convert_string (Typ.Procname.to_string proc_name));
     F.fprintf
       fmt "@[<v>%a@]" (Specs.pp_summary_latex Black whole_seconds::Config.whole_seconds) summary
   };
@@ -944,16 +943,16 @@ let module PreconditionStats = {
     switch (Prop.CategorizePreconditions.categorize preconditions) {
     | Prop.CategorizePreconditions.Empty =>
       incr nr_empty;
-      L.stdout "Procedure: %a footprint:Empty@." Procname.pp proc_name
+      L.stdout "Procedure: %a footprint:Empty@." Typ.Procname.pp proc_name
     | Prop.CategorizePreconditions.OnlyAllocation =>
       incr nr_onlyallocation;
-      L.stdout "Procedure: %a footprint:OnlyAllocation@." Procname.pp proc_name
+      L.stdout "Procedure: %a footprint:OnlyAllocation@." Typ.Procname.pp proc_name
     | Prop.CategorizePreconditions.NoPres =>
       incr nr_nopres;
-      L.stdout "Procedure: %a footprint:NoPres@." Procname.pp proc_name
+      L.stdout "Procedure: %a footprint:NoPres@." Typ.Procname.pp proc_name
     | Prop.CategorizePreconditions.DataConstraints =>
       incr nr_dataconstraints;
-      L.stdout "Procedure: %a footprint:DataConstraints@." Procname.pp proc_name
+      L.stdout "Procedure: %a footprint:DataConstraints@." Typ.Procname.pp proc_name
     }
   };
   let pp_stats () => {
@@ -1114,7 +1113,7 @@ let pp_json_report_by_report_kind formats_by_report_kind fname =>
     let pp_json_issues format_list report => {
       let pp_json_issue (format_kind, outf: Utils.outfile) =>
         switch format_kind {
-        | Tests => pp_tests_of_report outf.fmt report
+        | Tests => pp_custom_of_report outf.fmt report Config.issues_fields
         | Text => pp_text_of_report outf.fmt report
         | Json => failwith "Printing issues from json does not support json output"
         | Csv => failwith "Printing issues from json does not support csv output"
@@ -1256,7 +1255,7 @@ let module AnalysisResults = {
 
   /** Save analysis_results into a file */
   let store_analysis_results_to_file (filename: DB.filename) (analysis_results: t) =>
-    Serialization.write_to_file analysis_results_serializer filename analysis_results;
+    Serialization.write_to_file analysis_results_serializer filename data::analysis_results;
 
   /** Return an iterator over all the summaries.
       If options - load_results or - save_results are used,
@@ -1381,7 +1380,7 @@ let pp_summary_and_issues formats_by_report_kind => {
   };
   {
     LintIssues.load_issues_to_errlog_map Config.lint_issues_dir_name;
-    Procname.Map.iter
+    Typ.Procname.Map.iter
       (pp_lint_issues filters formats_by_report_kind linereader) !LintIssues.errLogMap
   };
   finalize_and_close_files formats_by_report_kind stats pdflatex

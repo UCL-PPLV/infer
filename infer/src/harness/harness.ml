@@ -37,7 +37,7 @@ let try_create_lifecycle_trace name lifecycle_name lifecycle_procs tenv =
 (** generate a harness for a lifecycle type in an Android application *)
 let create_harness cfg cg tenv =
   List.iter ~f:(fun (pkg, clazz, lifecycle_methods) ->
-      let typname = Typename.TN_csu (Class Java, Mangled.from_package_class pkg clazz) in
+      let typname = Typename.Java.from_package_class pkg clazz in
       let framework_procs =
         AndroidFramework.get_lifecycle_for_framework_typ_opt tenv typname lifecycle_methods in
       (* iterate through the type environment and generate a lifecycle harness for each
@@ -51,12 +51,12 @@ let create_harness cfg cg tenv =
               let harness_procname =
                 let harness_cls_name = Typename.name name in
                 let pname =
-                  Procname.Java
-                    (Procname.java
-                       (None, harness_cls_name) None
-                       "InferGeneratedHarness" [] Procname.Static) in
+                  Typ.Procname.Java
+                    (Typ.Procname.java
+                       (Typename.Java.from_string harness_cls_name) None
+                       "InferGeneratedHarness" [] Typ.Procname.Static) in
                 match pname with
-                | Procname.Java harness_procname -> harness_procname
+                | Typ.Procname.Java harness_procname -> harness_procname
                 | _ -> assert false in
               Inhabit.inhabit_trace tenv lifecycle_trace harness_procname cg cfg
         ) tenv

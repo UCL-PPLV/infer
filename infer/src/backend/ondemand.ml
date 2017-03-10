@@ -27,9 +27,9 @@ let dirs_to_analyze =
       changed_files String.Set.empty in
   Option.map ~f:process_changed_files SourceFile.changed_files_set
 
-type analyze_ondemand = SourceFile.t -> Procdesc.t -> unit
+type analyze_ondemand = SourceFile.t -> Procdesc.t -> Specs.summary
 
-type get_proc_desc = Procname.t -> Procdesc.t option
+type get_proc_desc = Typ.Procname.t -> Procdesc.t option
 
 type callbacks =
   {
@@ -55,7 +55,7 @@ let should_be_analyzed proc_name proc_attributes =
   let already_analyzed () =
     match Specs.get_summary proc_name with
     | Some summary ->
-        Specs.get_timestamp summary > 0
+        Specs.equal_status (Specs.get_status summary) Specs.Analyzed
     | None ->
         false in
   proc_attributes.ProcAttributes.is_defined && (* we have the implementation *)
@@ -116,8 +116,8 @@ let run_proc_analysis ~propagate_exceptions analyze_proc curr_pdesc callee_pdesc
   L.log_progress_procedure ();
   if Config.trace_ondemand then L.stderr "[%d] run_proc_analysis %a -> %a@."
       !nesting
-      Procname.pp curr_pname
-      Procname.pp callee_pname;
+      Typ.Procname.pp curr_pname
+      Typ.Procname.pp callee_pname;
 
   let preprocess () =
     incr nesting;
@@ -127,57 +127,46 @@ let run_proc_analysis ~propagate_exceptions analyze_proc curr_pdesc callee_pdesc
       Option.value_map
         ~f:(fun (attributes : ProcAttributes.t) ->
             let attribute_pname = attributes.proc_name in
-            if not (Procname.equal callee_pname attribute_pname) then
-              failwith ("ERROR: "^(Procname.to_string callee_pname)
-                        ^" not equal to "^(Procname.to_string attribute_pname));
+            if not (Typ.Procname.equal callee_pname attribute_pname) then
+              failwith ("ERROR: "^(Typ.Procname.to_string callee_pname)
+                        ^" not equal to "^(Typ.Procname.to_string attribute_pname));
             attributes.loc.file)
         ~default:SourceFile.empty
         attributes_opt in
-    let call_graph =
-      let cg = Cg.create (Some source) in
-      Cg.add_defined_node cg callee_pname;
-      cg in
     let callee_pdesc_option =
       if Config.dynamic_dispatch = `Lazy
       then Some callee_pdesc
       else None in
-    Specs.reset_summary call_graph callee_pname attributes_opt callee_pdesc_option;
-    Specs.set_status callee_pname Specs.ACTIVE;
+    Specs.reset_summary callee_pname attributes_opt callee_pdesc_option;
+    Specs.set_status callee_pname Specs.Active;
     source in
 
-  let postprocess source =
+  let postprocess source summary =
     decr nesting;
-    let summary = Specs.get_summary_unsafe "ondemand" callee_pname in
-    let summary' =
-      { summary with
-        Specs.status = Specs.INACTIVE;
-        timestamp = summary.Specs.timestamp + 1 } in
-    Specs.store_summary callee_pname summary';
+    Specs.store_summary summary;
     Printer.write_proc_html source false callee_pdesc;
-    summary' in
+    summary in
 
   let log_error_and_continue exn kind =
     Reporting.log_error callee_pname exn;
     let prev_summary = Specs.get_summary_unsafe "Ondemand.do_analysis" callee_pname in
-    let timestamp = max 1 (prev_summary.Specs.timestamp) in
     let stats = { prev_summary.Specs.stats with Specs.stats_failure = Some kind } in
     let payload =
       { prev_summary.Specs.payload with Specs.preposts = Some []; } in
-    let new_summary =
-      { prev_summary with Specs.stats; payload; timestamp; } in
-    Specs.store_summary callee_pname new_summary;
+    let new_summary = { prev_summary with Specs.stats; payload } in
+    Specs.store_summary new_summary;
     new_summary in
 
   let old_state = save_global_state () in
   let source = preprocess () in
   try
-    analyze_proc source callee_pdesc;
-    let summary = postprocess source in
+    let summary =
+      analyze_proc source callee_pdesc |> postprocess source in
     restore_global_state old_state;
     summary
   with exn ->
     L.stderr "@.ONDEMAND EXCEPTION %a %s@.@.BACK TRACE@.%s@?"
-      Procname.pp callee_pname
+      Typ.Procname.pp callee_pname
       (Exn.to_string exn)
       (Printexc.get_backtrace ());
     restore_global_state old_state;

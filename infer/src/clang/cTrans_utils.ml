@@ -14,6 +14,8 @@ module Hashtbl = Caml.Hashtbl
 
 module L = Logging
 
+exception TemplatedCodeException of Clang_ast_t.stmt
+
 (* Extract the element of a singleton list. If the list is not a singleton *)
 (* It stops the computation giving a warning. We use this because we       *)
 (* assume in many places that a list is just a singleton. We use the       *)
@@ -335,8 +337,8 @@ let objc_new_trans trans_state loc stmt_info cls_name function_type =
   let is_instance = true in
   let call_flags = { CallFlags.default with CallFlags.cf_virtual = is_instance; } in
   let pname =
-    CGeneral_utils.mk_procname_from_objc_method
-      cls_name CFrontend_config.init Procname.ObjCInstanceMethod in
+    CProcname.NoAstDecl.objc_method_of_string_kind
+      cls_name CFrontend_config.init Typ.Procname.ObjCInstanceMethod in
   CMethod_trans.create_external_procdesc trans_state.context.CContext.cfg pname is_instance None;
   let args = [(alloc_ret_exp, alloc_ret_type)] in
   let ret_id_typ = Some (init_ret_id, alloc_ret_type) in
@@ -355,7 +357,7 @@ let new_or_alloc_trans trans_state loc stmt_info type_ptr class_name_opt selecto
   let class_name =
     match class_name_opt with
     | Some class_name -> class_name
-    | None -> CType.classname_of_type function_type in
+    | None -> CType.objc_classname_of_type function_type in
   if String.equal selector CFrontend_config.alloc then
     alloc_trans trans_state loc stmt_info function_type true None
   else if String.equal selector CFrontend_config.new_str then
@@ -579,14 +581,14 @@ let rec get_type_from_exp_stmt stmt =
 module Self =
 struct
 
-  exception SelfClassException of string
+  exception SelfClassException of Typename.t
 
   let add_self_parameter_for_super_instance context procname loc mei =
     if is_superinstance mei then
       let typ, self_expr, ins =
         let t' =
           CType.add_pointer_to_typ
-            (CType_decl.get_type_curr_class_objc context.CContext.curr_class) in
+            (Typ.Tstruct (CContext.get_curr_class_typename context.CContext.curr_class)) in
         let e = Exp.Lvar (Pvar.mk (Mangled.from_string CFrontend_config.self) procname) in
         let id = Ident.create_fresh Ident.knormal in
         t', Exp.Var id, [Sil.Load (id, e, t', loc)] in
