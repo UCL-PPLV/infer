@@ -378,6 +378,7 @@ let file_analysis _ _ get_proc_desc file_env =
           aux (Ident.Map.add var value acc) ls in
       aux Ident.Map.empty
        in *)
+
     let rec parse_unsat_core = function
       | "sat"::_ -> ()
       | "unsat"::rest -> parse_unsat_core rest
@@ -387,9 +388,20 @@ let file_analysis _ _ get_proc_desc file_env =
           let ls = String.split l ~on:' ' in
           let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
           let is = List.map ls ~f:Int.of_string in
-          let ctrs = List.map is
+          let atoms = List.map is
               ~f:(fun i -> snd (IntMap.find i ctr_map)) in
-          List.iter ctrs ~f:(fun c -> L.out "Z3: unsat core: %a@." Atom.pp c)
+          let atoms = Atom.Set.of_list atoms in
+          let () = Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
+          let (writes, reads) =
+            Atom.Set.partition (function { Atom.access=Write } -> true | _ -> false) atoms in
+          let w = Atom.Set.choose writes in
+          let writes = Atom.Set.remove w writes in
+          let loc = CallSite.loc (List.last_exn w.path) in
+          let msg = Localise.to_string Localise.thread_safety_violation in
+          let description = "A RACE" in
+          let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
+             (* Reporting.log_error pname ~loc ~ltr exn in *)
+          ()
       | _ -> ()
     in
     let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in
