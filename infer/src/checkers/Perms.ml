@@ -317,13 +317,21 @@ let file_analysis _ _ get_proc_desc file_env =
     let mk_sum_constr (premaps, ctr_map) { sum_atoms } =
       let premap = Field.Map.of_fields fields in
       let ctr_map =
-        Atom.Set.fold
+        AtomDomain.Sinks.fold
+          (fun t acc ->
+             let a = TraceElem.kind t in
+             let c = Atom.compile premap invmap a in
+             IntMap.add (Hashtbl.hash c) (c, a) acc
+          )
+          (AtomDomain.sinks sum_atoms)
+          ctr_map
+          (* Atom.Set.fold
           (fun a acc ->
              let c = Atom.compile premap invmap a in
              IntMap.add (Hashtbl.hash c) (c, a) acc
           )
           sum_atoms
-          ctr_map
+          ctr_map *)
       in
       (premap::premaps, ctr_map)
     in
@@ -409,6 +417,7 @@ let file_analysis _ _ get_proc_desc file_env =
           let is = List.map ls ~f:Int.of_string in
           let atoms = List.map is
               ~f:(fun i -> snd (IntMap.find i ctr_map)) in
+          
           let atoms = Atom.Set.of_list atoms in
           let () = Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
           let (writes, reads) =
