@@ -91,17 +91,23 @@ module Summary = struct
 
   let pp fmt { sum_atoms; sum_locks } =
     F.fprintf fmt "{ sum_atoms=%a; sum_locks=%a }"
-      Atom.Set.pp sum_atoms
+      AtomDomain.pp sum_atoms
       Lock.MultiSet.pp sum_locks
 
 (* return set of locks that is used in accesses
    (does not include other locks held)*)
   let get_lockset s =
-    Atom.Set.map_to
+    AtomDomain.Sinks.fold
+      (fun trace_elem acc ->
+         Lock.Set.union (Lock.MultiSet.to_set (TraceElem.kind trace_elem).Atom.locks) acc
+      )
+      (AtomDomain.sinks s.sum_atoms )
+      Lock.Set.empty
+(* Atom.Set.map_to
       (fun a -> Lock.MultiSet.to_set a.Atom.locks)
       Lock.Set.union
       Lock.Set.empty
-      s.sum_atoms
+      s.sum_atoms *)
 end
 
 
@@ -136,12 +142,25 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
           astate
       | Some { sum_atoms; sum_locks } ->
           let new_atoms =
+            AtomDomain.Sinks.fold
+              (fun t acc ->
+                 let a = Atom.adapt (TraceElem.kind t) astate.locks_held in
+                 let t' = TraceElem.make a site in
+                 AtomDomain.add_sink t' acc
+              )
+              (AtomDomain.sinks sum_atoms)
+              AtomDomain.empty
+          in
+          let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
+          {astate with atoms=new_atoms; locks_held=new_locks}
+
+          (* let new_atoms =
             Atom.Set.endomap
               (fun l -> Atom.adapt l astate.locks_held site)
               sum_atoms
           in
           let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
-          {astate with atoms=new_atoms; locks_held=new_locks}
+          {astate with atoms=new_atoms; locks_held=new_locks} *)
 
   (* actual transfer function *)
   let exec_instr astate { ProcData.pdesc; tenv } _ cmd =

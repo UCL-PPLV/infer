@@ -218,27 +218,26 @@ module Atom = struct
         locks : Lock.MultiSet.t;
         (* call path to access location ; non-empty list whose last item is the access location
            and every other item is the location of a method call leading to the access *)
-        path : CallSite.t list;
+        (* path : CallSite.t list; *)
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
-    let pp fmt {access; field; locks; path} =
-      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Path=%a>"
+    let pp fmt {access; field; locks} =
+      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a>"
         Access.pp access
         Field.pp field
         Lock.MultiSet.pp locks
-        (Pp.comma_seq CallSite.pp) path
   end
   include A
 
-  let mk_read field locks site =
+  let mk_read field locks =
     let access = Access.Read in
-    { access; field; locks; path=[site] }
-  let mk_write field locks site =
+    { access; field; locks }
+  let mk_write field locks =
     let access = Access.Write in
-    { access; field; locks; path =[site] }
-  let adapt a lks site =
-    { a with locks = Lock.MultiSet.union lks a.locks; path = site::a.path }
+    { access; field; locks }
+  let adapt a lks =
+    { a with locks = Lock.MultiSet.union lks a.locks }
 
   let compile premap invmap { access; field; locks } =
     let lmap = Field.Map.find field invmap in
@@ -250,15 +249,45 @@ module Atom = struct
     | Access.Read -> Constr.mk_gt_zero (p::invs)
     | Access.Write -> Constr.mk_eq_one (p::invs)
 
-  module Set = struct
-    include PrettyPrintable.MakePPSet(A)
-
-    let map_to f oadd oempty s =
-      fold (fun x acc -> oadd (f x) acc) s oempty
-    let endomap f s =
-      map_to f add empty s
-  end
 end
+
+module TraceElem = struct
+  module Kind = Atom
+
+  type t = {
+    site : CallSite.t;
+    kind : Kind.t;
+  } [@@deriving compare]
+
+  (* let is_read { kind; } =
+    match snd kind with
+    | Read -> true
+    | Write -> false
+
+  let is_write { kind; } =
+    match snd kind with
+    | Read -> false
+    | Write -> true *)
+
+  let call_site { site; } = site
+
+  let kind { kind; } = kind
+
+  let make kind site = { kind; site; }
+
+  let with_callsite t site = { t with site; }
+
+  let pp fmt { site; kind; } =
+    F.fprintf fmt "%a at %a" Atom.pp kind CallSite.pp site
+
+  module Set = PrettyPrintable.MakePPSet (struct
+      type nonrec t = t
+      let compare = compare
+      let pp = pp
+    end)
+end
+
+module AtomDomain = SinkTrace.Make(TraceElem)
 
 module IdMap = struct
   module M = Var.Map
@@ -321,7 +350,7 @@ end
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
   locks_held : Lock.MultiSet.t;
-  atoms : Atom.Set.t;
+  atoms : AtomDomain.astate;
   may_point : IdMap.t;
   must_point : IdMap.t;
 }
@@ -332,7 +361,7 @@ module State = struct
   let empty =
     {
       locks_held = Lock.MultiSet.empty;
-      atoms = Atom.Set.empty;
+      atoms = AtomDomain.empty;
       may_point = IdMap.empty;
       must_point = IdMap.empty;
     }
@@ -367,14 +396,20 @@ module State = struct
     is_this var a.must_point
 
   let add_read fieldname site a =
-    { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held site) a.atoms }
+    let atom = Atom.mk_read fieldname a.locks_held in
+    let trace_elem = TraceElem.make atom site in
+    let trace = AtomDomain.add_sink trace_elem AtomDomain.empty in
+    { a with atoms = AtomDomain.join trace a.atoms }
   let add_write fieldname site a =
-    { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held site) a.atoms }
+    let atom = Atom.mk_write fieldname a.locks_held in
+    let trace_elem = TraceElem.make atom site in
+    let trace = AtomDomain.add_sink trace_elem AtomDomain.empty in
+    { a with atoms = AtomDomain.join trace a.atoms }
 
   let pp fmt { locks_held; atoms; may_point; must_point } =
     F.fprintf fmt "{ locks_held=%a; atoms=%a; may_point=%a; must_point=%a }"
       Lock.MultiSet.pp locks_held
-      Atom.Set.pp atoms
+      AtomDomain.pp atoms
       IdMap.pp may_point
       IdMap.pp must_point
 end
@@ -382,7 +417,7 @@ end
 (* summary type, omit transient parts of astate *)
 type summary =
   {
-    sum_atoms: Atom.Set.t;
+    sum_atoms: AtomDomain.t;
     sum_locks: Lock.MultiSet.t;
   }
 
@@ -393,7 +428,7 @@ module Domain = struct
   let join a1 a2 =
       {
         locks_held = Lock.MultiSet.inter a1.locks_held a2.locks_held;
-        atoms = Atom.Set.union a1.atoms a2.atoms;
+        atoms = AtomDomain.join a1.atoms a2.atoms;
         may_point = IdMap.may_join a1.may_point a2.may_point;
         must_point = IdMap.must_join a1.must_point a2.must_point
       }
@@ -402,7 +437,7 @@ module Domain = struct
     join prev next
 
   let (<=) ~lhs ~rhs =
-    Atom.Set.subset lhs.atoms rhs.atoms &&
+    AtomDomain.(<=) ~lhs:lhs.atoms ~rhs:rhs.atoms &&
     Lock.MultiSet.subset rhs.locks_held lhs.locks_held &&
     IdMap.submap lhs.may_point rhs.may_point &&
     IdMap.submap rhs.must_point lhs.must_point
