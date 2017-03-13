@@ -104,24 +104,29 @@ module Atom : sig
       access : Access.t;
       field : Field.t;
       locks : Lock.MultiSet.t;
+      path : CallSite.t list;
     }
 
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
 
-  val mk_read : Field.t -> Lock.MultiSet.t -> t
-  val mk_write : Field.t -> Lock.MultiSet.t -> t
-  val adapt : t -> Lock.MultiSet.t -> t
+  val mk_read : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
+  val mk_write : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
+  val adapt : t -> Lock.MultiSet.t -> CallSite.t -> t
 
 (* Using a map from fields to precondition permissions and
 a map from fields to lock invariant permissions, compile the atom into a constraint *)
   val compile : Ident.t Field.Map.t -> Ident.t Lock.Map.t Field.Map.t -> t -> Constr.t
+
+  module Set : sig
+    include PrettyPrintable.PPSet with type elt = t
+
+    val endomap : (elt -> elt) -> t -> t
+    val map_to : (elt -> 'a) -> ('a -> 'b -> 'b) -> 'b -> t -> 'b
+  end
+
 end
-
-
-module TraceElem : TraceElem.S with module Kind = Atom
-module AtomDomain : module type of SinkTrace.Make(TraceElem)
 
 module IdMap : sig
   (* module M = Var.Map *)
@@ -132,12 +137,37 @@ module IdMap : sig
   val add : Var.t -> AccessPath.Raw.t -> t -> t
   val resolve : t -> Var.t -> AccessPath.Raw.t option
   val update : Var.t -> Exp.t -> Typ.t -> t -> t
+  (* let pp fmt m = M.pp ~pp_value:AccessPath.Raw.pp fmt m
+
+  let must_join m1 m2 =
+    M.merge
+      (fun _ ap1_opt ap2_opt ->
+         match ap1_opt, ap2_opt with
+         | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> ap1_opt
+         | _, _ -> None
+      )
+      m1
+      m2
+
+  let submap m1 m2 =
+    let m =
+      M.merge
+        (fun _ ap1_opt ap2_opt ->
+           match ap1_opt, ap2_opt with
+           | None, _ -> None
+           | Some ap1, Some ap2 when AccessPath.Raw.equal ap1 ap2 -> None
+           | _ -> ap1_opt
+        )
+        m1
+        m2
+    in
+    M.is_empty m *)
 end
 
 (* abstract state used in analyzer and transfer functions *)
 type astate = {
   locks_held : Lock.MultiSet.t;
-  atoms : AtomDomain.t;
+  atoms : Atom.Set.t;
   may_point : IdMap.t;
   must_point : IdMap.t;
 }
@@ -162,7 +192,7 @@ end
 (* summary type, omit transient parts of astate *)
 type summary =
   {
-    sum_atoms: AtomDomain.t;
+    sum_atoms: Atom.Set.t;
     sum_locks: Lock.MultiSet.t;
   }
 
