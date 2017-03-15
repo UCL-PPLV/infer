@@ -391,17 +391,22 @@ let file_analysis _ _ get_proc_desc file_env =
           let atoms = List.map is
               ~f:(fun i -> snd (IntMap.find i ctr_map)) in
           let atoms = Atom.Set.of_list atoms in
-          let () = Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
+          let () =
+            Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
           let (writes, reads) =
-            Atom.Set.partition (function { Atom.access=Write } -> true | _ -> false) atoms in
+            Atom.Set.partition
+              (function { Atom.access=Write } -> true | _ -> false) atoms in
           let w = Atom.Set.choose writes in
           let writes = Atom.Set.remove w writes in
           let loc = CallSite.loc (List.last_exn w.path) in
+          let pname = CallSite.pname (List.last_exn w.path) in
           let msg = Localise.to_string Localise.thread_safety_violation in
           let description = "A RACE" in
+          let ltr =
+            List.mapi w.path
+              ~f:(fun i s -> Errlog.make_trace_element i (CallSite.loc s) "" []) in
           let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
-             (* Reporting.log_error pname ~loc ~ltr exn in *)
-          ()
+             Reporting.log_error pname ~loc ~ltr exn
       | _ -> ()
     in
     let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in
