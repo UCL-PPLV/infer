@@ -393,15 +393,21 @@ let file_analysis _ _ get_proc_desc file_env =
           let atoms = Atom.Set.of_list atoms in
           let () =
             Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
-          let (writes, reads) =
-            Atom.Set.partition
+          let writes =
+            Atom.Set.filter
               (function { Atom.access=Write } -> true | _ -> false) atoms in
           let w = Atom.Set.choose writes in
-          let writes = Atom.Set.remove w writes in
+          let atoms = Atom.Set.remove w atoms in
+          let atoms = Atom.Set.map_to ident List.cons [] atoms in
           let loc = CallSite.loc (List.last_exn w.path) in
           let pname = CallSite.pname (List.last_exn w.path) in
           let msg = Localise.to_string Localise.thread_safety_violation in
-          let description = "A RACE" in
+          let description =
+            match atoms with
+            | [] -> F.asprintf "The <%a> is a self-race." Atom.pp w
+            | _ -> F.asprintf "The <%a> races with:@.%a" Atom.pp w
+                     (Pp.comma_seq Atom.pp) atoms
+          in
           let ltr =
             List.mapi w.path
               ~f:(fun i s -> Errlog.make_trace_element i (CallSite.loc s) "" []) in

@@ -223,11 +223,11 @@ module Atom = struct
     let equal = [%compare.equal : t]
 
     let pp fmt {access; field; locks; path} =
-      F.fprintf fmt "<Acc=%a; Fld=%a; Lks=%a; Path=%a>"
+      F.fprintf fmt "%a of field %a @@ (%a); locks held=%a"
         Access.pp access
         Field.pp field
-        Lock.MultiSet.pp locks
         (Pp.comma_seq CallSite.pp) path
+        Lock.MultiSet.pp locks
   end
   include A
 
