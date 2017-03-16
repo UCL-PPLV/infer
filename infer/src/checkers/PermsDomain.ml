@@ -52,6 +52,7 @@ module Field = struct
   end
 end
 
+(* Constraints over permission variables *)
 module Constr = struct
   type t = Exp.t
 
@@ -201,6 +202,19 @@ module Lock = struct
   end
 end
 
+module PvarMap = PrettyPrintable.MakePPMap
+    (struct
+      include Pvar
+      let pp = pp Pp.text
+    end)
+
+let subst theta (base, accesses) =
+  match base with
+  | (Var.LogicalVar _, _) -> assert false
+  | (Var.ProgramVar pvar, _) ->
+      let argument = PvarMap.find pvar theta in
+      AccessPath.append argument accesses
+
 module Atom = struct
   module A = struct
     module Access = struct
@@ -214,7 +228,8 @@ module Atom = struct
     type t =
       {
         access : Access.t;
-        field : Field.t;
+        (* field : Field.t; *)
+        lvalue : AccessPath.Raw.t;
         locks : Lock.MultiSet.t;
         (* call path to access location ; non-empty list whose last item is the access location
            and every other item is the location of a method call leading to the access *)
@@ -222,10 +237,10 @@ module Atom = struct
       } [@@deriving compare]
     let equal = [%compare.equal : t]
 
-    let pp fmt {access; field; locks; path} =
-      F.fprintf fmt "%a of field %a @@ (%a); locks held=%a"
+    let pp fmt {access; lvalue; locks; path} =
+      F.fprintf fmt "%a of l-value %a @@ (%a); locks held=%a"
         Access.pp access
-        Field.pp field
+        AccessPath.Raw.pp lvalue
         (Pp.comma_seq CallSite.pp) path
         Lock.MultiSet.pp locks
   end
@@ -236,21 +251,25 @@ module Atom = struct
   let is_write =
     function { access=Write } -> true | _ -> false
 
-  let mk_read field locks site =
+  let mk_read lvalue locks site =
     let access = Access.Read in
-    { access; field; locks; path=[site] }
-  let mk_write field locks site =
+    { access; lvalue; locks; path=[site] }
+  let mk_write lvalue locks site =
     let access = Access.Write in
-    { access; field; locks; path =[site] }
-  let adapt a lks site =
-    { a with locks = Lock.MultiSet.union lks a.locks; path = site::a.path }
+    { access; lvalue; locks; path =[site] }
+  let adapt lks site theta a =
+    { a with
+      lvalue = subst theta a.lvalue;
+      locks = Lock.MultiSet.union lks a.locks;
+      path = site::a.path
+    }
 
-  let compile premap invmap { access; field; locks } =
-    let lmap = Field.Map.find field invmap in
+  let compile premap invmap { access; lvalue; locks } =
+    let lmap = AccessPath.RawMap.find lvalue invmap in
     let lks = Lock.MultiSet.to_set locks in
     let invs =
       Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
-    let p = Field.Map.find field premap in
+    let p = AccessPath.RawMap.find lvalue premap in
     match access with
     | Access.Read -> Constr.mk_gt_zero (p::invs)
     | Access.Write -> Constr.mk_eq_one (p::invs)
@@ -327,7 +346,7 @@ end
 type astate = {
   locks_held : Lock.MultiSet.t;
   atoms : Atom.Set.t;
-  may_point : IdMap.t;
+  (* may_point : IdMap.t; *)
   must_point : IdMap.t;
 }
 
@@ -338,24 +357,24 @@ module State = struct
     {
       locks_held = Lock.MultiSet.empty;
       atoms = Atom.Set.empty;
-      may_point = IdMap.empty;
+      (* may_point = IdMap.empty; *)
       must_point = IdMap.empty;
     }
 
   let update_pvar lhs_pvar rhs_exp lhs_typ a =
     { a with
-      may_point = IdMap.update (Var.of_pvar lhs_pvar) rhs_exp lhs_typ a.may_point;
+      (* may_point = IdMap.update (Var.of_pvar lhs_pvar) rhs_exp lhs_typ a.may_point; *)
       must_point = IdMap.update (Var.of_pvar lhs_pvar) rhs_exp lhs_typ a.must_point
     }
   let update_id lhs_id rhs_exp rhs_typ a =
     { a with
-      may_point = IdMap.update (Var.of_id lhs_id) rhs_exp rhs_typ a.may_point;
+      (* may_point = IdMap.update (Var.of_id lhs_id) rhs_exp rhs_typ a.may_point; *)
       must_point = IdMap.update (Var.of_id lhs_id) rhs_exp rhs_typ a.must_point
     }
   let remove_ids ids a =
     { a with
-      may_point =
-        List.fold ~f:(fun acc id -> IdMap.remove_id id acc) ~init:a.may_point ids;
+      (* may_point =
+        List.fold ~f:(fun acc id -> IdMap.remove_id id acc) ~init:a.may_point ids; *)
       must_point =
         List.fold ~f:(fun acc id -> IdMap.remove_id id acc) ~init:a.must_point ids
     }
@@ -365,31 +384,27 @@ module State = struct
     | Some ((v, _), []) -> Exp.is_this (Var.to_exp v)
     | _ -> false
 
-  let may_be_this var a =
-    is_this var a.may_point
-
   let must_be_this var a =
     is_this var a.must_point
+  let must_resolve exp typ a =
+    match AccessPath.of_lhs_exp exp typ ~f_resolve_id:(IdMap.resolve a.must_point) with
+    | Some a -> a
+    | None -> assert false
 
-  let add_read fieldname site a =
-    { a with atoms = Atom.Set.add (Atom.mk_read fieldname a.locks_held site) a.atoms }
-  let add_write fieldname site a =
-    { a with atoms = Atom.Set.add (Atom.mk_write fieldname a.locks_held site) a.atoms }
+  let add_read lvalue site a =
+    { a with atoms = Atom.Set.add (Atom.mk_read lvalue a.locks_held site) a.atoms }
+  let add_write lvalue site a =
+    { a with atoms = Atom.Set.add (Atom.mk_write lvalue a.locks_held site) a.atoms }
 
-  let pp fmt { locks_held; atoms; may_point; must_point } =
-    F.fprintf fmt "{ locks_held=%a; atoms=%a; may_point=%a; must_point=%a }"
+  let pp fmt { locks_held; atoms; must_point } =
+    F.fprintf fmt "{ locks_held=%a; atoms=%a; must_point=%a }"
       Lock.MultiSet.pp locks_held
       Atom.Set.pp atoms
-      IdMap.pp may_point
+      (* IdMap.pp may_point *)
       IdMap.pp must_point
 end
 
-(* summary type, omit transient parts of astate *)
-type summary =
-  {
-    sum_atoms: Atom.Set.t;
-    sum_locks: Lock.MultiSet.t;
-  }
+type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list
 
 (* Abstract domain *)
 module Domain = struct
@@ -399,7 +414,7 @@ module Domain = struct
       {
         locks_held = Lock.MultiSet.inter a1.locks_held a2.locks_held;
         atoms = Atom.Set.union a1.atoms a2.atoms;
-        may_point = IdMap.may_join a1.may_point a2.may_point;
+        (* may_point = IdMap.may_join a1.may_point a2.may_point; *)
         must_point = IdMap.must_join a1.must_point a2.must_point
       }
 
@@ -409,7 +424,7 @@ module Domain = struct
   let (<=) ~lhs ~rhs =
     Atom.Set.subset lhs.atoms rhs.atoms &&
     Lock.MultiSet.subset rhs.locks_held lhs.locks_held &&
-    IdMap.submap lhs.may_point rhs.may_point &&
+    (* IdMap.submap lhs.may_point rhs.may_point && *)
     IdMap.submap rhs.must_point lhs.must_point
 
   let pp = State.pp

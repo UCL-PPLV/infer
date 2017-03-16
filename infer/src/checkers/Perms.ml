@@ -79,22 +79,28 @@ module Summary = struct
       payload.Specs.permsafety
     end)
 
-  let of_state { atoms; locks_held } =
-    { sum_atoms = atoms; sum_locks = locks_held; }
+  let of_state pdesc { atoms; locks_held } =
+    let pname = Procdesc.get_proc_name pdesc in
+    let attrs = Procdesc.get_attributes pdesc in
+    let formals =
+      List.map
+        ~f:(fun (name, _) -> Pvar.mk name pname)
+        attrs.ProcAttributes.formals in
+    (atoms, locks_held, formals)
 
-  let pp fmt { sum_atoms; sum_locks } =
+  let pp fmt (sum_atoms, sum_locks, _) =
     F.fprintf fmt "{ sum_atoms=%a; sum_locks=%a }"
       Atom.Set.pp sum_atoms
       Lock.MultiSet.pp sum_locks
 
 (* return set of locks that is used in accesses
    (does not include other locks held)*)
-  let get_lockset s =
+  let get_lockset (sum_atoms, _, _) =
     Atom.Set.map_to
       (fun a -> Lock.MultiSet.to_set a.Atom.locks)
       Lock.Set.union
       Lock.Set.empty
-      s.sum_atoms
+      sum_atoms
 end
 
 
@@ -122,75 +128,76 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
       (*FIXME!! we pretend everything is this *)
       Lock.This
 
-  let do_call pdesc pn astate site =
-      match Summary.read_summary pdesc pn with
-      | None ->
-          L.out "Couldn't find summary for %a@." Typ.Procname.pp pn ;
-          astate
-      | Some { sum_atoms; sum_locks } ->
-          let new_atoms =
-            Atom.Set.endomap
-              (fun l -> Atom.adapt l astate.locks_held site)
-              sum_atoms
-          in
-          let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
-          {astate with atoms=new_atoms; locks_held=new_locks}
+  let do_call caller_pdesc callee_pname args astate site =
+    match Summary.read_summary caller_pdesc callee_pname with
+    | None ->
+        L.out "Couldn't find summary for %a@." Typ.Procname.pp callee_pname ;
+        astate
+    | Some (sum_atoms, sum_locks, formals) ->
+        let f_resolve_id = IdMap.resolve astate.must_point in
+        let args = List.map args
+            ~f:(fun (arg, typ) ->
+                match AccessPath.of_lhs_exp arg typ ~f_resolve_id with
+                | Some a -> a
+                | None -> assert false
+              ) in
+        let theta = List.fold2_exn formals args ~init:PvarMap.empty
+            ~f:(fun acc formal arg -> PvarMap.add formal arg acc) in
+        let new_atoms =
+          Atom.Set.endomap (Atom.adapt astate.locks_held site theta) sum_atoms in
+        let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
+        {astate with atoms=new_atoms; locks_held=new_locks}
 
   (* actual transfer function *)
-  let exec_instr astate { ProcData.pdesc; tenv } _ cmd =
-    let classname = get_class (Procdesc.get_proc_name pdesc) in
-    let procname = Procdesc.get_proc_name pdesc in
+  let exec_instr astate pdata _ cmd =
+    let curr_pdesc = pdata.ProcData.pdesc in
+    let procname = Procdesc.get_proc_name curr_pdesc in
     match cmd with
-    | Sil.Store (Exp.Lfield(_, fieldname, Typ.Tstruct tname), _, _, location)
-      when PatternMatch.is_subtype tenv classname tname ->
-        let site = CallSite.make procname location in
-        State.add_write fieldname site astate
-
-    | Sil.Store (Exp.Lvar lhs_pvar, lhs_typ, rhs_exp, _)
-      when Pvar.is_frontend_tmp lhs_pvar (*&& not (is_constant rhs_exp)*) ->
-        State.update_pvar lhs_pvar rhs_exp lhs_typ astate
-
     | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
-        let astate = State.update_id lhs_id rhs_exp rhs_typ astate in
-        begin
+        let site = CallSite.make procname location in
+        let lvalue = State.must_resolve rhs_exp rhs_typ astate in
+        let astate =
           match rhs_exp with
-            | Exp.Lfield(_, fieldname, Typ.Tstruct tname)
-              when PatternMatch.is_subtype tenv classname tname ->
-                let site = CallSite.make procname location in
-                State.add_read fieldname site astate
-            | _ -> astate
-        end
+          | Exp.Lfield _ | Exp.Lindex _ -> State.add_read lvalue site astate
+          | _ -> astate
+        in
+        State.update_id lhs_id rhs_exp rhs_typ astate
+
+    | Sil.Store (lhs_exp, lhs_typ, rhs_exp, location) ->
+        let site = CallSite.make procname location in
+        let astate =
+          match lhs_exp with
+          | Exp.Lfield _ | Exp.Lindex _ ->
+              let lvalue = State.must_resolve lhs_exp lhs_typ astate in
+              State.add_write lvalue site astate
+          | Exp.Lvar lhs_pvar ->
+              if Pvar.is_frontend_tmp lhs_pvar then
+                State.update_pvar lhs_pvar rhs_exp lhs_typ astate
+              else
+                astate
+          | _ -> assert false in
+        let () =
+          match rhs_exp with
+          | Exp.Lfield _ | Exp.Lindex _ -> assert false
+          | _ -> () in
+        astate
 
     | Sil.Remove_temps (ids, _) ->
         State.remove_ids ids astate
 
-    | Sil.Call (_, Const (Cfun pn), args, _, _)
-      when is_un_lock pn ->
-        let to_lock = is_lock pn in
-        let lock = get_lock pn args in
-        let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
-        { astate with locks_held = f lock astate.locks_held }
-
-(* FIXME - not tracking references to fields *)
-
-    | Sil.Call (_, Const (Cfun pn), l::_, location, _) ->
-        if match l with
-          | (Exp.Lvar pvar, _) when State.may_be_this (Var.of_pvar pvar) astate -> true
-          | (Exp.Var id, _) when State.may_be_this (Var.of_id id) astate -> true
-          | (_, Typ.Tstruct tname) -> PatternMatch.is_subtype tenv classname tname
-          | _ -> false
-        then
-          let site = CallSite.make procname location in
-          do_call pdesc pn astate site
+    | Sil.Call (_, Const (Cfun pn), args, location, _) ->
+        if is_un_lock pn then
+          let to_lock = is_lock pn in
+          let lock = get_lock pn args in
+          let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
+          { astate with locks_held = f lock astate.locks_held }
         else
-          astate
+          let site = CallSite.make procname location in
+          do_call curr_pdesc pn args astate site
 
-    | _ -> astate
-
-(* | Sil.Load (_,l,_,_) ->
-   L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
-   L.out "***Root is = %a***@." Exp.pp (Exp.root_of_lexp l) ;
-   astate *)
+    | _ ->
+       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
+       astate
 
 end
 
@@ -200,14 +207,14 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 (* compute the summary of a method *)
 let compute_and_store_post callback =
   L.out "Analyzing method %a@." Typ.Procname.pp callback.Callbacks.proc_name ;
-  let compute_post pdesc =
+  let compute_post pdata =
     let initial = State.empty in
-    let pdata = ProcData.make_default pdesc.ProcData.pdesc pdesc.ProcData.tenv in
+    let pdata = ProcData.make_default pdata.ProcData.pdesc pdata.ProcData.tenv in
     match Analyzer.compute_post ~initial pdata with
     | None -> L.out "No spec found@." ; None
     | Some ((s) as a) ->
         L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
-        Some (Summary.of_state s) in
+        Some (Summary.of_state pdata.ProcData.pdesc s) in
   Interprocedural.compute_and_store_post
     ~compute_post
     ~make_extras:ProcData.make_empty_extras
@@ -288,7 +295,7 @@ let file_analysis _ _ get_proc_desc file_env =
 
   (* take a list of (proc info, summary) pairs *)
   let compile_case fields locks invmap summaries =
-    let mk_sum_constr (premaps, ctr_map) { sum_atoms } =
+    let mk_sum_constr (premaps, ctr_map) (sum_atoms, _) =
       let premap = Field.Map.of_fields fields in
       let ctr_map =
         Atom.Set.fold
