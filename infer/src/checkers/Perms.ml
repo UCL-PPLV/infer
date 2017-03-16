@@ -1,10 +1,3 @@
-(* TODO
-   (decreasing importance)
-   - track breaking of soundness assumptions eg reentrancy
-   - static fields?
-*)
-
-
 open! IStd
 open! PermsDomain
 
@@ -393,26 +386,22 @@ let file_analysis _ _ get_proc_desc file_env =
           let atoms = Atom.Set.of_list atoms in
           let () =
             Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
-          let writes =
-            Atom.Set.filter
-              (function { Atom.access=Write } -> true | _ -> false) atoms in
-          let w = Atom.Set.choose writes in
-          let atoms = Atom.Set.remove w atoms in
-          let atoms = Atom.Set.map_to ident List.cons [] atoms in
+          let w = Atom.Set.choose (Atom.Set.filter Atom.is_write atoms) in
+          let atoms = Atom.Set.elements (Atom.Set.remove w atoms) in
           let loc = CallSite.loc (List.last_exn w.path) in
           let pname = CallSite.pname (List.last_exn w.path) in
           let msg = Localise.to_string Localise.thread_safety_violation in
           let description =
             match atoms with
-            | [] -> F.asprintf "The <%a> is a self-race." Atom.pp w
-            | _ -> F.asprintf "The <%a> races with:@.%a" Atom.pp w
+            | [] -> F.asprintf "The <%a> is a potential self-race." Atom.pp w
+            | _ -> F.asprintf "The <%a> potentially races with:@.%a" Atom.pp w
                      (Pp.comma_seq Atom.pp) atoms
           in
           let ltr =
             List.mapi w.path
               ~f:(fun i s -> Errlog.make_trace_element i (CallSite.loc s) "" []) in
           let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
-             Reporting.log_error pname ~loc ~ltr exn
+          Reporting.log_error pname ~loc ~ltr exn
       | _ -> ()
     in
     let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in

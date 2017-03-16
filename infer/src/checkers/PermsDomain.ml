@@ -231,6 +231,11 @@ module Atom = struct
   end
   include A
 
+  let is_read =
+    function { access=Read } -> true | _ -> false
+  let is_write =
+    function { access=Write } -> true | _ -> false
+
   let mk_read field locks site =
     let access = Access.Read in
     { access; field; locks; path=[site] }

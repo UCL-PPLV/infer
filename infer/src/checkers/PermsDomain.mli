@@ -93,7 +93,7 @@ end
 
 module Atom : sig
   module Access : sig
-    type t = Read | Write
+    type t 
     val compare : t -> t -> int
     val equal : t -> t -> bool
     val pp : Format.formatter -> t -> unit
@@ -110,6 +110,9 @@ module Atom : sig
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
+
+  val is_read : t -> bool
+  val is_write : t -> bool
 
   val mk_read : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
   val mk_write : Field.t -> Lock.MultiSet.t -> CallSite.t -> t
