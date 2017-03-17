@@ -86,6 +86,15 @@ module Summary = struct
       List.map
         ~f:(fun (name, _) -> Pvar.mk name pname)
         attrs.ProcAttributes.formals in
+    let () =
+      Atom.Set.iter
+        (function
+          | { Atom.lvalue=((Var.ProgramVar p, _), _) } ->
+              assert (List.mem ~equal:Pvar.equal formals p)
+          | _ -> assert false
+        )
+        atoms
+    in
     (atoms, locks_held, formals)
 
   let pp fmt (sum_atoms, sum_locks, _) =
@@ -103,8 +112,6 @@ module Summary = struct
       sum_atoms
 end
 
-
-(* Make a transfer functions module given the fields of a class *)
 module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module CFG = CFG
   module Domain = PermsDomain.Domain
@@ -294,9 +301,10 @@ let file_analysis _ _ get_proc_desc file_env =
   in
 
   (* take a list of (proc info, summary) pairs *)
-  let compile_case fields locks invmap summaries =
+  (* let compile_case fields locks invmap summaries =
     let mk_sum_constr (premaps, ctr_map) (sum_atoms, _) =
       let premap = Field.Map.of_fields fields in
+
       let ctr_map =
         Atom.Set.fold
           (fun a acc ->
@@ -338,7 +346,7 @@ let file_analysis _ _ get_proc_desc file_env =
         vars
         extra_ctrs in
     (vars, ctr_map, extra_ctrs)
-  in
+  in *)
 
   let merge compiled =
     let aux (vars, ctr_map, extra_ctrs) (vars_, ctr_map_, extra_ctrs_) =
@@ -465,10 +473,11 @@ let file_analysis _ _ get_proc_desc file_env =
         fields
         Field.Map.empty
     in
-    let pairs = all_pairs proc_sums in
+    (* let pairs = all_pairs proc_sums in
     let cases = List.map ~f:process_case pairs in
     let compiled = List.map ~f:(compile_case fields locks invmap) cases in
     let merged = merge compiled in
-    run_check merged
+       run_check merged *)
+    ()
   in
   ClassMap.iter analyse_class classmap
