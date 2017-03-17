@@ -30,6 +30,7 @@ module Field = struct
   module F = struct
     type t = Ident.fieldname
     let compare = Ident.compare_fieldname
+    let equal = [%compare.equal : t]
     let pp = Ident.pp_fieldname
   end
   include F
@@ -228,7 +229,6 @@ module Atom = struct
     type t =
       {
         access : Access.t;
-        (* field : Field.t; *)
         lvalue : AccessPath.Raw.t;
         locks : Lock.MultiSet.t;
         (* call path to access location ; non-empty list whose last item is the access location
@@ -281,6 +281,16 @@ module Atom = struct
       fold (fun x acc -> oadd (f x) acc) s oempty
     let endomap f s =
       map_to f add empty s
+
+    (* quotient an atom set by pred2 -- pred2 must be eq. relation *)
+    let quotient pred2 s =
+      let rec aux acc s =
+        if is_empty s then acc else
+          let a = choose s in
+          let (a_part, non_a_part) = partition (pred2 a) s in
+          aux (a_part::acc) non_a_part
+      in
+      aux [] s
   end
 end
 
@@ -404,7 +414,7 @@ module State = struct
       IdMap.pp must_point
 end
 
-type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list
+type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list * Tenv.t
 
 (* Abstract domain *)
 module Domain = struct

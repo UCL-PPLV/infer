@@ -23,6 +23,7 @@ end
 (* class fields *)
 module Field : sig
   type t = Ident.fieldname
+  val equal : t -> t -> bool
 
   val pp : Format.formatter -> t -> unit
 
@@ -65,7 +66,7 @@ end
 module Lock : sig
   type t =
     | This
-    | Fld of Field.t
+    | Fld of Ident.fieldname
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
@@ -129,6 +130,9 @@ a map from fields to lock invariant permissions, compile the atom into a constra
 
     val endomap : (elt -> elt) -> t -> t
     val map_to : (elt -> 'a) -> ('a -> 'b -> 'b) -> 'b -> t -> 'b
+
+(* quotient an atom set by an equivalence relation *)
+    val quotient : (elt -> elt -> bool) -> t -> t list
   end
 
 end
@@ -171,6 +175,6 @@ module State : sig
 end
 
 (* summary type, omit transient parts of astate, last field is formals *)
-type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list
+type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list * Tenv.t
 
 module Domain : AbstractDomain.S with type astate = astate
