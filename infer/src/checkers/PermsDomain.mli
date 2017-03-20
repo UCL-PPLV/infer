@@ -121,10 +121,6 @@ module Atom : sig
   val mk_write : AccessPath.Raw.t -> Lock.MultiSet.t -> CallSite.t -> t
   val adapt : Lock.MultiSet.t -> CallSite.t -> AccessPath.Raw.t PvarMap.t -> t -> t
 
-(* Using a map from fields to precondition permissions and
-a map from fields to lock invariant permissions, compile the atom into a constraint *)
-  val compile : Ident.t AccessPath.RawMap.t -> Ident.t Lock.Map.t AccessPath.RawMap.t -> t -> Constr.t
-
   module Set : sig
     include PrettyPrintable.PPSet with type elt = t
 
@@ -134,6 +130,13 @@ a map from fields to lock invariant permissions, compile the atom into a constra
 (* quotient an atom set by an equivalence relation *)
     val quotient : (elt -> elt -> bool) -> t -> t list
   end
+
+  module Map : PrettyPrintable.PPMap with type key = t
+
+  (* Using a precondition permission variable for the heap location in the atom and
+     a map from locks to lock invariant permissions,
+     compile the atom into a constraint *)
+  val compile : Ident.t -> Ident.t Lock.Map.t -> t -> Constr.t
 
 end
 

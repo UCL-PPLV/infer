@@ -65,7 +65,7 @@ let should_report_on_proc (_, _, proc_name, proc_desc) =
 module ClassMap = PrettyPrintable.MakePPMap(Typename)
 
 module Summary = struct
-  include Summary.Make (struct
+  module S = struct
     type summary = PermsDomain.summary
 
     let update_payload summary payload =
@@ -73,7 +73,13 @@ module Summary = struct
 
     let read_from_payload payload =
       payload.Specs.permsafety
-    end)
+  end
+  include Summary.Make (S)
+
+  let get_summary callee_pname =
+    match Specs.get_summary callee_pname with
+    | None -> None
+    | Some summary -> S.read_from_payload summary.Specs.payload
 
   let of_state pdata { atoms; locks_held } =
     let pdesc = pdata.ProcData.pdesc in
@@ -97,7 +103,7 @@ module Summary = struct
     in
     (atoms, locks_held, formals, tenv)
 
-  let pp fmt (sum_atoms, sum_locks, _, _) =
+  let pp fmt (sum_atoms, sum_locks, _) =
     F.fprintf fmt "{ sum_atoms=%a; sum_locks=%a }"
       Atom.Set.pp sum_atoms
       Lock.MultiSet.pp sum_locks
@@ -140,7 +146,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | None ->
         L.out "Couldn't find summary for %a@." Typ.Procname.pp callee_pname ;
         astate
-    | Some (sum_atoms, sum_locks, formals, tenv) ->
+    | Some (sum_atoms, sum_locks, formals, _) ->
         let f_resolve_id = IdMap.resolve astate.must_point in
         let args = List.map args
             ~f:(fun (arg, typ) -> Option.value_exn (AccessPath.of_lhs_exp arg typ ~f_resolve_id)) in
@@ -232,20 +238,74 @@ let all_pairs =
       with_x @ (aux xs) in
   aux
 
-let may_alias tenv1 p1 tenv2 p2 =
-  let open AccessPath in
-  match List.last_exn (snd p1), List.last_exn (snd p2) with
-  (* a field access can never alias an array access and vice versa *)
-  | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
-  (* two syntactically distinct final field identifiers cannot alias *)
-  | FieldAccess f1, FieldAccess f2 when not (Field.equal f1 f2) -> false
-  (* otherwise the types of the final accesses determine may-alias *)
-  | _ ->
-      let typ1, typ2 =
-        Option.value_exn (Raw.get_typ p1 tenv1), Option.value_exn (Raw.get_typ p2 tenv2) in
-      let tn1, tn2 =
-        Option.value_exn (Typ.name typ1), Option.value_exn (Typ.name typ2) in
-      PatternMatch.is_subtype tenv1 tn1 tn2 || PatternMatch.is_subtype tenv2 tn2 tn1
+(* let may_alias a1 a2 =
+  let rec may_alias_ tenv1 p1 tenv2 p2 =
+    let open AccessPath in
+    let typ1 = Option.value_exn (Raw.get_typ p1 tenv1) in
+    let typ2 = Option.value_exn (Raw.get_typ p2 tenv2) in
+    match typ1, typ2 with
+    | Typ.Tint _, _ | Typ.Tfloat _, _ ->
+        Typ.equal typ1 typ2 &&
+        may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
+    | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
+    | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
+        PatternMatch.is_subtype tenv1 tn1 tn2 ||
+        PatternMatch.is_subtype tenv2 tn2 tn1
+    | Typ.Tvoid , _ | _, Typ.Tvoid
+    | Typ.Tfun _, _ | _, Typ.Tfun _
+    | Typ.Tptr _, _ | _, Typ.Tptr _
+    | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
+    | _, _ -> false
+  in
+  let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
+  let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
+  let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
+  let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
+  let res = may_alias_ tenv1 a1.Atom.lvalue tenv2 a2.Atom.lvalue in
+  L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
+  res *)
+
+(* let may_alias a1 a2 =
+  let rec may_alias_ tenv1 p1 tenv2 p2 =
+    let open AccessPath in
+    match List.last_exn (snd p1), List.last_exn (snd p2) with
+    | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
+    | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
+    | FieldAccess f1, FieldAccess f2 ->
+        (* assumption here is that fields in Infer contain class name *)
+        Field.equal f1 f2
+        (* fields might still be equal without the class name *)
+
+  in
+  assert false *)
+
+let may_alias _ _ = true
+
+    (* let typ1 = Option.value_exn (Raw.get_typ p1 tenv1) in
+    let typ2 = Option.value_exn (Raw.get_typ p2 tenv2) in
+    match typ1, typ2 with
+    | Typ.Tint _, _ | Typ.Tfloat _, _ ->
+        Typ.equal typ1 typ2 &&
+        may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
+    | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
+    | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
+        PatternMatch.is_subtype tenv1 tn1 tn2 ||
+        PatternMatch.is_subtype tenv2 tn2 tn1
+    | Typ.Tvoid , _ | _, Typ.Tvoid
+    | Typ.Tfun _, _ | _, Typ.Tfun _
+    | Typ.Tptr _, _ | _, Typ.Tptr _
+    | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
+    | _, _ -> false
+  in
+  let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
+  let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
+  let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
+  let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
+  let res = may_alias_ tenv1 a1.Atom.lvalue tenv2 a2.Atom.lvalue in
+  L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
+  res *)
+
+
 
 (* run z3 on a set of constraints
    and return the output as a list of strings/lines *)
@@ -297,84 +357,9 @@ let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as p) =
   let callback =
     {Callbacks.get_proc_desc; get_procs_in_file = (fun _ -> []);
      idenv; tenv; proc_name; proc_desc} in
-  (p, compute_and_store_post callback)
-
-(* combine list of summaries of methods called in parallel,
-   currently expects a pair of summaries as we only consider two threads --
-  this is meant to be generalised in the future to n threads *)
-let process_case = function
-  | [ (_, Some sum1); (_, Some sum2)] -> [sum1; sum2]
-  | _ -> assert false
-
-  (* take a list of (proc info, summary) pairs *)
-  (* let compile_case fields locks invmap summaries =
-    let mk_sum_constr (premaps, ctr_map) (sum_atoms, _) =
-      let premap = Field.Map.of_fields fields in
-
-      let ctr_map =
-        Atom.Set.fold
-          (fun a acc ->
-             let c = Atom.compile premap invmap a in
-             IntMap.add (Hashtbl.hash c) (c, a) acc
-          )
-          sum_atoms
-          ctr_map
-      in
-      (premap::premaps, ctr_map)
-    in
-    let (premaps, ctr_map) =
-      List.fold summaries
-        ~init:([], IntMap.empty)
-        ~f:mk_sum_constr in
-    let premaps = List.rev premaps in
-    let split f =
-      let pres = List.map premaps ~f:(fun premap -> Field.Map.find f premap) in
-      let invs = Field.Map.find f invmap in
-      let lockinvs = List.map locks ~f:(fun l -> Lock.Map.find l invs) in
-      Constr.mk_eq_one (pres @ lockinvs)
-    in
-    let extra_ctrs = Field.Set.map_to split List.cons [] fields in
-    let vars =
-      IntMap.fold
-        (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
-        ctr_map
-        Ident.Set.empty
-    in
-    let vars =
-      List.fold
-        extra_ctrs
-        ~init:vars
-        ~f:(fun a c -> Ident.Set.union (Constr.vars c) a)
-      in
-    let extra_ctrs =
-      Ident.Set.fold
-        (fun v a -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::a)
-        vars
-        extra_ctrs in
-    (vars, ctr_map, extra_ctrs)
-  in *)
-
-  let merge compiled =
-    let aux (vars, ctr_map, extra_ctrs) (vars_, ctr_map_, extra_ctrs_) =
-      let vars' = Ident.Set.union vars vars_ in
-      let extra_ctrs' = extra_ctrs_ @ extra_ctrs in
-      let ctr_map' =
-        IntMap.merge
-          (fun _ c1 c2 ->
-             match c1, c2 with
-             | None, None | Some _, Some _ -> assert false
-             | None, Some c | Some c, None -> Some c
-          )
-          ctr_map
-          ctr_map_
-      in
-      (vars', ctr_map', extra_ctrs')
-    in
-    List.fold
-      compiled
-      ~init:(Ident.Set.empty, IntMap.empty, [])
-      ~f:aux
-
+  match compute_and_store_post callback with
+  | Some sum -> Some (p, sum)
+  | None -> None
 
 let run_check (vars, ctr_map, extra_ctrs) =
   (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
@@ -390,7 +375,6 @@ let run_check (vars, ctr_map, extra_ctrs) =
         aux (Ident.Map.add var value acc) ls in
     aux Ident.Map.empty
      in *)
-
   let rec parse_unsat_core = function
     | "sat"::_ -> ()
     | "unsat"::rest -> parse_unsat_core rest
@@ -428,57 +412,109 @@ let run_check (vars, ctr_map, extra_ctrs) =
   let output = run_z3 vars merged in
   List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
   parse_unsat_core output
-    (* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
-      (* begin
-        let varmap = Ident.Set.mk_string_map vars in
-        let model = parse_z3_model varmap output in
-        L.out "Z3 model: %a@.@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
-      end *)
-    (* | _ -> assert false *)
+(* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
+(* begin
+   let varmap = Ident.Set.mk_string_map vars in
+   let model = parse_z3_model varmap output in
+   L.out "Z3 model: %a@.@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
+   end *)
+(* | _ -> assert false *)
 
 
-let analyse_class get_proc_desc _ procs =
-  let procs = List.filter ~f:should_analyze procs in
-  let proc_sums = List.map ~f:(summarise get_proc_desc) procs in
-  let locks =
-    List.fold proc_sums ~init:Lock.Set.empty
-      ~f:(fun acc (_,s) -> Option.value_exn s |> Summary.get_lockset |> Lock.Set.union acc)
-    |>
-    Lock.Set.elements
+
+let merge compiled =
+  let aux (vars, ctr_map, extra_ctrs) (vars_, ctr_map_, extra_ctrs_) =
+    let vars' = Ident.Set.union vars vars_ in
+    let extra_ctrs' = extra_ctrs_ @ extra_ctrs in
+    let ctr_map' =
+      IntMap.merge
+        (fun _ c1 c2 ->
+           match c1, c2 with
+           | None, None | Some _, Some _ -> assert false
+           | None, Some c | Some c, None -> Some c
+        )
+        ctr_map
+        ctr_map_
+    in
+    (vars', ctr_map', extra_ctrs')
   in
-  let all_atoms =
-    List.fold proc_sums ~init:Atom.Set.empty
-      ~f:(fun acc (_,s) -> let (a,_,_,_) = Option.value_exn s in Atom.Set.union a acc)
+  List.fold
+    compiled
+    ~init:(Ident.Set.empty, IntMap.empty, [])
+    ~f:aux
+
+let compile_case partition locks invmap summaries =
+  let pre = Ident.mk () in
+  let compile_summary ctr_map (sum_atoms, _, _, _) =
+    Atom.Set.fold
+      (fun a acc ->
+         let c = Atom.compile pre invmap a in
+         IntMap.add (Hashtbl.hash c) (c, a) acc
+      )
+      (Atom.Set.inter partition sum_atoms)
+      ctr_map
   in
-  let tenvs = List.fold proc_sums ~init:Typ.Procname.Map.empty
-      ~f:(fun acc ((_, tenv, pn, _), _) -> Typ.Procname.Map.add pn tenv acc)
+  let ctr_map = List.fold summaries ~init:IntMap.empty ~f:compile_summary in
+  let lockinvs = List.map locks ~f:(fun l -> Lock.Map.find l invmap) in
+  let extra_ctr = Constr.mk_eq_one (pre :: lockinvs) in
+  let vars =
+    IntMap.fold
+      (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
+      ctr_map
+      (Constr.vars extra_ctr)
   in
-  let may_alias a1 a2 =
-    let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
-    let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
-    let tenv1, tenv2 = Typ.Procname.Map.find pn1 tenvs, Typ.Procname.Map.find pn2 tenvs in
-    may_alias tenv1 a1.Atom.lvalue tenv2 a2.Atom.lvalue
-  in
+  let extra_ctrs =
+    Ident.Set.fold
+      (fun v a -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::a)
+      vars
+      [extra_ctr] in
+  (vars, ctr_map, extra_ctrs)
 
 
-(* let invmap =
-      let mk_lockmap () =
-        List.fold
-          ~f:(fun acc l -> Lock.Map.add l (Ident.mk ()) acc)
-          locks
-          ~init:Lock.Map.empty
-      in
-      Field.Set.fold
-        (fun f acc -> Field.Map.add f (mk_lockmap ()) acc)
-        fields
-        Field.Map.empty
-    in *)
-    (* let pairs = all_pairs proc_sums in
-    let cases = List.map ~f:process_case pairs in
-    let compiled = List.map ~f:(compile_case fields locks invmap) cases in
-    let merged = merge compiled in
-       run_check merged *)
-    ()
+(* combine list of summaries of methods called in parallel,
+   currently expects a pair of summaries as we only consider two threads --
+   this is meant to be generalised in the future to n threads *)
+let process_case = function
+  | [ (_, sum1); (_, sum2)] -> [sum1; sum2]
+  | _ -> assert false
+
+(* run the analysis relative to the given heap location *)
+let analyse_location locks summary_pairs partition =
+  let accesses_partition (_,(atoms,_,_,_)) =
+    not (Atom.Set.is_empty (Atom.Set.inter atoms partition)) in
+  (* only keep method pairs that both access the given location *)
+  let summary_pairs =
+    List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in
+  let invmap =
+    List.fold
+      locks
+      ~init:Lock.Map.empty
+      ~f:(fun acc l -> Lock.Map.add l (Ident.mk ()) acc)
+  in
+  let cases = List.map ~f:process_case summary_pairs in
+  let compiled = List.map ~f:(compile_case partition locks invmap) cases in
+  let merged = merge compiled in
+  run_check merged
+
+let analyse_class get_proc_desc _ methods =
+  let method_summaries =
+    List.filter ~f:should_analyze methods |>
+    List.map ~f:(summarise get_proc_desc) |>
+    List.filter_opt in
+  let (locks_set, all_atoms) =
+    List.fold
+      method_summaries
+      ~init:(Lock.Set.empty, Atom.Set.empty)
+      ~f:(fun (lock_acc, atoms_acc) (_, ((atoms, _, _, _) as sum)) ->
+          let lock_acc' = Summary.get_lockset sum |> Lock.Set.union lock_acc in
+          let atoms_acc' = Atom.Set.union atoms atoms_acc in
+          (lock_acc', atoms_acc')
+        )
+  in
+  let locks = Lock.Set.elements locks_set in
+  let partitions = Atom.Set.quotient may_alias all_atoms in
+  let summary_pairs = all_pairs method_summaries in
+  List.iter ~f:(analyse_location locks summary_pairs) partitions
 
 let file_analysis _ _ get_proc_desc file_env =
   let get_class = function

@@ -264,16 +264,6 @@ module Atom = struct
       path = site::a.path
     }
 
-  let compile premap invmap { access; lvalue; locks } =
-    let lmap = AccessPath.RawMap.find lvalue invmap in
-    let lks = Lock.MultiSet.to_set locks in
-    let invs =
-      Lock.Set.fold (fun l acc -> (Lock.Map.find l lmap)::acc) lks [] in
-    let p = AccessPath.RawMap.find lvalue premap in
-    match access with
-    | Access.Read -> Constr.mk_gt_zero (p::invs)
-    | Access.Write -> Constr.mk_eq_one (p::invs)
-
   module Set = struct
     include PrettyPrintable.MakePPSet(A)
 
@@ -292,6 +282,17 @@ module Atom = struct
       in
       aux [] s
   end
+
+  module Map = PrettyPrintable.MakePPMap(A)
+
+  let compile pre invmap { access; locks } =
+    let locks = Lock.Set.elements (Lock.MultiSet.to_set locks) in
+    let invs = List.map locks ~f:(fun l -> Lock.Map.find l invmap) in
+    match access with
+    | Access.Read -> Constr.mk_gt_zero (pre::invs)
+    | Access.Write -> Constr.mk_eq_one (pre::invs)
+
+
 end
 
 module IdMap = struct
