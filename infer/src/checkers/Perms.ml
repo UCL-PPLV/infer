@@ -53,15 +53,6 @@ let should_report_on_proc (_, _, proc_name, proc_desc) =
   Procdesc.get_access proc_desc <> PredSymb.Private &&
   not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting)
 
-(* let get_fields tenv pname =
-  match Tenv.lookup tenv (get_class pname) with
-  | None -> assert false
-  | Some { Typ.Struct.fields } ->
-      List.fold
-        fields
-        ~init:Field.Set.empty
-        ~f:(fun acc (fld, _, _) -> Field.Set.add fld acc) *)
-
 module ClassMap = PrettyPrintable.MakePPMap(Typename)
 
 module Summary = struct
@@ -242,38 +233,23 @@ let all_pairs =
       with_x @ (aux xs) in
   aux
 
-(* let may_alias a1 a2 =
-  let rec may_alias_ tenv1 p1 tenv2 p2 =
-    let open AccessPath in
+let may_alias a1 a2 =
+  let open AccessPath in
+  let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
+  let unrelated_types () =
+    let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
+    let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
+    let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
+    let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
     let typ1 = Option.value_exn (Raw.get_typ p1 tenv1) in
     let typ2 = Option.value_exn (Raw.get_typ p2 tenv2) in
     match typ1, typ2 with
-    | Typ.Tint _, _ | Typ.Tfloat _, _ ->
-        Typ.equal typ1 typ2 &&
-        may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
-    | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
-    | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
-        PatternMatch.is_subtype tenv1 tn1 tn2 ||
-        PatternMatch.is_subtype tenv2 tn2 tn1
-    | Typ.Tvoid , _ | _, Typ.Tvoid
-    | Typ.Tfun _, _ | _, Typ.Tfun _
-    | Typ.Tptr _, _ | _, Typ.Tptr _
-    | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
-    | _, _ -> false
+    | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _) ->
+        not (PatternMatch.is_subtype tenv1 tn1 tn2) &&
+        not (PatternMatch.is_subtype tenv2 tn2 tn1)
+    | _, Typ.Tstruct _ | Typ.Tstruct _, _ -> assert false
+    | _, _ -> true
   in
-  let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
-  let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
-  let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
-  let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
-  let res = may_alias_ tenv1 a1.Atom.lvalue tenv2 a2.Atom.lvalue in
-  L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
-  res *)
-
-let may_alias a1 a2 =
-  (* let types_related tenv1 tn1 tenv2 tn2 =
-    PatternMatch.is_subtype tenv1 tn1 tn2 || PatternMatch.is_subtype tenv2 tn2 tn1 in *)
-  let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
-  let open AccessPath in
   let res = match List.last_exn (snd p1), List.last_exn (snd p2) with
     | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
     | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
@@ -282,16 +258,17 @@ let may_alias a1 a2 =
         not (String.equal
           (Ident.java_fieldname_get_field f1)
           (Ident.java_fieldname_get_field f2))
+        ||
+        unrelated_types ()
       -> false
     | _, _ -> true
-    (* | _ ->
-        let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
-        let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
-        let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
-        let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
+(* if type of lvalue is primitive then the lvalues may alias
+   if the types are equal and the enclosing types may alias
+   | Typ.Tint _, _ | Typ.Tfloat _, _ ->
+    Typ.equal typ1 typ2 &&
+    may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2) *)
+(* | _ ->
         let pre1, pre2 = Raw.truncate p1, Raw.truncate p2 in
-        let typ1 = Option.value_exn (Raw.get_typ pre1 tenv1) in
-        let typ2 = Option.value_exn (Raw.get_typ pre2 tenv2) in
         not (Typ.equal typ1 typ2) *)
         (* match typ1, typ2 with
         (* if type of lvalue is primitive then the lvalues may alias
