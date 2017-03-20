@@ -213,8 +213,9 @@ let subst theta (base, accesses) =
   match base with
   | (Var.LogicalVar _, _) -> assert false
   | (Var.ProgramVar pvar, _) ->
-      let argument = PvarMap.find pvar theta in
-      AccessPath.append argument accesses
+      match PvarMap.find pvar theta with
+      | Some argument -> AccessPath.append argument accesses
+      | None ->  assert false
 
 module Atom = struct
   module A = struct

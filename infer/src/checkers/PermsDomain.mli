@@ -119,7 +119,7 @@ module Atom : sig
 
   val mk_read : AccessPath.Raw.t -> Lock.MultiSet.t -> CallSite.t -> t
   val mk_write : AccessPath.Raw.t -> Lock.MultiSet.t -> CallSite.t -> t
-  val adapt : Lock.MultiSet.t -> CallSite.t -> AccessPath.Raw.t PvarMap.t -> t -> t
+  val adapt : Lock.MultiSet.t -> CallSite.t -> AccessPath.Raw.t option PvarMap.t -> t -> t
 
   module Set : sig
     include PrettyPrintable.PPSet with type elt = t

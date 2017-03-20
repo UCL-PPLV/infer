@@ -149,7 +149,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Some (sum_atoms, sum_locks, formals, _) ->
         let f_resolve_id = IdMap.resolve astate.must_point in
         let args = List.map args
-            ~f:(fun (arg, typ) -> Option.value_exn (AccessPath.of_lhs_exp arg typ ~f_resolve_id)) in
+            ~f:(fun (arg, typ) -> AccessPath.of_lhs_exp arg typ ~f_resolve_id) in
         let theta = List.fold2_exn formals args ~init:PvarMap.empty
             ~f:(fun acc formal arg -> PvarMap.add formal arg acc) in
         let new_atoms =
@@ -265,45 +265,49 @@ let all_pairs =
   L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
   res *)
 
-(* let may_alias a1 a2 =
-  let rec may_alias_ tenv1 p1 tenv2 p2 =
-    let open AccessPath in
-    match List.last_exn (snd p1), List.last_exn (snd p2) with
-    | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
-    | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
-    | FieldAccess f1, FieldAccess f2 ->
-        (* assumption here is that fields in Infer contain class name *)
-        Field.equal f1 f2
-        (* fields might still be equal without the class name *)
-
-  in
-  assert false *)
-
-let may_alias _ _ = true
-
-    (* let typ1 = Option.value_exn (Raw.get_typ p1 tenv1) in
-    let typ2 = Option.value_exn (Raw.get_typ p2 tenv2) in
-    match typ1, typ2 with
-    | Typ.Tint _, _ | Typ.Tfloat _, _ ->
-        Typ.equal typ1 typ2 &&
-        may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
-    | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
-    | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
-        PatternMatch.is_subtype tenv1 tn1 tn2 ||
-        PatternMatch.is_subtype tenv2 tn2 tn1
-    | Typ.Tvoid , _ | _, Typ.Tvoid
-    | Typ.Tfun _, _ | _, Typ.Tfun _
-    | Typ.Tptr _, _ | _, Typ.Tptr _
-    | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
-    | _, _ -> false
-  in
+let may_alias a1 a2 =
+  (* let types_related tenv1 tn1 tenv2 tn2 =
+    PatternMatch.is_subtype tenv1 tn1 tn2 || PatternMatch.is_subtype tenv2 tn2 tn1 in *)
   let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
   let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
   let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
   let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
-  let res = may_alias_ tenv1 a1.Atom.lvalue tenv2 a2.Atom.lvalue in
+  let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
+  let open AccessPath in
+  let res = match List.last_exn (snd p1), List.last_exn (snd p2) with
+    | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
+    | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
+    (* fields in Infer contain class name *)
+    | FieldAccess f1, FieldAccess f2 when Field.equal f1 f2 -> true
+    | _ ->
+        (* field names are not equal but we can't conclude non-aliasing due
+           to typing in Java: eg class A derives from B, A.x may alias B.x but
+           fields will not compare equal by Infer  *)
+        let pre1, pre2 = Raw.truncate p1, Raw.truncate p2 in
+        let typ1 = Option.value_exn (Raw.get_typ pre1 tenv1) in
+        let typ2 = Option.value_exn (Raw.get_typ pre2 tenv2) in
+        (* field names are not the same but if the enclosing type is the same, then no alias *)
+        not (Typ.equal typ1 typ2)
+        (* match typ1, typ2 with
+        (* if type of lvalue is primitive then the lvalues may alias
+           if the types are equal and the enclosing types may alias *)
+        | Typ.Tint _, _ | Typ.Tfloat _, _ ->
+            Typ.equal typ1 typ2 &&
+            may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
+        | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
+        | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
+        | Typ.Tvoid , _ | _, Typ.Tvoid
+        | Typ.Tfun _, _ | _, Typ.Tfun _
+        | Typ.Tptr _, _ | _, Typ.Tptr _
+        | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
+        | _, _ -> false *)
+  in
   L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
-  res *)
+  res
+
+
+(* let may_alias _ _ = true *)
+
 
 
 
@@ -420,32 +424,47 @@ let run_check (vars, ctr_map, extra_ctrs) =
    end *)
 (* | _ -> assert false *)
 
-
-
+(* merge sets of variables, constraint maps and extra constraints for each method pair,
+   and bound every permission variable along the way *)
 let merge compiled =
-  let aux (vars, ctr_map, extra_ctrs) (vars_, ctr_map_, extra_ctrs_) =
+  let aux (vars, ctr_map, star_intro_ctrs) (ctr_map_, star_intro_ctr_) =
+    let vars_ =
+      IntMap.fold
+        (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
+        ctr_map
+        (Constr.vars star_intro_ctr_)
+    in
     let vars' = Ident.Set.union vars vars_ in
-    let extra_ctrs' = extra_ctrs_ @ extra_ctrs in
+    let star_intro_ctrs' = star_intro_ctr_ :: star_intro_ctrs in
     let ctr_map' =
       IntMap.merge
         (fun _ c1 c2 ->
            match c1, c2 with
+           (* int key is the hash of a constraint so we must never have a conflict *)
            | None, None | Some _, Some _ -> assert false
            | None, Some c | Some c, None -> Some c
         )
         ctr_map
         ctr_map_
     in
-    (vars', ctr_map', extra_ctrs')
+    (vars', ctr_map', star_intro_ctrs')
   in
-  List.fold
-    compiled
-    ~init:(Ident.Set.empty, IntMap.empty, [])
-    ~f:aux
+  let vars, ctr_map, star_intro_ctrs =
+    List.fold compiled ~init:(Ident.Set.empty, IntMap.empty, []) ~f:aux in
+  let bounded_ctrs =
+    Ident.Set.fold
+      (fun v acc -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::acc)
+      vars
+      star_intro_ctrs in
+  (vars, ctr_map, bounded_ctrs @ star_intro_ctrs)
 
+(* for a given pair of methods, generate appropriate constraints *)
 let compile_case partition locks invmap summaries =
-  let pre = Ident.mk () in
-  let compile_summary ctr_map (sum_atoms, _, _, _) =
+  (* for each method create a precondition permission variable for the given location *)
+  let pres = List.map summaries ~f:(fun _ -> Ident.mk ()) in
+  (* for a given summary and precondition var generate constraints
+  as well as a map that will allow converting back from a Z3 unsat core *)
+  let compile_summary ctr_map pre (sum_atoms, _, _, _) =
     Atom.Set.fold
       (fun a acc ->
          let c = Atom.compile pre invmap a in
@@ -454,21 +473,11 @@ let compile_case partition locks invmap summaries =
       (Atom.Set.inter partition sum_atoms)
       ctr_map
   in
-  let ctr_map = List.fold summaries ~init:IntMap.empty ~f:compile_summary in
+  let ctr_map = List.fold2_exn pres summaries ~init:IntMap.empty ~f:compile_summary in
   let lockinvs = List.map locks ~f:(fun l -> Lock.Map.find l invmap) in
-  let extra_ctr = Constr.mk_eq_one (pre :: lockinvs) in
-  let vars =
-    IntMap.fold
-      (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
-      ctr_map
-      (Constr.vars extra_ctr)
-  in
-  let extra_ctrs =
-    Ident.Set.fold
-      (fun v a -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::a)
-      vars
-      [extra_ctr] in
-  (vars, ctr_map, extra_ctrs)
+  (* add the constraint by star introduction *)
+  let star_intro_ctr = Constr.mk_eq_one (pres @ lockinvs) in
+  (ctr_map, star_intro_ctr)
 
 
 (* combine list of summaries of methods called in parallel,
@@ -480,27 +489,32 @@ let process_case = function
 
 (* run the analysis relative to the given heap location *)
 let analyse_location locks summary_pairs partition =
-  let accesses_partition (_,(atoms,_,_,_)) =
-    not (Atom.Set.is_empty (Atom.Set.inter atoms partition)) in
+  (* let accesses_partition (_,(atoms,_,_,_)) =
+    not (Atom.Set.is_empty (Atom.Set.inter atoms partition)) in *)
   (* only keep method pairs that both access the given location *)
-  let summary_pairs =
-    List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in
+  (* let summary_pairs =
+     List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in *)
+  (* build a map from locks to permission variables in each lock's resource invariant *)
   let invmap =
     List.fold
       locks
       ~init:Lock.Map.empty
       ~f:(fun acc l -> Lock.Map.add l (Ident.mk ()) acc)
   in
+  (* throw away info from file_env -- we don't need it for now *)
   let cases = List.map ~f:process_case summary_pairs in
+  (* for each pair of methods, generate the permissions constraints *)
   let compiled = List.map ~f:(compile_case partition locks invmap) cases in
   let merged = merge compiled in
   run_check merged
 
 let analyse_class get_proc_desc _ methods =
+  (* summarise all methods -- NB for now we ignore methods that fail analysis. *)
   let method_summaries =
     List.filter ~f:should_analyze methods |>
     List.map ~f:(summarise get_proc_desc) |>
     List.filter_opt in
+  (* compute all atoms and locks across all methods *)
   let (locks_set, all_atoms) =
     List.fold
       method_summaries
@@ -512,10 +526,14 @@ let analyse_class get_proc_desc _ methods =
         )
   in
   let locks = Lock.Set.elements locks_set in
+  (* quotient set of atoms by may_alias *)
   let partitions = Atom.Set.quotient may_alias all_atoms in
+  (* create all pairs of analyseable methods *)
   let summary_pairs = all_pairs method_summaries in
+  (* for each heap location, run the analysis on the method pairs *)
   List.iter ~f:(analyse_location locks summary_pairs) partitions
 
+(* partition methods in file by class and then run analyse_class on each set *)
 let file_analysis _ _ get_proc_desc file_env =
   let get_class = function
     | Typ.Procname.Java java_pname -> Typ.Procname.java_get_class_type_name java_pname
