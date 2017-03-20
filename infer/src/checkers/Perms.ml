@@ -124,14 +124,6 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Lock -> true
     | _ -> false
 
-  let get_lock pn _ =
-    if Typ.Procname.equal pn BuiltinDecl.__set_locked_attribute ||
-       Typ.Procname.equal pn BuiltinDecl.__delete_locked_attribute then
-      Lock.This
-    else
-      (*FIXME!! we pretend everything is this *)
-      Lock.This
-
   let do_call caller_pdesc callee_pname args astate site =
     match Summary.read_summary caller_pdesc callee_pname with
     | None ->
@@ -187,15 +179,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | Sil.Remove_temps (ids, _) ->
         State.remove_ids ids astate
 
+    | Sil.Call (_, Const (Cfun pn), [(exp, typ)], _, _) when is_un_lock pn ->
+        let lock = State.must_resolve exp typ astate in
+        let f = if is_lock pn then Lock.MultiSet.add else Lock.MultiSet.remove in
+        { astate with locks_held = f lock astate.locks_held }
+
     | Sil.Call (_, Const (Cfun pn), args, location, _) ->
-        if is_un_lock pn then
-          let to_lock = is_lock pn in
-          let lock = get_lock pn args in
-          let f = if to_lock then Lock.MultiSet.add else Lock.MultiSet.remove in
-          { astate with locks_held = f lock astate.locks_held }
-        else
-          let site = CallSite.make procname location in
-          do_call curr_pdesc pn args astate site
+        let site = CallSite.make procname location in
+        do_call curr_pdesc pn args astate site
 
     | Sil.Declare_locals _ | Sil.Prune _ -> astate
 
@@ -237,18 +228,19 @@ let may_alias a1 a2 =
   let open AccessPath in
   let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
   let unrelated_types () =
-    let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
-    let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
-    let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
-    let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
-    let typ1 = Option.value_exn (Raw.get_typ p1 tenv1) in
-    let typ2 = Option.value_exn (Raw.get_typ p2 tenv2) in
+    let get_type a =
+      let p = a.Atom.lvalue in
+      let (_,_,_,tenv) =
+        Option.value_exn (List.last_exn a.Atom.path |> CallSite.pname |> Summary.get_summary) in
+      (Option.value_exn(Raw.get_typ p tenv), tenv)
+    in
+    let (typ1, tenv1), (typ2, tenv2) = get_type a1, get_type a2 in
     match typ1, typ2 with
     | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _) ->
         not (PatternMatch.is_subtype tenv1 tn1 tn2) &&
         not (PatternMatch.is_subtype tenv2 tn2 tn1)
     | _, Typ.Tstruct _ | Typ.Tstruct _, _ -> assert false
-    | _, _ -> true
+    | _, _ -> false
   in
   let res = match List.last_exn (snd p1), List.last_exn (snd p2) with
     | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
@@ -492,12 +484,14 @@ let analyse_location locks summary_pairs partition =
   run_check merged
 
 let analyse_class get_proc_desc _ methods =
+  L.out "SUMMARISATION START@." ;
   (* summarise all methods -- NB for now we ignore methods that fail analysis. *)
   let method_summaries =
     List.filter ~f:should_analyze methods |>
     List.map ~f:(summarise get_proc_desc) |>
     List.filter_opt in
   (* compute all atoms and locks across all methods *)
+  L.out "SUMMARISATION END@." ;
   let (locks_set, all_atoms) =
     List.fold
       method_summaries
@@ -509,8 +503,10 @@ let analyse_class get_proc_desc _ methods =
         )
   in
   let locks = Lock.Set.elements locks_set in
+  L.out "LOCKS %d /ATOMS %d @." (List.length locks) (Atom.Set.cardinal all_atoms);
   (* quotient set of atoms by may_alias *)
   let partitions = Atom.Set.quotient may_alias all_atoms in
+  L.out "PARTITIONS@." ;
   (* create all pairs of analyseable methods *)
   let summary_pairs = all_pairs method_summaries in
   (* for each heap location, run the analysis on the method pairs *)

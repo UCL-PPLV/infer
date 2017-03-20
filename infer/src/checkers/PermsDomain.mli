@@ -24,9 +24,7 @@ module Constr : sig
 end
 
 module Lock : sig
-  type t =
-    | This
-    | Fld of Ident.fieldname
+  type t = AccessPath.Raw.t
   val compare : t -> t -> int
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit

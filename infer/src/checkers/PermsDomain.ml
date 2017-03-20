@@ -54,7 +54,8 @@ module Constr = struct
 end
 
 module Lock = struct
-  module L = struct
+  module L = AccessPath.Raw
+  (* module L = struct
     type t =
       | This
       | Fld of Ident.fieldname[@@deriving compare]
@@ -62,7 +63,7 @@ module Lock = struct
     let pp fmt = function
       | This -> F.pp_print_string fmt "|This|"
       | Fld f -> F.fprintf fmt "F(%a)" Ident.pp_fieldname f
-  end
+  end *)
   include L
 
   module Set = PrettyPrintable.MakePPSet(L)
@@ -227,14 +228,14 @@ module Atom = struct
       map_to f add empty s
 
     (* quotient an atom set by pred2 -- pred2 must be eq. relation *)
-    let quotient pred2 s =
+    let quotient pred2 init =
       let rec aux acc s =
         if is_empty s then acc else
           let a = choose s in
           let (a_part, non_a_part) = partition (pred2 a) s in
           aux (a_part::acc) non_a_part
       in
-      aux [] s
+      aux [] init
   end
 
   module Map = PrettyPrintable.MakePPMap(A)
