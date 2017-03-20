@@ -136,7 +136,10 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         let theta = List.fold2_exn formals args ~init:PvarMap.empty
             ~f:(fun acc formal arg -> PvarMap.add formal arg acc) in
         let new_atoms =
-          Atom.Set.endomap (Atom.adapt astate.locks_held site theta) sum_atoms in
+          Atom.Set.union
+            astate.atoms
+            (Atom.Set.endomap (Atom.adapt astate.locks_held site theta) sum_atoms)
+        in
         let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
         {astate with atoms=new_atoms; locks_held=new_locks}
 
@@ -193,6 +196,14 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     | _ ->
        L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
        astate
+
+  (* let exec_instr astate pdata x cmd =
+    L.out "***START ANALYSIS OF %a ***@." (Sil.pp_instr Pp.text) cmd ;
+    L.out "***ATOMS BEFORE = %a ***@." Atom.Set.pp astate.atoms ;
+    let astate' = exec_instr astate pdata x cmd in
+    L.out "***ATOMS AFTER = %a ***@." Atom.Set.pp astate'.atoms ;
+    astate' *)
+
 
 end
 
