@@ -3,55 +3,8 @@ open! IStd
 module F = Format
 module L = Logging
 
-(* permission variables as identifiers *)
-module Ident = struct
-  module I = struct
-    include Ident
-    let pp = pp Pp.text
-  end
-  include I
-
-  let to_z3 = pp
-
-  module Set = struct
-    include PrettyPrintable.MakePPSet(I)
-    let to_z3 fmt s =
-      iter (F.fprintf fmt "(declare-const %a Real)@." to_z3) s
-  end
-
-  module Map = PrettyPrintable.MakePPMap(I)
-
-  let mk () =
-    create_fresh Ident.kprimed
-end
-
-(* class fields *)
-module Field = struct
-  module F = struct
-    type t = Ident.fieldname
-    let compare = Ident.compare_fieldname
-    let equal = [%compare.equal : t]
-    let pp = Ident.pp_fieldname
-  end
-  include F
-
-  module Set = struct
-    include PrettyPrintable.MakePPSet(F)
-
-    let map_to f oadd oempty s =
-      fold (fun x acc -> oadd (f x) acc) s oempty
-    let endomap f s =
-      map_to f add empty s
-  end
-
-  module Map = struct
-    include PrettyPrintable.MakePPMap(F)
-
-    (* make a new map from a set of fields into fresh logical var ids *)
-    let of_fields fields =
-      Set.fold (fun f fm -> add f (Ident.mk ()) fm) fields empty
-  end
-end
+let mk_permvar () =
+  Ident.create_fresh Ident.kprimed
 
 (* Constraints over permission variables *)
 module Constr = struct
@@ -86,9 +39,9 @@ module Constr = struct
         assert false
 
   let rec vars = function
-    | Exp.Var v -> Ident.Set.singleton v
-    | Exp.BinOp(_, t1, t2) -> Ident.Set.union (vars t1) (vars t2)
-    | _ -> Ident.Set.empty
+    | Exp.Var v -> Ident.IdentSet.singleton v
+    | Exp.BinOp(_, t1, t2) -> Ident.IdentSet.union (vars t1) (vars t2)
+    | _ -> Ident.IdentSet.empty
 
   (* ordered set of permission constraints *)
   module Set = struct
@@ -96,7 +49,7 @@ module Constr = struct
 
     (* variables of a constraint set *)
     let vars c =
-      fold (fun exp a -> Ident.Set.union (vars exp) a) c Ident.Set.empty
+      fold (fun exp a -> Ident.IdentSet.union (vars exp) a) c Ident.IdentSet.empty
   end
 end
 
@@ -104,11 +57,11 @@ module Lock = struct
   module L = struct
     type t =
       | This
-      | Fld of Field.t[@@deriving compare]
+      | Fld of Ident.fieldname[@@deriving compare]
     let equal = [%compare.equal : t]
     let pp fmt = function
       | This -> F.pp_print_string fmt "|This|"
-      | Fld f -> F.fprintf fmt "F(%a)" Field.pp f
+      | Fld f -> F.fprintf fmt "F(%a)" Ident.pp_fieldname f
   end
   include L
 

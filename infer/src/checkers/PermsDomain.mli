@@ -1,46 +1,6 @@
 open! IStd
 
-(* permission variables as identifiers *)
-module Ident : sig
-  type t = Ident.t
-  type fieldname = Ident.fieldname
-
-  val pp : Format.formatter -> t -> unit
-  val to_z3 : Format.formatter -> t -> unit
-
-  module Set : sig
-    include PrettyPrintable.PPSet with type elt = t
-
-    val to_z3 : Format.formatter -> t -> unit
-  end
-
-  module Map : PrettyPrintable.PPMap with type key = t
-
-  (* get a new fresh logical var id *)
-  val mk : unit -> t
-end
-
-(* class fields *)
-module Field : sig
-  type t = Ident.fieldname
-  val equal : t -> t -> bool
-
-  val pp : Format.formatter -> t -> unit
-
-  module Set : sig
-    include PrettyPrintable.PPSet with type elt = t
-
-    val endomap : (elt -> elt) -> t -> t
-    val map_to : (elt -> 'a) -> ('a -> 'b -> 'b) -> 'b -> t -> 'b
-  end
-
-  module Map : sig
-    include PrettyPrintable.PPMap with type key = t
-
-(* make a new map from a set of fields into fresh logical var ids *)
-    val of_fields : Set.t -> Ident.t t
-  end
-end
+val mk_permvar : unit -> Ident.t
 
 module Constr : sig
   type t = Exp.t
@@ -52,14 +12,14 @@ module Constr : sig
   val mk_gt_zero : Ident.t list -> t
 
   val to_z3 : Format.formatter -> t -> unit
-  val vars : t -> Ident.Set.t
+  val vars : t -> Ident.IdentSet.t
 
   (* ordered set of permission constraints *)
   module Set : sig
     include PrettyPrintable.PPSet with type elt = t
 
     (* variables of a constraint set *)
-    val vars : t -> Ident.Set.t
+    val vars : t -> Ident.IdentSet.t
   end
 end
 
@@ -177,7 +137,7 @@ module State : sig
   val pp : Format.formatter -> t -> unit
 end
 
-(* summary type, omit transient parts of astate, last field is formals *)
+(* summary = atoms generated, lock state, formals list, type environment *)
 type summary = Atom.Set.t * Lock.MultiSet.t * Pvar.t list * Tenv.t
 
 module Domain : AbstractDomain.S with type astate = astate

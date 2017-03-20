@@ -164,6 +164,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
     match cmd with
     | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
         let site = CallSite.make procname location in
+        (* below we should be using a may-resolve FIXME *)
         let lvalue = State.must_resolve rhs_exp rhs_typ astate in
         let astate =
           match rhs_exp with
@@ -177,6 +178,7 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         let astate =
           match lhs_exp with
           | Exp.Lfield _ | Exp.Lindex _ ->
+              (* below we should be using a may-resolve FIXME *)
               let lvalue = State.must_resolve lhs_exp lhs_typ astate in
               State.add_write lvalue site astate
           | Exp.Lvar lhs_pvar ->
@@ -203,6 +205,8 @@ module MakeTransferFunctions(CFG : ProcCfg.S) = struct
         else
           let site = CallSite.make procname location in
           do_call curr_pdesc pn args astate site
+
+    | Sil.Declare_locals _ | Sil.Prune _ -> astate
 
     | _ ->
        L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
@@ -268,26 +272,27 @@ let all_pairs =
 let may_alias a1 a2 =
   (* let types_related tenv1 tn1 tenv2 tn2 =
     PatternMatch.is_subtype tenv1 tn1 tn2 || PatternMatch.is_subtype tenv2 tn2 tn1 in *)
-  let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
-  let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
-  let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
-  let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
   let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
   let open AccessPath in
   let res = match List.last_exn (snd p1), List.last_exn (snd p2) with
     | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
     | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
     (* fields in Infer contain class name *)
-    | FieldAccess f1, FieldAccess f2 when Field.equal f1 f2 -> true
-    | _ ->
-        (* field names are not equal but we can't conclude non-aliasing due
-           to typing in Java: eg class A derives from B, A.x may alias B.x but
-           fields will not compare equal by Infer  *)
+    | FieldAccess f1, FieldAccess f2 when
+        not (String.equal
+          (Ident.java_fieldname_get_field f1)
+          (Ident.java_fieldname_get_field f2))
+      -> false
+    | _, _ -> true
+    (* | _ ->
+        let s1, s2 = List.last_exn a1.Atom.path, List.last_exn a2.Atom.path in
+        let pn1, pn2 = CallSite.pname s1, CallSite.pname s2 in
+        let (_,_,_,tenv1) = Option.value_exn (Summary.get_summary pn1) in
+        let (_,_,_,tenv2) = Option.value_exn (Summary.get_summary pn2) in
         let pre1, pre2 = Raw.truncate p1, Raw.truncate p2 in
         let typ1 = Option.value_exn (Raw.get_typ pre1 tenv1) in
         let typ2 = Option.value_exn (Raw.get_typ pre2 tenv2) in
-        (* field names are not the same but if the enclosing type is the same, then no alias *)
-        not (Typ.equal typ1 typ2)
+        not (Typ.equal typ1 typ2) *)
         (* match typ1, typ2 with
         (* if type of lvalue is primitive then the lvalues may alias
            if the types are equal and the enclosing types may alias *)
@@ -328,7 +333,8 @@ let run_z3 vars merged =
     | -1 -> F.fprintf fmt "(assert %a)" Constr.to_z3 e
     | n -> F.fprintf fmt "(assert (! %a :named C%i))" Constr.to_z3 e n
   in
-
+  let to_z3 fmt s =
+    Ident.IdentSet.iter (F.fprintf fmt "(declare-const %a Real)@." (Ident.pp Pp.text)) s in
   let in_ch,out_ch = Unix.open_process "z3 -in" in
   let fmt = F.formatter_of_out_channel out_ch in
   L.out "Passing to Z3:@." ;
@@ -339,7 +345,7 @@ let run_z3 vars merged =
   F.fprintf fmt "(set-option :unsat_core true)@." ;
   (* request decimals, not fractions, may append "?" if imprecise *)
   F.fprintf fmt "(set-option :pp.decimal true)@." ;
-  F.fprintf fmt "%a@." Ident.Set.to_z3 vars ;
+  F.fprintf fmt "%a@." to_z3 vars ;
   List.iter ~f:(fun id_c -> F.fprintf fmt "%a@." z3assert id_c) merged ;
   F.fprintf fmt "(check-sat)@." ;
   F.fprintf fmt "(get-unsat-core)@." ;
@@ -430,11 +436,11 @@ let merge compiled =
   let aux (vars, ctr_map, star_intro_ctrs) (ctr_map_, star_intro_ctr_) =
     let vars_ =
       IntMap.fold
-        (fun _ (c,_) acc -> Ident.Set.union (Constr.vars c) acc)
+        (fun _ (c,_) acc -> Ident.IdentSet.union (Constr.vars c) acc)
         ctr_map
         (Constr.vars star_intro_ctr_)
     in
-    let vars' = Ident.Set.union vars vars_ in
+    let vars' = Ident.IdentSet.union vars vars_ in
     let star_intro_ctrs' = star_intro_ctr_ :: star_intro_ctrs in
     let ctr_map' =
       IntMap.merge
@@ -450,9 +456,9 @@ let merge compiled =
     (vars', ctr_map', star_intro_ctrs')
   in
   let vars, ctr_map, star_intro_ctrs =
-    List.fold compiled ~init:(Ident.Set.empty, IntMap.empty, []) ~f:aux in
+    List.fold compiled ~init:(Ident.IdentSet.empty, IntMap.empty, []) ~f:aux in
   let bounded_ctrs =
-    Ident.Set.fold
+    Ident.IdentSet.fold
       (fun v acc -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::acc)
       vars
       star_intro_ctrs in
@@ -461,7 +467,7 @@ let merge compiled =
 (* for a given pair of methods, generate appropriate constraints *)
 let compile_case partition locks invmap summaries =
   (* for each method create a precondition permission variable for the given location *)
-  let pres = List.map summaries ~f:(fun _ -> Ident.mk ()) in
+  let pres = List.map summaries ~f:(fun _ -> mk_permvar ()) in
   (* for a given summary and precondition var generate constraints
   as well as a map that will allow converting back from a Z3 unsat core *)
   let compile_summary ctr_map pre (sum_atoms, _, _, _) =
@@ -499,7 +505,7 @@ let analyse_location locks summary_pairs partition =
     List.fold
       locks
       ~init:Lock.Map.empty
-      ~f:(fun acc l -> Lock.Map.add l (Ident.mk ()) acc)
+      ~f:(fun acc l -> Lock.Map.add l (mk_permvar ()) acc)
   in
   (* throw away info from file_env -- we don't need it for now *)
   let cases = List.map ~f:process_case summary_pairs in
