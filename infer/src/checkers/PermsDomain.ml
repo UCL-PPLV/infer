@@ -55,15 +55,6 @@ end
 
 module Lock = struct
   module L = AccessPath.Raw
-  (* module L = struct
-    type t =
-      | This
-      | Fld of Ident.fieldname[@@deriving compare]
-    let equal = [%compare.equal : t]
-    let pp fmt = function
-      | This -> F.pp_print_string fmt "|This|"
-      | Fld f -> F.fprintf fmt "F(%a)" Ident.pp_fieldname f
-  end *)
   include L
 
   module Set = PrettyPrintable.MakePPSet(L)
@@ -154,6 +145,14 @@ module Lock = struct
         Map.remove l m
       else
         Map.add l (n-1) m
+
+    let endomap f m =
+      Map.fold
+        (fun k v acc ->
+           union (Map.add (f k) v Map.empty) acc
+        )
+        m
+        Map.empty
   end
 end
 
@@ -215,7 +214,7 @@ module Atom = struct
   let adapt lks site theta a =
     { a with
       lvalue = subst theta a.lvalue;
-      locks = Lock.MultiSet.union lks a.locks;
+      locks = Lock.MultiSet.union lks (Lock.MultiSet.endomap (subst theta) a.locks);
       path = site::a.path
     }
 
