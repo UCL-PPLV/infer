@@ -161,6 +161,15 @@ let register_perf_stats_report () =
   Unix.mkdir_p stats_dir;
   PerfStats.register_report_at_exit stats_file
 
+let reset_duplicates_file () =
+  let start = Config.results_dir ^/ Config.duplicates_filename in
+  let delete () =
+    Unix.unlink start in
+  let create () =
+    Unix.close (Unix.openfile ~perm:0o0666 ~mode:[Unix.O_CREAT; Unix.O_WRONLY] start) in
+  if Sys.file_exists start = `Yes then delete ();
+  create ()
+
 (* Create the .start file, and update the timestamp unless in continue mode *)
 let touch_start_file_unless_continue () =
   let start = Config.results_dir ^/ Config.start_filename in
@@ -298,12 +307,17 @@ let execute_analyze () =
     run_parallel_analysis ()
 
 let report () =
-  let report_csv = Some (Config.results_dir ^/ "report.csv") in
+  let report_csv =
+    if Config.buck_cache_mode then None else Some (Config.results_dir ^/ "report.csv") in
   let report_json = Some (Config.results_dir ^/ "report.json") in
   InferPrint.main ~report_csv ~report_json ;
-  match Config.report_hook with
-  | None -> ()
-  | Some prog ->
+  (* Post-process the report according to the user config. By default, calls report.py to create a
+     human-readable report. *)
+  match Config.buck_cache_mode, Config.report_hook with
+  | true, _ (* do not bother calling the report hook when called from within Buck *)
+  | false, None ->
+      ()
+  | false, Some prog ->
       let if_some key opt args = match opt with None -> args | Some arg -> key :: arg :: args in
       let if_true key opt args = if not opt then args else key :: args in
       let args =
@@ -445,6 +459,7 @@ let infer_mode () =
   if Config.print_builtins then Builtin.print_and_exit () ;
   if CLOpt.is_originator then L.do_out "%s@\n" Config.version_string ;
   if Config.debug_mode || Config.stats_mode then log_infer_args driver_mode ;
+  if Config.dump_duplicate_symbols then reset_duplicates_file ();
   (* infer might be called from a Makefile and itself uses `make` to run the analysis in parallel,
      but cannot communicate with the parent make command. Since infer won't interfere with them
      anyway, pretend that we are not called from another make to prevent make falling back to a

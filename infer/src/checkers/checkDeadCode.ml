@@ -63,7 +63,7 @@ let do_node _ node (s : State.t) : (State.t list) * (State.t list) =
 (** Report an error. *)
 let report_error tenv description pn pd loc =
   if verbose then L.stderr "ERROR: %s@." description;
-  Checkers.ST.report_error tenv pn pd "CHECKERS_DEAD_CODE" loc description
+  Checkers.ST.report_error tenv pn pd Localise.checkers_dead_code loc description
 
 
 (** Check the final state at the end of the analysis. *)
@@ -91,7 +91,8 @@ let check_final_state tenv proc_name proc_desc final_s =
     end
 
 (** Simple check for dead code. *)
-let callback_check_dead_code { Callbacks.proc_desc; proc_name; tenv } =
+let callback_check_dead_code { Callbacks.proc_desc; tenv } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
 
   let module DFDead = MakeDF(struct
       type t = State.t
@@ -113,4 +114,5 @@ let callback_check_dead_code { Callbacks.proc_desc; proc_name; tenv } =
       | DFDead.Dead_state -> ()
     end in
 
-  do_check ()
+  do_check ();
+  Specs.get_summary_unsafe "callback_check_dead_code" proc_name

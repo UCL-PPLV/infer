@@ -71,7 +71,7 @@ module ST = struct
         description
         (Option.value ~default:"" advice)
         [("always_report", string_of_bool always_report)] in
-    let exn = exception_kind kind localized_description in
+    let exn = exception_kind (Localise.to_issue_id kind) localized_description in
     let proc_attributes = Specs.pdesc_resolve_attributes proc_desc in
 
     (* Errors can be suppressed with annotations. An error of kind CHECKER_ERROR_NAME can be
@@ -90,9 +90,11 @@ module ST = struct
 
         let is_parameter_suppressed =
           String.is_suffix a.class_name ~suffix:Annotations.suppress_lint &&
-          List.mem ~equal:normalized_equal a.parameters kind in
+          List.mem ~equal:normalized_equal a.parameters (Localise.to_issue_id kind) in
         let is_annotation_suppressed =
-          String.is_suffix ~suffix:(normalize (drop_prefix kind)) (normalize a.class_name) in
+          String.is_suffix
+            ~suffix:(normalize (drop_prefix (Localise.to_issue_id kind)))
+            (normalize a.class_name) in
 
         is_parameter_suppressed || is_annotation_suppressed in
 
@@ -134,7 +136,7 @@ module ST = struct
         if !verbose then
           begin
             L.stdout "%s: %a: %s@."
-              kind
+              (Localise.to_issue_id kind)
               SourceFile.pp loc.Location.file
               (Typ.Procname.to_string proc_name);
             L.stdout "%s@." description
@@ -151,7 +153,7 @@ let report_calls_and_accesses tenv callback proc_desc instr =
       ST.report_error tenv
         proc_name
         proc_desc
-        (callback ^ "_CALLBACK")
+        callback
         (Procdesc.get_loc proc_desc)
         (Format.sprintf "field access %s.%s:%s in %s@." bt fn ft callee)
   | None ->
@@ -160,16 +162,18 @@ let report_calls_and_accesses tenv callback proc_desc instr =
           ST.report_error tenv
             proc_name
             proc_desc
-            (callback ^ "_CALLBACK")
+            callback
             (Procdesc.get_loc proc_desc)
             (Format.sprintf "method call %s.%s(%s):%s in %s@." bt fn "..." rt callee)
       | None -> ()
 
 (** Report all field accesses and method calls of a procedure. *)
-let callback_check_access { Callbacks.tenv; proc_desc } =
+let callback_check_access { Callbacks.tenv; proc_desc; } =
   Procdesc.iter_instrs
-    (fun _ instr  -> report_calls_and_accesses tenv "PROC" proc_desc instr)
-    proc_desc
+    (fun _ instr  -> report_calls_and_accesses tenv Localise.proc_callback proc_desc instr)
+    proc_desc;
+  Specs.get_summary_unsafe "callback_check_access" (Procdesc.get_proc_name proc_desc)
+
 
 (** Report all field accesses and method calls of a class. *)
 let callback_check_cluster_access exe_env all_procs get_proc_desc _ =
@@ -178,7 +182,8 @@ let callback_check_cluster_access exe_env all_procs get_proc_desc _ =
       | Some proc_desc ->
           let tenv = Exe_env.get_tenv exe_env proc_name in
           Procdesc.iter_instrs
-            (fun _ instr -> report_calls_and_accesses tenv "CLUSTER" proc_desc instr)
+            (fun _ instr ->
+               report_calls_and_accesses tenv Localise.cluster_callback proc_desc instr)
             proc_desc
       | _ ->
           ()
@@ -186,7 +191,8 @@ let callback_check_cluster_access exe_env all_procs get_proc_desc _ =
 
 (** Looks for writeToParcel methods and checks whether read is in reverse *)
 let callback_check_write_to_parcel_java
-    pname_java ({ Callbacks.tenv; proc_desc; idenv; get_proc_desc } as args) =
+    pname_java { Callbacks.tenv; proc_desc; idenv; get_proc_desc } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
   let verbose = ref false in
 
   let is_write_to_parcel this_expr this_type =
@@ -194,7 +200,7 @@ let callback_check_write_to_parcel_java
       String.equal (Typ.Procname.java_get_method pname_java) "writeToParcel" in
     let expr_match () = Exp.is_this this_expr in
     let type_match () =
-      let class_name = Typename.Java.from_string "android.os.Parcelable" in
+      let class_name = Typ.Name.Java.from_string "android.os.Parcelable" in
       match this_type with
       | Typ.Tptr (Tstruct name, _) | Tstruct name ->
           PatternMatch.is_immediate_subtype tenv name class_name
@@ -262,17 +268,17 @@ let callback_check_write_to_parcel_java
       | rc:: rcs, wc:: wcs ->
           if not (is_inverse rc wc) then
             L.stdout "Serialization missmatch in %a for %a and %a@."
-              Typ.Procname.pp args.Callbacks.proc_name
+              Typ.Procname.pp proc_name
               Typ.Procname.pp rc
               Typ.Procname.pp wc
           else
             check_match (rcs, wcs)
       | rc:: _, [] ->
           L.stdout "Missing write in %a: for %a@."
-            Typ.Procname.pp args.Callbacks.proc_name Typ.Procname.pp rc
+            Typ.Procname.pp proc_name Typ.Procname.pp rc
       | _, wc:: _ ->
           L.stdout "Missing read in %a: for %a@."
-            Typ.Procname.pp args.Callbacks.proc_name Typ.Procname.pp wc
+            Typ.Procname.pp proc_name Typ.Procname.pp wc
       | _ ->
           () in
 
@@ -284,7 +290,7 @@ let callback_check_write_to_parcel_java
         if is_write_to_parcel this_exp this_type then begin
           if !verbose then
             L.stdout "Serialization check for %a@."
-              Typ.Procname.pp args.Callbacks.proc_name;
+              Typ.Procname.pp proc_name;
           try
             match parcel_constructors tenv this_type with
             | x :: _ ->
@@ -293,7 +299,7 @@ let callback_check_write_to_parcel_java
                  | None -> raise Not_found)
             | _ ->
                 L.stdout "No parcel constructor found for %a@."
-                  Typ.Procname.pp args.Callbacks.proc_name
+                  Typ.Procname.pp proc_name
           with Not_found ->
             if !verbose then L.stdout "Methods not available@."
         end
@@ -301,15 +307,18 @@ let callback_check_write_to_parcel_java
   Procdesc.iter_instrs do_instr proc_desc
 
 (** Looks for writeToParcel methods and checks whether read is in reverse *)
-let callback_check_write_to_parcel ({ Callbacks.proc_name } as args) =
-  match proc_name with
-  | Typ.Procname.Java pname_java ->
-      callback_check_write_to_parcel_java pname_java args
-  | _ ->
-      ()
+let callback_check_write_to_parcel ({ Callbacks.summary } as args) =
+  begin
+    match Specs.get_proc_name summary with
+    | Typ.Procname.Java pname_java ->
+        callback_check_write_to_parcel_java pname_java args
+    | _ -> ()
+  end;
+  summary
 
 (** Monitor calls to Preconditions.checkNotNull and detect inconsistent uses. *)
-let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
+let callback_monitor_nullcheck { Callbacks.proc_desc; idenv } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
   let verbose = ref false in
 
   let class_formal_names = lazy (
@@ -386,23 +395,28 @@ let callback_monitor_nullcheck { Callbacks.proc_desc; idenv; proc_name } =
                ())
     | _ -> () in
   Procdesc.iter_instrs do_instr proc_desc;
-  summary_checks_of_formals ()
+  summary_checks_of_formals ();
+  Specs.get_summary_unsafe "callback_monitor_nullcheck" proc_name
 
 (** Test persistent state. *)
-let callback_test_state { Callbacks.proc_name } =
-  ST.pname_add proc_name "somekey" "somevalue"
+let callback_test_state { Callbacks.summary } =
+  let proc_name = Specs.get_proc_name summary in
+  ST.pname_add proc_name "somekey" "somevalue";
+  Specs.get_summary_unsafe "callback_test_state" proc_name
 
 (** Check the uses of VisibleForTesting *)
-let callback_checkVisibleForTesting { Callbacks.proc_desc } =
+let callback_checkVisibleForTesting { Callbacks.proc_desc; summary } =
   if Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting then
     begin
       let loc = Procdesc.get_loc proc_desc in
       let linereader = Printer.LineReader.create () in
       L.stdout "%a@." (PP.pp_loc_range linereader 10 10) loc
-    end
+    end;
+  summary
 
 (** Check for readValue and readValueAs json deserialization *)
-let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; proc_name } =
+let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
   let verbose = true in
 
   let ret_const_key = "return_const" in
@@ -495,10 +509,11 @@ let callback_find_deserialization { Callbacks.proc_desc; get_proc_desc; idenv; p
     ST.pname_add proc_name ret_const_key ret_const in
 
   store_return ();
-  Procdesc.iter_instrs do_instr proc_desc
+  Procdesc.iter_instrs do_instr proc_desc;
+  Specs.get_summary_unsafe "callback_find_deserialization" proc_name
 
 (** Check field accesses. *)
-let callback_check_field_access { Callbacks.proc_desc } =
+let callback_check_field_access { Callbacks.proc_desc; summary } =
   let rec do_exp is_read = function
     | Exp.Var _ -> ()
     | Exp.UnOp (_, e, _) ->
@@ -538,10 +553,12 @@ let callback_check_field_access { Callbacks.proc_desc } =
     | Sil.Remove_temps _
     | Sil.Declare_locals _ ->
         () in
-  Procdesc.iter_instrs do_instr proc_desc
+  Procdesc.iter_instrs do_instr proc_desc;
+  summary
 
 (** Print c method calls. *)
-let callback_print_c_method_calls { Callbacks.tenv; proc_desc; proc_name } =
+let callback_print_c_method_calls { Callbacks.tenv; proc_desc } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
   let do_instr node = function
     | Sil.Call (_, Exp.Const (Const.Cfun pn), (e, _):: _, loc, _)
       when Typ.Procname.is_c_method pn ->
@@ -553,7 +570,7 @@ let callback_print_c_method_calls { Callbacks.tenv; proc_desc; proc_name } =
         ST.report_error tenv
           proc_name
           proc_desc
-          "CHECKERS_PRINT_OBJC_METHOD_CALLS"
+          Localise.checkers_print_objc_method_calls
           loc
           description
     | Sil.Call (_, Exp.Const (Const.Cfun pn), _, loc, _) ->
@@ -562,14 +579,16 @@ let callback_print_c_method_calls { Callbacks.tenv; proc_desc; proc_name } =
         ST.report_error tenv
           proc_name
           proc_desc
-          "CHECKERS_PRINT_C_CALL"
+          Localise.checkers_print_c_call
           loc
           description
     | _ -> () in
-  Procdesc.iter_instrs do_instr proc_desc
+  Procdesc.iter_instrs do_instr proc_desc;
+  Specs.get_summary_unsafe "callback_print_c_method_calls" proc_name
 
 (** Print access to globals. *)
-let callback_print_access_to_globals { Callbacks.tenv; proc_desc; proc_name } =
+let callback_print_access_to_globals { Callbacks.tenv; proc_desc } =
+  let proc_name = Procdesc.get_proc_name proc_desc in
   let do_pvar is_read pvar loc =
     let description =
       Printf.sprintf "%s of global %s"
@@ -578,7 +597,7 @@ let callback_print_access_to_globals { Callbacks.tenv; proc_desc; proc_name } =
     ST.report_error tenv
       proc_name
       proc_desc
-      "CHECKERS_ACCESS_GLOBAL"
+      Localise.checkers_access_global
       loc
       description in
   let rec get_global_var = function
@@ -594,4 +613,5 @@ let callback_print_access_to_globals { Callbacks.tenv; proc_desc; proc_name } =
     | Sil.Store (e, _, _, loc) when get_global_var e <> None ->
         Option.iter ~f:(fun pvar -> do_pvar false pvar loc) (get_global_var e)
     | _ -> () in
-  Procdesc.iter_instrs do_instr proc_desc
+  Procdesc.iter_instrs do_instr proc_desc;
+  Specs.get_summary_unsafe "callback_print_access_to_globals" proc_name

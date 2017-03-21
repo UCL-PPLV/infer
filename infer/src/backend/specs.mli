@@ -105,8 +105,7 @@ end
 
 (** Execution statistics *)
 type stats =
-  { stats_time: float; (** Analysis time for the procedure *)
-    stats_failure:
+  { stats_failure:
       SymOp.failure_kind option; (** what type of failure stopped the analysis (if any) *)
     symops: int; (** Number of SymOp's throughout the whole analysis of the function *)
     mutable nodes_visited_fp : IntSet.t; (** Nodes visited during the footprint phase *)
@@ -214,17 +213,17 @@ val get_status : summary -> status
 val is_active : summary -> bool
 
 (** Initialize the summary for [proc_name] given dependent procs in list [depend_list].
-    Do nothing if a summary exists already. *)
+    This also stores the new summary in the spec table. *)
 val init_summary :
   ( Procdesc.Node.id list * (* nodes *)
     ProcAttributes.proc_flags * (* procedure flags *)
     (Typ.Procname.t * Location.t) list * (* calls *)
     ProcAttributes.t * (* attributes of the procedure *)
     Procdesc.t option) (* procdesc option *)
-  -> unit
+  -> summary
 
 (** Reset a summary rebuilding the dependents and preserving the proc attributes if present. *)
-val reset_summary : Typ.Procname.t -> ProcAttributes.t option -> Procdesc.t option -> unit
+val reset_summary : Typ.Procname.t -> ProcAttributes.t option -> Procdesc.t option -> summary
 
 (** Load procedure summary from the given file *)
 val load_summary : DB.filename -> summary option
@@ -242,14 +241,13 @@ val pp_spec : Pp.env -> (int * int) option -> Format.formatter -> Prop.normal sp
 val pp_specs : Pp.env -> Format.formatter -> Prop.normal spec list -> unit
 
 (** Print the summary in html format *)
-val pp_summary_html :
-  whole_seconds:bool -> SourceFile.t -> Pp.color -> Format.formatter -> summary -> unit
+val pp_summary_html : SourceFile.t -> Pp.color -> Format.formatter -> summary -> unit
 
 (** Print the summary in latext format *)
-val pp_summary_latex : whole_seconds:bool -> Pp.color -> Format.formatter -> summary -> unit
+val pp_summary_latex : Pp.color -> Format.formatter -> summary -> unit
 
 (** Print the summary in text format *)
-val pp_summary_text : whole_seconds:bool -> Format.formatter -> summary -> unit
+val pp_summary_text : Format.formatter -> summary -> unit
 
 (** Like proc_resolve_attributes but start from a proc_desc. *)
 val pdesc_resolve_attributes : Procdesc.t -> ProcAttributes.t

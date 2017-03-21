@@ -621,30 +621,25 @@ let typecheck_instr
       let is_anonymous_inner_class_constructor =
         Typ.Procname.java_is_anonymous_inner_class_constructor callee_pname in
 
-      let do_return loc' typestate' =
+      let do_return (ret_ta, ret_typ) loc' typestate' =
+        let mk_return_range () =
+          (
+            ret_typ,
+            ret_ta,
+            [loc']
+          ) in
+
         match ret_id with
-        | None -> typestate'
+        | None ->
+            typestate'
         | Some (id, _) ->
-            let (ia, ret_typ) = annotated_signature.AnnotatedSignature.ret in
-            let is_library = Specs.proc_is_library callee_attributes in
-            let origin = TypeOrigin.Proc
-                {
-                  TypeOrigin.pname = callee_pname;
-                  loc = loc';
-                  annotated_signature;
-                  is_library;
-                } in
             TypeState.add_id
               id
-              (
-                ret_typ,
-                TypeAnnotation.from_item_annotation ia origin,
-                [loc']
-              )
+              (mk_return_range ())
               typestate' in
 
       (* Handle Preconditions.checkNotNull. *)
-      let do_preconditions_check_not_null parameter_num is_vararg typestate' =
+      let do_preconditions_check_not_null parameter_num ~is_vararg typestate' =
         (* clear the nullable flag of the first parameter of the procedure *)
         let clear_nullable_flag typestate'' pvar =
           (* remove the nullable flag for the given pvar *)
@@ -798,76 +793,161 @@ let typecheck_instr
         | _ ->
             typestate' in
 
-      let typestate2 =
-        if not is_anonymous_inner_class_constructor then
-          begin
-            if Config.eradicate_debug then
-              begin
-                let unique_id = Typ.Procname.to_unique_id callee_pname in
-                let classification =
-                  EradicateChecks.classify_procedure callee_attributes in
-                L.stdout "  %s unique id: %s@." classification unique_id
-              end;
-            if cflags.CallFlags.cf_virtual && checks.eradicate then
-              EradicateChecks.check_call_receiver tenv
-                find_canonical_duplicate
-                curr_pdesc
-                node
-                typestate1
-                call_params
-                callee_pname
-                instr_ref
-                loc
-                (typecheck_expr find_canonical_duplicate calls_this checks);
-            if checks.eradicate then
-              EradicateChecks.check_call_parameters tenv
-                find_canonical_duplicate
-                curr_pdesc
-                node
-                typestate1
-                callee_attributes
-                signature_params
-                call_params
-                loc
-                instr_ref
-                (typecheck_expr find_canonical_duplicate calls_this checks tenv);
-            let typestate2 =
-              if checks.check_extension then
-                let etl' = List.map ~f:(fun ((_, e), t) -> (e, t)) call_params in
-                let extension = TypeState.get_extension typestate1 in
-                let extension' =
-                  ext.TypeState.check_instr
-                    tenv get_proc_desc curr_pname curr_pdesc extension instr etl' in
-                TypeState.set_extension typestate1 extension'
-              else typestate1 in
-            let has_method pn name = match pn with
-              | Typ.Procname.Java pn_java ->
-                  String.equal (Typ.Procname.java_get_method pn_java) name
-              | _ ->
-                  false in
-            if Models.is_check_not_null callee_pname then
-              do_preconditions_check_not_null
-                (Models.get_check_not_null_parameter callee_pname)
-                false (* is_vararg *)
-                typestate2
-            else
-            if has_method callee_pname "checkNotNull"
-            && Typ.Procname.java_is_vararg callee_pname
-            then
-              let last_parameter = List.length call_params in
-              do_preconditions_check_not_null
-                last_parameter
-                true (* is_vararg *)
-                typestate2
-            else if Models.is_check_state callee_pname ||
-                    Models.is_check_argument callee_pname then
-              do_preconditions_check_state typestate2
-            else if Models.is_mapPut callee_pname then
-              do_map_put typestate2
-            else typestate2
-          end
-        else typestate1 in
-      do_return loc typestate2
+      let typestate_after_call, resolved_ret =
+        let resolve_param i (sparam, cparam) =
+          let (s1, ia1, t1) = sparam in
+          let ((orig_e2, e2), t2) = cparam in
+          let ta1 = TypeAnnotation.from_item_annotation ia1 (TypeOrigin.Formal s1) in
+          let (_, ta2, _) =
+            typecheck_expr
+              find_canonical_duplicate calls_this checks
+              tenv node instr_ref curr_pdesc typestate e2
+              (t2,
+               TypeAnnotation.const AnnotatedSignature.Nullable false TypeOrigin.ONone,
+               [])
+              loc in
+          let formal = (s1, ta1, t1) in
+          let actual = (orig_e2, ta2) in
+          let num = i+1 in
+          let formal_is_propagates_nullable = Annotations.ia_is_propagates_nullable ia1 in
+          let actual_is_nullable = TypeAnnotation.get_value AnnotatedSignature.Nullable ta2 in
+          let propagates_nullable = formal_is_propagates_nullable && actual_is_nullable in
+          EradicateChecks.{num; formal; actual; propagates_nullable} in
+
+        (* Apply a function that operates on annotations *)
+        let apply_annotation_transformer
+            resolved_ret (resolved_params : EradicateChecks.resolved_param list) =
+          let rec handle_params resolved_ret params =
+            match (params : EradicateChecks.resolved_param list) with
+            | param :: params'
+              when param.propagates_nullable ->
+                let (_, actual_ta) = param.actual in
+                let resolved_ret' =
+                  let (ret_ta, ret_typ) = resolved_ret in
+                  let ret_ta' =
+                    let actual_nullable =
+                      TypeAnnotation.get_value AnnotatedSignature.Nullable actual_ta in
+                    let old_nullable =
+                      TypeAnnotation.get_value AnnotatedSignature.Nullable ret_ta in
+                    let new_nullable =
+                      old_nullable || actual_nullable in
+                    TypeAnnotation.set_value
+                      AnnotatedSignature.Nullable
+                      new_nullable
+                      ret_ta in
+                  (ret_ta', ret_typ) in
+                handle_params resolved_ret' params'
+            | _ :: params' ->
+                handle_params resolved_ret params'
+            | [] ->
+                resolved_ret in
+          handle_params resolved_ret resolved_params in
+
+        let resolved_ret_ =
+          let (ret_ia, ret_typ) = annotated_signature.AnnotatedSignature.ret in
+          let is_library = Specs.proc_is_library callee_attributes in
+          let origin = TypeOrigin.Proc
+              {
+                TypeOrigin.pname = callee_pname;
+                loc;
+                annotated_signature;
+                is_library;
+              } in
+          let ret_ta = TypeAnnotation.from_item_annotation ret_ia origin in
+          (ret_ta, ret_typ) in
+
+        let sig_len = List.length signature_params in
+        let call_len = List.length call_params in
+        let min_len = min sig_len call_len in
+        let slice l =
+          let len = List.length l in
+          if len > min_len
+          then List.slice l (len - min_len) 0
+          else l in
+        let sig_slice = slice signature_params in
+        let call_slice = slice call_params in
+        let sig_call_params =
+          List.filter
+            ~f:(fun (sparam, _) ->
+                let (s, _, _) = sparam in
+                let param_is_this =
+                  String.equal (Mangled.to_string s) "this" ||
+                  String.is_prefix ~prefix:"this$" (Mangled.to_string s) in
+                not param_is_this)
+            (List.zip_exn sig_slice call_slice) in
+
+        let resolved_params = List.mapi ~f:resolve_param sig_call_params in
+        let resolved_ret =
+          apply_annotation_transformer resolved_ret_ resolved_params in
+
+        let typestate_after_call =
+          if not is_anonymous_inner_class_constructor then
+            begin
+              if Config.eradicate_debug then
+                begin
+                  let unique_id = Typ.Procname.to_unique_id callee_pname in
+                  let classification =
+                    EradicateChecks.classify_procedure callee_attributes in
+                  L.stdout "  %s unique id: %s@." classification unique_id
+                end;
+              if cflags.CallFlags.cf_virtual && checks.eradicate then
+                EradicateChecks.check_call_receiver tenv
+                  find_canonical_duplicate
+                  curr_pdesc
+                  node
+                  typestate1
+                  call_params
+                  callee_pname
+                  instr_ref
+                  loc
+                  (typecheck_expr find_canonical_duplicate calls_this checks);
+              if checks.eradicate then
+                EradicateChecks.check_call_parameters tenv
+                  find_canonical_duplicate
+                  curr_pdesc
+                  node
+                  callee_attributes
+                  resolved_params
+                  loc
+                  instr_ref;
+              let typestate2 =
+                if checks.check_extension then
+                  let etl' = List.map ~f:(fun ((_, e), t) -> (e, t)) call_params in
+                  let extension = TypeState.get_extension typestate1 in
+                  let extension' =
+                    ext.TypeState.check_instr
+                      tenv get_proc_desc curr_pname curr_pdesc extension instr etl' in
+                  TypeState.set_extension typestate1 extension'
+                else typestate1 in
+              let has_method pn name = match pn with
+                | Typ.Procname.Java pn_java ->
+                    String.equal (Typ.Procname.java_get_method pn_java) name
+                | _ ->
+                    false in
+              if Models.is_check_not_null callee_pname then
+                do_preconditions_check_not_null
+                  (Models.get_check_not_null_parameter callee_pname)
+                  ~is_vararg:false
+                  typestate2
+              else
+              if has_method callee_pname "checkNotNull"
+              && Typ.Procname.java_is_vararg callee_pname
+              then
+                let last_parameter = List.length call_params in
+                do_preconditions_check_not_null
+                  last_parameter
+                  ~is_vararg:true
+                  typestate2
+              else if Models.is_check_state callee_pname ||
+                      Models.is_check_argument callee_pname then
+                do_preconditions_check_state typestate2
+              else if Models.is_mapPut callee_pname then
+                do_map_put typestate2
+              else typestate2
+            end
+          else typestate1 in
+        typestate_after_call, resolved_ret in
+      do_return resolved_ret loc typestate_after_call
   | Sil.Call _ ->
       typestate
   | Sil.Prune (cond, loc, true_branch, _) ->
@@ -911,7 +991,8 @@ let typecheck_instr
           let map_dexp = function
             | Some
                 (DExp.Dretcall
-                   (DExp.Dconst (Const.Cfun (Typ.Procname.Java pname_java)), args, loc, call_flags)) ->
+                   (DExp.Dconst
+                      (Const.Cfun (Typ.Procname.Java pname_java)), args, loc, call_flags)) ->
                 let pname_java' =
                   let object_t = (Some "java.lang", "Object") in
                   Typ.Procname.java_replace_return_type

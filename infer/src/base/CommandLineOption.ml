@@ -16,6 +16,19 @@ module YBU = Yojson.Basic.Util
 
 let (=) = String.equal
 
+let terminal_width = lazy (
+  let open Ctypes in
+  let module T = IOCtl.Types(IOCtl_types) in
+  let winsize = make IOCtl.winsize in
+  let return =
+    ExternStubs.ioctl_stub_1_ioctl 0 T.Request.request_TIOCGWINSZ
+      (ExternStubs.CI.cptr (addr winsize)) in
+  if return >= 0 then
+    Ok (Unsigned.UShort.to_int (getf winsize IOCtl.ws_col))
+  else
+    Error return
+)
+
 (** This is the subset of Arg.spec that we actually use. What's important is that all these specs
     call back functions. We use this to mark deprecated arguments. What's not important is that, eg,
     Arg.Float is missing. *)
@@ -200,7 +213,7 @@ let pad_and_xform doc_width left_width desc =
 let align desc_list =
   let min_term_width = 80 in
   let cur_term_width =
-    match Lazy.force IOCtl.terminal_width with
+    match Lazy.force terminal_width with
     | Ok width -> width
     | Error _ -> min_term_width in
   (* 2 blank columns before option + 2 columns of gap between flag and doc *)
@@ -282,7 +295,7 @@ let deprecate_desc parse_mode ~long ~short ~deprecated desc =
     spec = deprecated_spec; decode_json = deprecated_decode_json }
 
 let mk ?(deprecated=[]) ?(parse_mode=Infer [])
-    ~long ?(short="") ~default ~meta doc ~default_to_string ~decode_json ~mk_setter ~mk_spec =
+    ~long ?short:short0 ~default ~meta doc ~default_to_string ~decode_json ~mk_setter ~mk_spec =
   let variable = ref default in
   let closure = mk_setter variable in
   let setter str =
@@ -295,7 +308,8 @@ let mk ?(deprecated=[]) ?(parse_mode=Infer [])
     let default_string = default_to_string default in
     if default_string = "" then doc
     else doc ^ " (default: " ^ default_string ^ ")" in
-  let desc = {long; short; meta; doc; spec; decode_json} in
+  let short = match short0 with Some c -> String.of_char c | None -> "" in
+  let desc = {long; short=short; meta; doc; spec; decode_json} in
   (* add desc for long option, with documentation (which includes any short option) for exes *)
   if long <> "" then add parse_mode desc ;
   (* add desc for short option only for parsing, without documentation *)
@@ -306,7 +320,7 @@ let mk ?(deprecated=[]) ?(parse_mode=Infer [])
     add parse_mode_no_sections {desc with long = ""; meta = ""; doc = ""} ;
   (* add desc for deprecated options only for parsing, without documentation *)
   List.iter deprecated ~f:(fun deprecated ->
-      deprecate_desc parse_mode ~long ~short ~deprecated desc
+      deprecate_desc parse_mode ~long ~short:short ~deprecated desc
       |> add parse_mode_no_sections) ;
   variable
 
@@ -338,7 +352,7 @@ let final_parse_action = ref (Infer Driver)
 (* end parsing state *)
 
 type 'a t =
-  ?deprecated:string list -> long:Arg.key -> ?short:Arg.key ->
+  ?deprecated:string list -> long:Arg.key -> ?short:char ->
   ?parse_mode:parse_mode -> ?meta:string -> Arg.doc ->
   'a
 
@@ -373,23 +387,20 @@ let mk_bool ?(deprecated_no=[]) ?(default=false) ?(f=fun b -> b)
       "no-" ^ long
   and noshort =
     Option.map ~f:(fun short ->
-        let len = String.length short in
-        if len > 1 && String.sub short ~pos:0 ~len:1 = "n" then
-          String.sub short ~pos:1 ~len:(len - 1)
-        else
-          "n" ^ short
+        if Char.is_lowercase short then Char.uppercase short
+        else Char.lowercase short
       ) short
   in
-  let doc nolong =
-    match noshort with
-    | Some noshort -> doc ^ " (Conversely: --" ^ nolong ^ " | -" ^ noshort ^ ")"
-    | None         -> doc ^ " (Conversely: --" ^ nolong ^ ")"
+  let doc long short =
+    match short with
+    | Some short -> doc ^ " (Conversely: --" ^ long ^ " | -" ^ String.of_char short ^ ")"
+    | None       -> doc ^ " (Conversely: --" ^ long ^ ")"
   in
   let doc, nodoc =
     if not default then
-      ("Activates: " ^ doc nolong, "")
+      ("Activates: " ^ doc nolong noshort, "")
     else
-      ("", "Deactivates: " ^ doc long) in
+      ("", "Deactivates: " ^ doc long short) in
   let default_to_string _ = "" in
   let mk_spec set = Unit (fun () -> set "") in
   let var =

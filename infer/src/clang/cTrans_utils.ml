@@ -514,13 +514,6 @@ let define_condition_side_effects e_cond instrs_cond sil_loc =
       [Sil.Load (id, Exp.Lvar pvar, typ, sil_loc)]
   | _ -> [(e', typ)], instrs_cond
 
-let fix_param_exps_mismatch params_stmt exps_param =
-  let diff = List.length params_stmt - List.length exps_param in
-  let args = if diff >0 then Array.create ~len:diff dummy_exp
-    else assert false in
-  let exps'= exps_param @ (Array.to_list args) in
-  exps'
-
 let is_superinstance mei =
   match mei.Clang_ast_t.omei_receiver_kind with
   | `SuperInstance -> true
@@ -581,14 +574,14 @@ let rec get_type_from_exp_stmt stmt =
 module Self =
 struct
 
-  exception SelfClassException of Typename.t
+  exception SelfClassException of Typ.Name.t
 
   let add_self_parameter_for_super_instance context procname loc mei =
     if is_superinstance mei then
       let typ, self_expr, ins =
         let t' =
           CType.add_pointer_to_typ
-            (Typ.Tstruct (CContext.get_curr_class_typename context.CContext.curr_class)) in
+            (Typ.Tstruct (CContext.get_curr_class_typename context)) in
         let e = Exp.Lvar (Pvar.mk (Mangled.from_string CFrontend_config.self) procname) in
         let id = Ident.create_fresh Ident.knormal in
         t', Exp.Var id, [Sil.Load (id, e, t', loc)] in

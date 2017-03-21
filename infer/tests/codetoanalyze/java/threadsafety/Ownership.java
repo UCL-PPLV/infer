@@ -9,6 +9,10 @@
 
 package codetoanalyze.java.checkers;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+
+
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 import javax.inject.Provider;
@@ -44,6 +48,21 @@ public class Ownership {
     owned.f = new Object(); // should not report
   }
 
+  Obj mInjectedField1;
+  Obj mInjectedField2;
+
+  // because this constructor is meant to be called via DI, we assume that injectedField and other
+  // parameters passed to the constructor will always be freshly allocated
+  @Inject Ownership(Obj injectedField1, Obj injectedField2) {
+    mInjectedField1 = injectedField1;
+    mInjectedField2 = injectedField2;
+    mInjectedField1.f = new Object(); // should not warn
+    mInjectedField2.f = new Object(); // should not warn
+  }
+
+  Ownership(Obj obj, Object o) {
+    obj.f = o; // not annotated @Inject; should warn
+  }
 
   native void leakToAnotherThread(Object o);
 
@@ -336,6 +355,20 @@ public class Ownership {
   void castThenReturnBad() {
     Obj o = getMaybeUnownedObj();
     castThenReturn(o).f = new Object();
+  }
+
+  void ownViaReflectionOk1() throws InstantiationException, IllegalAccessException {
+    Class<Obj> oClass = Obj.class;
+    Obj o = oClass.newInstance();
+    o.f = new Object();
+  }
+
+  void ownViaReflectionOk2()
+    throws IllegalAccessException, InstantiationException, InvocationTargetException, NoSuchMethodException {
+    Class<Obj> oClass = Obj.class;
+    Constructor<Obj> oConstructor = oClass.getConstructor();
+    Obj o = oConstructor.newInstance();
+    o.f = new Object();
   }
 
 }

@@ -27,7 +27,7 @@ type parameters = TypeState.parameters
 (** Type for a module that provides a main callback function *)
 module type CallBackT =
 sig
-  val callback : TypeCheck.checks -> Callbacks.proc_callback_args -> unit
+  val callback : TypeCheck.checks -> Callbacks.proc_callback_t
 end (* CallBackT *)
 
 (** Extension to the type checker. *)
@@ -84,7 +84,9 @@ struct
         annotated_signature.AnnotatedSignature.params in
 
     (* Check the nullable flag computed for the return value and report inconsistencies. *)
-    let check_return find_canonical_duplicate exit_node final_typestate ret_ia ret_type loc : unit =
+    let check_return
+        find_canonical_duplicate exit_node final_typestate annotated_signature loc : unit =
+      let _, ret_type = annotated_signature.AnnotatedSignature.ret in
       let ret_pvar = Procdesc.get_ret_var curr_pdesc in
       let ret_range = TypeState.lookup_pvar ret_pvar final_typestate in
       let typ_found_opt = match ret_range with
@@ -101,7 +103,7 @@ struct
       if checks.TypeCheck.eradicate then
         EradicateChecks.check_return_annotation tenv
           find_canonical_duplicate curr_pdesc ret_range
-          ret_ia ret_implicitly_nullable loc in
+          annotated_signature ret_implicitly_nullable loc in
 
     let do_before_dataflow initial_typestate =
       if Config.eradicate_verbose then
@@ -110,8 +112,8 @@ struct
 
     let do_after_dataflow find_canonical_duplicate final_typestate =
       let exit_node = Procdesc.get_exit_node curr_pdesc in
-      let ia, ret_type = annotated_signature.AnnotatedSignature.ret in
-      check_return find_canonical_duplicate exit_node final_typestate ia ret_type proc_loc in
+      check_return
+        find_canonical_duplicate exit_node final_typestate annotated_signature proc_loc in
 
     let module DFTypeCheck = MakeDF(struct
         type t = Extension.extension TypeState.t
@@ -153,13 +155,14 @@ struct
       calls_this checks
       {
         Callbacks.proc_desc = curr_pdesc;
-        proc_name = curr_pname;
+        summary;
         get_proc_desc;
         idenv;
         tenv;
         get_procs_in_file;
       }
       annotated_signature linereader proc_loc : unit =
+    let curr_pname = Specs.get_proc_name summary in
 
     let find_duplicate_nodes = State.mk_find_duplicate_nodes curr_pdesc in
     let find_canonical_duplicate node =
@@ -234,7 +237,9 @@ struct
           let rec fixpoint initializers_old =
             let initializers_new = get_private_called initializers_old in
             let initializers_new' =
-              List.filter ~f:(fun (pn, _) -> not (Typ.Procname.Set.mem pn !seen)) initializers_new in
+              List.filter
+                ~f:(fun (pn, _) -> not (Typ.Procname.Set.mem pn !seen))
+                initializers_new in
             mark_seen initializers_new';
             if initializers_new' <> [] then fixpoint initializers_new' in
 
@@ -340,7 +345,8 @@ struct
     update_summary curr_pname curr_pdesc final_typestate_opt
 
   (** Entry point for the eradicate-based checker infrastructure. *)
-  let callback checks ({ Callbacks.proc_desc; proc_name } as callback_args) =
+  let callback checks ({ Callbacks.proc_desc } as callback_args) : Specs.summary =
+    let proc_name = Procdesc.get_proc_name proc_desc in
     let calls_this = ref false in
 
     let filter_special_cases () =
@@ -353,16 +359,19 @@ struct
             Models.get_modelled_annotated_signature (Specs.pdesc_resolve_attributes proc_desc) in
           Some annotated_signature
         end in
-    match filter_special_cases () with
-    | None -> ()
-    | Some annotated_signature ->
-        let loc = Procdesc.get_loc proc_desc in
-        let linereader = Printer.LineReader.create () in
-        if Config.eradicate_verbose then
-          L.stdout "%a@." (AnnotatedSignature.pp proc_name) annotated_signature;
+    begin
+      match filter_special_cases () with
+      | None -> ()
+      | Some annotated_signature ->
+          let loc = Procdesc.get_loc proc_desc in
+          let linereader = Printer.LineReader.create () in
+          if Config.eradicate_verbose then
+            L.stdout "%a@." (AnnotatedSignature.pp proc_name) annotated_signature;
 
-        callback2
-          calls_this checks callback_args annotated_signature linereader loc
+          callback2
+            calls_this checks callback_args annotated_signature linereader loc
+    end;
+    Specs.get_summary_unsafe "callback" proc_name
 
 end (* MkCallback *)
 
@@ -398,35 +407,14 @@ module Main =
   Build(EmptyExtension)
 
 (** Eradicate checker for Java @Nullable annotations. *)
-let callback_eradicate
-    ({ Callbacks.get_proc_desc; proc_name } as callback_args) =
+let callback_eradicate =
   let checks =
     {
       TypeCheck.eradicate = true;
       check_extension = false;
       check_ret_type = [];
     } in
-  let callbacks =
-    let analyze_ondemand _ pdesc =
-      let idenv_pname = Idenv.create pdesc in
-      Main.callback checks
-        { callback_args with
-          Callbacks.idenv = idenv_pname;
-          proc_name = (Procdesc.get_proc_name pdesc);
-          proc_desc = pdesc; };
-      Specs.get_summary_unsafe "callback_eradicate" (Procdesc.get_proc_name pdesc) in
-    {
-      Ondemand.analyze_ondemand;
-      get_proc_desc;
-    } in
-
-  if Ondemand.procedure_should_be_analyzed proc_name
-  then
-    begin
-      Ondemand.set_callbacks callbacks;
-      Main.callback checks callback_args;
-      Ondemand.unset_callbacks ()
-    end
+  Main.callback checks
 
 (** Call the given check_return_type at the end of every procedure. *)
 let callback_check_return_type check_return_type callback_args =

@@ -131,14 +131,108 @@ let module T = {
     | Tvoid /** void type */
     | Tfun bool /** function type with noreturn attribute */
     | Tptr t ptr_kind /** pointer type */
-    | Tstruct Typename.t /** structured value type name */
+    | Tstruct name /** structured value type name */
     | Tarray t static_length /** array type with statically fixed length */
+  [@@deriving compare]
+  and name =
+    | CStruct Mangled.t
+    | CUnion Mangled.t
+    | CppClass Mangled.t template_spec_info
+    | JavaClass Mangled.t
+    | ObjcClass Mangled.t
+    | ObjcProtocol Mangled.t
+  [@@deriving compare]
+  and template_spec_info =
+    | NoTemplate
+    | Template (string, list (option t))
   [@@deriving compare];
   let equal = [%compare.equal : t];
   let hash = Hashtbl.hash;
 };
 
 include T;
+
+let module Name = {
+  type t = name [@@deriving compare];
+  let equal = [%compare.equal : t];
+  let name =
+    fun
+    | CStruct name
+    | CUnion name
+    | CppClass name _
+    | JavaClass name
+    | ObjcClass name
+    | ObjcProtocol name => Mangled.to_string name;
+  let to_string tname => {
+    let prefix =
+      fun
+      | CStruct _ => "struct"
+      | CUnion _ => "union"
+      | CppClass _ _
+      | JavaClass _
+      | ObjcClass _ => "class"
+      | ObjcProtocol _ => "protocol";
+    prefix tname ^ " " ^ name tname
+  };
+  let pp f typename => F.fprintf f "%s" (to_string typename);
+  let is_class =
+    fun
+    | CppClass _ _
+    | JavaClass _
+    | ObjcClass _ => true
+    | _ => false;
+  let is_same_type t1 t2 =>
+    switch (t1, t2) {
+    | (CStruct _, CStruct _)
+    | (CUnion _, CUnion _)
+    | (CppClass _ _, CppClass _ _)
+    | (JavaClass _, JavaClass _)
+    | (ObjcClass _, ObjcClass _)
+    | (ObjcProtocol _, ObjcProtocol _) => true
+    | _ => false
+    };
+  let module C = {
+    let from_string name_str => CStruct (Mangled.from_string name_str);
+    let union_from_string name_str => CUnion (Mangled.from_string name_str);
+  };
+  let module Java = {
+    let from_string name_str => JavaClass (Mangled.from_string name_str);
+    let from_package_class package_name class_name =>
+      if (String.equal package_name "") {
+        from_string class_name
+      } else {
+        from_string (package_name ^ "." ^ class_name)
+      };
+    let is_class =
+      fun
+      | JavaClass _ => true
+      | _ => false;
+    let java_lang_object = from_string "java.lang.Object";
+    let java_io_serializable = from_string "java.io.Serializable";
+    let java_lang_cloneable = from_string "java.lang.Cloneable";
+  };
+  let module Cpp = {
+    let from_string name_str => CppClass (Mangled.from_string name_str) NoTemplate;
+    let from_template_string template_spec_info name =>
+      CppClass (Mangled.from_string name) template_spec_info;
+    let is_class =
+      fun
+      | CppClass _ => true
+      | _ => false;
+  };
+  let module Objc = {
+    let from_string name_str => ObjcClass (Mangled.from_string name_str);
+    let protocol_from_string name_str => ObjcProtocol (Mangled.from_string name_str);
+    let is_class =
+      fun
+      | ObjcClass _ => true
+      | _ => false;
+  };
+  let module Set = Caml.Set.Make {
+    type nonrec t = t;
+    let compare = compare;
+  };
+};
 
 
 /** {2 Sets and maps of types} */
@@ -163,9 +257,9 @@ let rec pp_full pe f =>
   fun
   | Tstruct tname =>
     if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
-      F.fprintf f "%s" (Typename.to_string tname |> Escape.escape_xml)
+      F.fprintf f "%s" (Name.to_string tname |> Escape.escape_xml)
     } else {
-      F.fprintf f "%s" (Typename.to_string tname)
+      F.fprintf f "%s" (Name.to_string tname)
     }
   | Tint ik => F.fprintf f "%s" (ikind_to_string ik)
   | Tfloat fk => F.fprintf f "%s" (fkind_to_string fk)
@@ -234,17 +328,17 @@ let array_elem default_opt =>
   | Tarray t_el _ => t_el
   | _ => unsome "array_elem" default_opt;
 
-let is_class_of_kind typ ck =>
+let is_class_of_kind check_fun typ =>
   switch typ {
-  | Tstruct (TN_csu (Class ck') _) => Csu.equal_class_kind ck ck'
+  | Tstruct tname => check_fun tname
   | _ => false
   };
 
-let is_objc_class typ => is_class_of_kind typ Csu.Objc;
+let is_objc_class = is_class_of_kind Name.Objc.is_class;
 
-let is_cpp_class typ => is_class_of_kind typ Csu.CPP;
+let is_cpp_class = is_class_of_kind Name.Cpp.is_class;
 
-let is_java_class typ => is_class_of_kind typ Csu.Java;
+let is_java_class = is_class_of_kind Name.Java.is_class;
 
 let rec is_array_of_cpp_class typ =>
   switch typ {
@@ -286,15 +380,9 @@ let rec java_from_string =
       let stripped_typ = String.sub typ_str pos::0 len::(String.length typ_str - 2);
       Tptr (Tarray (java_from_string stripped_typ) None) Pk_pointer
     }
-  | typ_str => Tstruct (Typename.Java.from_string typ_str);
+  | typ_str => Tstruct (Name.Java.from_string typ_str);
 
 type typ = t [@@deriving compare];
-
-/* template instantiation arguments */
-type template_spec_info =
-  | NoTemplate
-  | Template (string, list (option t))
-[@@deriving compare];
 
 let module Procname = {
   /* e.g. ("", "int") for primitive types or ("java.io", "PrintWriter") for objects */
@@ -312,14 +400,15 @@ let module Procname = {
   type java = {
     method_name: string,
     parameters: list java_type,
-    class_name: Typename.t,
+    class_name: Name.t,
     return_type: option java_type, /* option because constructors have no return type */
     kind: method_kind
   }
   [@@deriving compare];
 
   /** Type of c procedure names. */
-  type c = (string, option string, template_spec_info) [@@deriving compare];
+  type c = {name: string, mangled: option string, template_args: template_spec_info}
+  [@@deriving compare];
   type objc_cpp_method_kind =
     | CPPMethod (option string) /** with mangling */
     | CPPConstructor (option string, bool) /** with mangling + is it constexpr? */
@@ -331,7 +420,7 @@ let module Procname = {
   /** Type of Objective C and C++ procedure names: method signatures. */
   type objc_cpp = {
     method_name: string,
-    class_name: Typename.t,
+    class_name: Name.t,
     kind: objc_cpp_method_kind,
     template_args: template_spec_info
   }
@@ -402,13 +491,13 @@ let module Procname = {
     | Some (x, y) => (Some x, y)
     | None => (None, package_classname)
     };
-  let split_typename typename => split_classname (Typename.name typename);
-  let from_string_c_fun (s: string) => C (s, None, NoTemplate);
-  let c (plain: string) (mangled: string) (template_args: template_spec_info) => (
-    plain,
-    Some mangled,
+  let split_typename typename => split_classname (Name.name typename);
+  let c (name: string) (mangled: string) (template_args: template_spec_info) => {
+    name,
+    mangled: Some mangled,
     template_args
-  );
+  };
+  let from_string_c_fun (name: string) => C {name, mangled: None, template_args: NoTemplate};
   let java class_name return_type method_name parameters kind => {
     class_name,
     return_type,
@@ -446,7 +535,7 @@ let module Procname = {
 
   /** Replace the class name component of a procedure name.
       In case of Java, replace package and class name. */
-  let replace_class t (new_class: Typename.t) =>
+  let replace_class t (new_class: Name.t) =>
     switch t {
     | Java j => Java {...j, class_name: new_class}
     | ObjC_Cpp osig => ObjC_Cpp {...osig, class_name: new_class}
@@ -456,11 +545,11 @@ let module Procname = {
     };
 
   /** Get the class name of a Objective-C/C++ procedure name. */
-  let objc_cpp_get_class_name objc_cpp => Typename.name objc_cpp.class_name;
+  let objc_cpp_get_class_name objc_cpp => Name.name objc_cpp.class_name;
   let objc_cpp_get_class_type_name objc_cpp => objc_cpp.class_name;
 
   /** Return the package.classname of a java procname. */
-  let java_get_class_name (j: java) => Typename.name j.class_name;
+  let java_get_class_name (j: java) => Name.name j.class_name;
 
   /** Return the package.classname as a typename of a java procname. */
   let java_get_class_type_name (j: java) => j.class_name;
@@ -487,7 +576,7 @@ let module Procname = {
   let get_method =
     fun
     | ObjC_Cpp name => name.method_name
-    | C (name, _, _) => name
+    | C {name} => name
     | Block name => name
     | Java j => j.method_name
     | Linters_dummy_method => "Linters_dummy_method";
@@ -593,7 +682,7 @@ let module Procname = {
     | Java js =>
       switch (List.rev js.parameters) {
       | [(_, s), ...par'] =>
-        if (is_anonymous_inner_class_name (Typename.Java.from_string s)) {
+        if (is_anonymous_inner_class_name (Name.Java.from_string s)) {
           Some (Java {...js, parameters: List.rev par'})
         } else {
           None
@@ -690,7 +779,7 @@ let module Procname = {
     };
   let get_global_name_of_initializer =
     fun
-    | C (name, _, _) when String.is_prefix prefix::Config.clang_initializer_prefix name => {
+    | C {name} when String.is_prefix prefix::Config.clang_initializer_prefix name => {
         let prefix_len = String.length Config.clang_initializer_prefix;
         Some (String.sub name pos::prefix_len len::(String.length name - prefix_len))
       }
@@ -708,42 +797,43 @@ let module Procname = {
       plain
     }
   };
+  let c_method_kind_verbose_str kind =>
+    switch kind {
+    | CPPMethod m =>
+      "(" ^
+      (
+        switch m {
+        | None => ""
+        | Some s => s
+        }
+      ) ^ ")"
+    | CPPConstructor (m, is_constexpr) =>
+      "{" ^
+      (
+        switch m {
+        | None => ""
+        | Some s => s
+        }
+      ) ^
+      (if is_constexpr {"|constexpr"} else {""}) ^ "}"
+    | ObjCClassMethod => "class"
+    | ObjCInstanceMethod => "instance"
+    | ObjCInternalMethod => "internal"
+    };
   let c_method_to_string osig detail_level =>
     switch detail_level {
     | Simple => osig.method_name
-    | Non_verbose => Typename.name osig.class_name ^ "_" ^ osig.method_name
+    | Non_verbose => Name.name osig.class_name ^ "_" ^ osig.method_name
     | Verbose =>
-      let m_str =
-        switch osig.kind {
-        | CPPMethod m =>
-          "(" ^
-          (
-            switch m {
-            | None => ""
-            | Some s => s
-            }
-          ) ^ ")"
-        | CPPConstructor (m, is_constexpr) =>
-          "{" ^
-          (
-            switch m {
-            | None => ""
-            | Some s => s
-            }
-          ) ^
-          (if is_constexpr {"|constexpr"} else {""}) ^ "}"
-        | ObjCClassMethod => "class"
-        | ObjCInstanceMethod => "instance"
-        | ObjCInternalMethod => "internal"
-        };
-      Typename.name osig.class_name ^ "_" ^ osig.method_name ^ m_str
+      let m_str = c_method_kind_verbose_str osig.kind;
+      Name.name osig.class_name ^ "_" ^ osig.method_name ^ m_str
     };
 
   /** Very verbose representation of an existing Procname.t */
   let to_unique_id pn =>
     switch pn {
     | Java j => java_to_string j Verbose
-    | C (c1, c2, _) => to_readable_string (c1, c2) true
+    | C {name, mangled} => to_readable_string (name, mangled) true
     | ObjC_Cpp osig => c_method_to_string osig Verbose
     | Block name => name
     | Linters_dummy_method => "Linters_dummy_method"
@@ -753,7 +843,7 @@ let module Procname = {
   let to_string p =>
     switch p {
     | Java j => java_to_string j Non_verbose
-    | C (c1, c2, _) => to_readable_string (c1, c2) false
+    | C {name, mangled} => to_readable_string (name, mangled) false
     | ObjC_Cpp osig => c_method_to_string osig Non_verbose
     | Block name => name
     | Linters_dummy_method => to_unique_id p
@@ -763,15 +853,11 @@ let module Procname = {
   let to_simplified_string withclass::withclass=false p =>
     switch p {
     | Java j => java_to_string withclass::withclass j Simple
-    | C (c1, c2, _) => to_readable_string (c1, c2) false ^ "()"
+    | C {name, mangled} => to_readable_string (name, mangled) false ^ "()"
     | ObjC_Cpp osig => c_method_to_string osig Simple
     | Block _ => "block"
     | Linters_dummy_method => to_unique_id p
     };
-
-  /** Convert a proc name to a filename */
-  let to_filename proc_name =>
-    Escape.escape_filename @@ SourceFile.append_crc_cutoff @@ to_unique_id proc_name;
 
   /** Pretty print a proc name */
   let pp f pn => F.fprintf f "%s" (to_string pn);
@@ -796,13 +882,28 @@ let module Procname = {
   let pp_set fmt set => Set.iter (fun pname => F.fprintf fmt "%a " pp pname) set;
   let get_qualifiers pname =>
     switch pname {
-    | C c => fst3 c |> QualifiedCppName.qualifiers_of_qual_name
+    | C {name} => QualifiedCppName.qualifiers_of_qual_name name
     | ObjC_Cpp objc_cpp =>
       List.append
-        (QualifiedCppName.qualifiers_of_qual_name (Typename.name objc_cpp.class_name))
+        (QualifiedCppName.qualifiers_of_qual_name (Name.name objc_cpp.class_name))
         [objc_cpp.method_name]
     | _ => []
     };
+
+  /** Convert a proc name to a filename */
+  let to_filename pname => {
+    /* filenames for clang procs are REVERSED qualifiers with '#' as separator */
+    let get_qual_name_str pname => get_qualifiers pname |> List.rev |> String.concat sep::"#";
+    let proc_id =
+      switch pname {
+      | C {mangled} =>
+        [get_qual_name_str pname, ...Option.to_list mangled] |> String.concat sep::"#"
+      | ObjC_Cpp objc_cpp =>
+        get_qual_name_str pname ^ "#" ^ c_method_kind_verbose_str objc_cpp.kind
+      | _ => to_unique_id pname
+      };
+    Escape.escape_filename @@ SourceFile.append_crc_cutoff proc_id
+  };
 };
 
 
@@ -821,19 +922,19 @@ let module Struct = {
   type t = {
     fields: fields, /** non-static fields */
     statics: fields, /** static fields */
-    supers: list Typename.t, /** superclasses */
+    supers: list Name.t, /** superclasses */
     methods: list Procname.t, /** methods defined */
     annots: Annot.Item.t, /** annotations */
     specialization: template_spec_info /** template specialization */
   };
-  type lookup = Typename.t => option t;
+  type lookup = Name.t => option t;
   let pp pe name f {fields, supers, methods, annots} =>
     if Config.debug_mode {
       /* change false to true to print the details of struct */
       F.fprintf
         f
         "%a \n\tfields: {%a\n\t}\n\tsupers: {%a\n\t}\n\tmethods: {%a\n\t}\n\tannots: {%a\n\t}"
-        Typename.pp
+        Name.pp
         name
         (
           Pp.seq (
@@ -842,14 +943,14 @@ let module Struct = {
           )
         )
         fields
-        (Pp.seq (fun f n => F.fprintf f "\n\t\t%a" Typename.pp n))
+        (Pp.seq (fun f n => F.fprintf f "\n\t\t%a" Name.pp n))
         supers
         (Pp.seq (fun f m => F.fprintf f "\n\t\t%a" Procname.pp m))
         methods
         Annot.Item.pp
         annots
     } else {
-      F.fprintf f "%a" Typename.pp name
+      F.fprintf f "%a" Name.pp name
     };
   let internal_mk_struct
       default::default=?

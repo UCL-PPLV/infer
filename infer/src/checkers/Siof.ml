@@ -209,7 +209,7 @@ let report_siof trace pdesc gname loc =
           description, (passthroughs, (final_sink', pt)::rest) in
     let ltr = SiofTrace.trace_of_error loc gname sink_path' in
     let caller_pname = Procdesc.get_proc_name pdesc in
-    let msg = Localise.to_string Localise.static_initialization_order_fiasco in
+    let msg = Localise.to_issue_id Localise.static_initialization_order_fiasco in
     let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
     Reporting.log_error caller_pname ~loc ~ltr exn in
 
@@ -243,15 +243,18 @@ let compute_post proc_data =
     ~initial:(SiofDomain.BottomSiofTrace.Bottom, SiofDomain.VarNames.empty)
   |> Option.map ~f:SiofDomain.normalize
 
-let checker ({ Callbacks.proc_desc; } as callback) =
+let checker ({ Callbacks.proc_desc } as callback) : Specs.summary =
   let post =
     Interprocedural.compute_and_store_post
       ~compute_post
       ~make_extras:ProcData.make_empty_extras
       callback in
   let pname = Procdesc.get_proc_name proc_desc in
-  match Typ.Procname.get_global_name_of_initializer pname with
-  | Some gname ->
-      siof_check proc_desc gname post
-  | None ->
-      ()
+  begin
+    match Typ.Procname.get_global_name_of_initializer pname with
+    | Some gname ->
+        siof_check proc_desc gname post
+    | None ->
+        ()
+  end;
+  Specs.get_summary_unsafe "SIOF checker" pname

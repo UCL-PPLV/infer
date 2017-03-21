@@ -38,7 +38,7 @@ let attributes_filename proc_kind::proc_kind pname_file => {
 
 
 /** path to the .attr file for the given procedure in the current results directory */
-let res_dir_attr_filename proc_kind::proc_kind pname => {
+let res_dir_attr_filename create_dir::create_dir proc_kind::proc_kind pname => {
   let pname_file = Typ.Procname.to_filename pname;
   let attr_fname = attributes_filename proc_kind::proc_kind pname_file;
   let bucket_dir = {
@@ -53,7 +53,9 @@ let res_dir_attr_filename proc_kind::proc_kind pname => {
   let filename =
     DB.Results_dir.path_to_filename
       DB.Results_dir.Abs_root [Config.attributes_dir_name, bucket_dir, attr_fname];
-  DB.filename_create_dir filename;
+  if create_dir {
+    DB.filename_create_dir filename
+  };
   filename
 };
 
@@ -61,7 +63,7 @@ let res_dir_attr_filename proc_kind::proc_kind pname => {
    otherwise try to load the declared filename. */
 let load_attr defined_only::defined_only proc_name => {
   let attributes_file proc_kind::proc_kind proc_name => Multilinks.resolve (
-    res_dir_attr_filename proc_kind::proc_kind proc_name
+    res_dir_attr_filename create_dir::false proc_kind::proc_kind proc_name
   );
   let attr =
     Serialization.read_from_file serializer (attributes_file proc_kind::ProcDefined proc_name);
@@ -102,7 +104,8 @@ let less_relevant_proc_kinds proc_kind =>
    If defined, delete the declared file if it exists. */
 let write_and_delete proc_name (proc_attributes: ProcAttributes.t) => {
   let proc_kind = create_proc_kind proc_attributes;
-  let attributes_file proc_kind => res_dir_attr_filename proc_kind::proc_kind proc_name;
+  let attributes_file proc_kind =>
+    res_dir_attr_filename create_dir::true proc_kind::proc_kind proc_name;
   Serialization.write_to_file serializer (attributes_file proc_kind) data::proc_attributes;
   let upgrade_relevance less_relevant_proc_kind => {
     let fname_declared = DB.filename_to_string (attributes_file less_relevant_proc_kind);
@@ -158,15 +161,17 @@ let attr_tbl = Typ.Procname.Hash.create 16;
 
 let defined_attr_tbl = Typ.Procname.Hash.create 16;
 
-let load_attributes proc_name =>
+let load_attributes cache::cache proc_name =>
   try (Typ.Procname.Hash.find attr_tbl proc_name) {
   | Not_found =>
     let proc_attributes = load_attr defined_only::false proc_name;
     switch proc_attributes {
     | Some attrs =>
-      Typ.Procname.Hash.add attr_tbl proc_name proc_attributes;
-      if attrs.is_defined {
-        Typ.Procname.Hash.add defined_attr_tbl proc_name proc_attributes
+      if cache {
+        Typ.Procname.Hash.add attr_tbl proc_name proc_attributes;
+        if attrs.is_defined {
+          Typ.Procname.Hash.add defined_attr_tbl proc_name proc_attributes
+        }
       }
     | None => ()
     };
@@ -193,7 +198,7 @@ let load_defined_attributes cache_none::cache_none proc_name =>
     corresponds to the class definition. */
 let get_correct_type_from_objc_class_name type_name =>
   /* ToDo: this function should return a type that includes a reference to the tenv computed by:
-     let class_method = Typ.Procname.get_default_objc_class_method (Typename.name type_name);
+     let class_method = Typ.Procname.get_default_objc_class_method (Typ.Name.name type_name);
      switch (find_tenv_from_class_of_proc class_method) {
      | Some tenv =>
       */
@@ -257,8 +262,8 @@ let stats () => {
 /* Find the file where the procedure was captured, if a cfg for that file exists.
    Return also a boolean indicating whether the procedure is defined in an
    include file. */
-let find_file_capturing_procedure pname =>
-  switch (load_attributes pname) {
+let find_file_capturing_procedure cache::cache=true pname =>
+  switch (load_attributes cache::cache pname) {
   | None => None
   | Some proc_attributes =>
     let source_file = proc_attributes.ProcAttributes.source_file_captured;

@@ -109,8 +109,6 @@ let rec format_string_type_names
     fmt_type:: format_string_type_names fmt_string (Str.match_end ())
   with Not_found -> []
 
-let printf_args_name = "CHECKERS_PRINTF_ARGS"
-
 let check_printf_args_ok tenv
     (node: Procdesc.Node.t)
     (instr: Sil.instr)
@@ -134,7 +132,7 @@ let check_printf_args_ok tenv
           Checkers.ST.report_error tenv
             proc_name
             proc_desc
-            printf_args_name
+            Localise.checkers_printf_args
             instr_loc
             description
         else
@@ -148,7 +146,7 @@ let check_printf_args_ok tenv
         Checkers.ST.report_error tenv
           proc_name
           proc_desc
-          printf_args_name
+          Localise.checkers_printf_args
           instr_loc
           description in
 
@@ -196,20 +194,22 @@ let check_printf_args_ok tenv
                 Checkers.ST.report_error tenv
                   proc_name
                   proc_desc
-                  printf_args_name
+                  Localise.checkers_printf_args
                   cl
                   "Format string must be string literal"
           with e ->
             L.stderr
               "%s Exception when analyzing %s: %s@."
-              printf_args_name
+              (Localise.to_issue_id Localise.checkers_printf_args)
               (Typ.Procname.to_string proc_name)
               (Exn.to_string e))
       | None -> ())
   | _ -> ()
 
-let callback_printf_args { Callbacks.tenv; proc_desc; proc_name } : unit =
-  Procdesc.iter_instrs (fun n i -> check_printf_args_ok tenv n i proc_name proc_desc) proc_desc
+let callback_printf_args { Callbacks.tenv; proc_desc } : Specs.summary =
+  let proc_name = Procdesc.get_proc_name proc_desc in
+  Procdesc.iter_instrs (fun n i -> check_printf_args_ok tenv n i proc_name proc_desc) proc_desc;
+  Specs.get_summary_unsafe "Callbacks.proc_callback_t" proc_name
 
 (*
 let printf_signature_to_string

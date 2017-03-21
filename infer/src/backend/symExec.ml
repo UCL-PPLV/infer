@@ -57,7 +57,7 @@ let check_block_retain_cycle tenv caller_pname prop block_nullified =
   let mblock = Pvar.get_name block_nullified in
   let block_pname = Typ.Procname.mangled_objc_block (Mangled.to_string mblock) in
   let block_captured =
-    match AttributesTable.load_attributes block_pname with
+    match AttributesTable.load_attributes ~cache:true block_pname with
     | Some attributes ->
         fst (List.unzip attributes.ProcAttributes.captured)
     | None ->
@@ -476,25 +476,25 @@ let method_exists right_proc_name methods =
   else (* ObjC/C++ case : The attribute map will only exist when we have code for the method or
           the method has been called directly somewhere. It can still be that this is not the
           case but we have a model for the method. *)
-    match AttributesTable.load_attributes right_proc_name with
+    match AttributesTable.load_attributes ~cache:true right_proc_name with
     | Some attrs -> attrs.ProcAttributes.is_defined
     | None -> Specs.summary_exists_in_models right_proc_name
 
 let resolve_method tenv class_name proc_name =
   let found_class =
-    let visited = ref Typename.Set.empty in
-    let rec resolve (class_name: Typename.t) =
-      visited := Typename.Set.add class_name !visited;
+    let visited = ref Typ.Name.Set.empty in
+    let rec resolve (class_name: Typ.Name.t) =
+      visited := Typ.Name.Set.add class_name !visited;
       let right_proc_name =
         Typ.Procname.replace_class proc_name class_name in
-      match class_name, Tenv.lookup tenv class_name with
-      | TN_csu (Class _, _), Some { methods; supers } ->
+      match Tenv.lookup tenv class_name with
+      | Some { methods; supers } when Typ.Name.is_class class_name ->
           if method_exists right_proc_name methods then
             Some right_proc_name
           else
             (match supers with
              | super_classname:: _ ->
-                 if not (Typename.Set.mem super_classname !visited)
+                 if not (Typ.Name.Set.mem super_classname !visited)
                  then resolve super_classname
                  else None
              | _ -> None)
@@ -503,7 +503,7 @@ let resolve_method tenv class_name proc_name =
   match found_class with
   | None ->
       Logging.d_strln
-        ("Couldn't find method in the hierarchy of type "^(Typename.name class_name));
+        ("Couldn't find method in the hierarchy of type "^(Typ.Name.name class_name));
       proc_name
   | Some proc_name ->
       proc_name
@@ -601,7 +601,7 @@ let resolve_java_pname tenv prop args pname_java call_flags : Typ.Procname.java 
           ~f:(fun accu (arg_exp, _) name ->
               match resolve_typename prop arg_exp with
               | Some class_name ->
-                  (Typ.Procname.split_classname (Typename.name class_name)) :: accu
+                  (Typ.Procname.split_classname (Typ.Name.name class_name)) :: accu
               | None -> name :: accu)
           ~init:[] args (Typ.Procname.java_get_parameters resolved_pname_java) |> List.rev in
       Typ.Procname.java_replace_parameters resolved_pname_java resolved_params in
@@ -670,7 +670,7 @@ let call_constructor_url_update_args pname actual_params =
   let url_pname =
     Typ.Procname.Java
       (Typ.Procname.java
-         (Typename.Java.from_string "java.net.URL") None "<init>"
+         (Typ.Name.Java.from_string "java.net.URL") None "<init>"
          [(Some "java.lang"), "String"] Typ.Procname.Non_Static) in
   if (Typ.Procname.equal url_pname pname) then
     (match actual_params with
@@ -766,7 +766,8 @@ let handle_objc_instance_method_call_or_skip pdesc tenv actual_pars path callee_
   else
     match force_objc_init_return_nil pdesc callee_pname tenv ret_id pre path receiver with
     | [] ->
-        if !Config.footprint && Option.is_none (Attribute.get_undef tenv pre receiver) then
+        if !Config.footprint && Option.is_none (Attribute.get_undef tenv pre receiver) &&
+           not (Rearrange.is_only_pt_by_fld_or_param_nonnull pdesc tenv pre receiver) then
           let res_null = (* returns: (objc_null(res) /\ receiver=0) or an empty list of results *)
             let pre_with_attr_or_null = add_objc_null_attribute_or_nullify_result pre in
             let propset = prune_ne tenv ~positive:false receiver Exp.zero pre_with_attr_or_null in
@@ -964,7 +965,7 @@ let execute_load ?(report_deref_errors=true) pname pdesc tenv id rhs_exp typ loc
       [Prop.conjoin_eq tenv (Exp.Var id) undef prop_]
 
 let load_ret_annots pname =
-  match AttributesTable.load_attributes pname with
+  match AttributesTable.load_attributes ~cache:true pname with
   | Some attrs ->
       let ret_annots, _ = attrs.ProcAttributes.method_annotation in
       ret_annots
@@ -1155,8 +1156,10 @@ let rec sym_exec tenv current_pdesc _instr (prop_: Prop.normal Prop.t) path
                   let attrs_opt =
                     let attr_opt = Option.map ~f:Procdesc.get_attributes callee_pdesc_opt in
                     match attr_opt, resolved_pname with
-                    | Some attrs, Typ.Procname.ObjC_Cpp _ -> Some attrs
-                    | None, Typ.Procname.ObjC_Cpp _ -> AttributesTable.load_attributes resolved_pname
+                    | Some attrs, Typ.Procname.ObjC_Cpp _ ->
+                        Some attrs
+                    | None, Typ.Procname.ObjC_Cpp _ ->
+                        AttributesTable.load_attributes ~cache:true resolved_pname
                     | _ -> None in
                   let objc_property_accessor_ret_typ_opt =
                     match attrs_opt with
@@ -1193,7 +1196,8 @@ let rec sym_exec tenv current_pdesc _instr (prop_: Prop.normal Prop.t) path
     )
   | Sil.Call (ret_id, fun_exp, actual_params, loc, call_flags) -> (* Call via function pointer *)
       let (prop_r, n_actual_params) = normalize_params tenv current_pname prop_ actual_params in
-      if call_flags.CallFlags.cf_is_objc_block then
+      if call_flags.CallFlags.cf_is_objc_block &&
+         not (Rearrange.is_only_pt_by_fld_or_param_nonnull current_pdesc tenv prop_r fun_exp) then
         Rearrange.check_call_to_objc_block_error tenv current_pdesc prop_r fun_exp loc;
       Rearrange.check_dereference_error tenv current_pdesc prop_r fun_exp loc;
       if call_flags.CallFlags.cf_noreturn then begin
@@ -1269,7 +1273,7 @@ and instrs ?(mask_errors=false) tenv pdesc instrs ppl =
           | None -> "") in
       L.d_warning
         ("Generated Instruction Failed with: " ^
-         (Localise.to_string err_name)^loc ); L.d_ln();
+         (Localise.to_issue_id err_name)^loc ); L.d_ln();
       [(p, path)] in
   let f plist instr = List.concat_map ~f:(exe_instr instr) plist in
   List.fold ~f ~init:ppl instrs
@@ -1357,7 +1361,7 @@ and add_constraints_on_actuals_by_ref tenv prop actuals_by_ref callee_pname call
     else havoc_actual_by_ref in
   let non_const_actuals_by_ref =
     let is_not_const (e, _, i) =
-      match AttributesTable.load_attributes callee_pname with
+      match AttributesTable.load_attributes ~cache:true callee_pname with
       | Some attrs ->
           let is_const = List.mem ~equal:Int.equal attrs.ProcAttributes.const_formals i in
           if is_const then (

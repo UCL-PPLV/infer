@@ -11,6 +11,7 @@ open! IStd
 
 module F = Format
 module L = Logging
+module MF = MarkupFormatter
 
 module CallSiteSet = AbstractDomain.FiniteSet (CallSite.Set)
 module CallsDomain = AbstractDomain.Map (Annot.Map) (CallSiteSet)
@@ -116,7 +117,7 @@ let is_modeled_expensive tenv = function
   | Typ.Procname.Java proc_name_java as proc_name ->
       not (BuiltinDecl.is_declared proc_name) &&
       let is_subclass =
-        let classname = Typename.Java.from_string (Typ.Procname.java_get_class_name proc_name_java) in
+        let classname = Typ.Name.Java.from_string (Typ.Procname.java_get_class_name proc_name_java) in
         PatternMatch.is_subtype_of_str tenv classname in
       Inferconfig.modeled_expensive_matcher is_subclass proc_name
   | _ ->
@@ -127,7 +128,7 @@ let is_allocator tenv pname =
   | Typ.Procname.Java pname_java ->
       let is_throwable () =
         let class_name =
-          Typename.Java.from_string (Typ.Procname.java_get_class_name pname_java) in
+          Typ.Name.Java.from_string (Typ.Procname.java_get_class_name pname_java) in
         PatternMatch.is_throwable tenv class_name in
       Typ.Procname.is_constructor pname
       && not (BuiltinDecl.is_declared pname)
@@ -153,8 +154,8 @@ let method_has_annot annot tenv pname =
 let method_overrides_annot annot tenv pname =
   method_overrides (method_has_annot annot) tenv pname
 
-let lookup_annotation_calls annot pname : CallSite.t list =
-  match Specs.get_summary pname with
+let lookup_annotation_calls caller_pdesc annot pname : CallSite.t list =
+  match Ondemand.analyze_proc_name ~propagate_exceptions:false caller_pdesc pname with
   | Some { Specs.payload = { Specs.calls = Some call_map; }; } ->
       begin
         try
@@ -178,13 +179,12 @@ let report_allocation_stack
   let final_trace = List.rev (update_trace call_loc trace) in
   let constr_str = string_of_pname constructor_pname in
   let description =
-    Printf.sprintf
-      "Method `%s` annotated with `@%s` allocates `%s` via `%s%s`"
-      (Typ.Procname.to_simplified_string pname)
-      src_annot
-      constr_str
-      stack_str
-      ("new "^constr_str) in
+    Format.asprintf
+      "Method %a annotated with %a allocates %a via %a"
+      MF.pp_monospaced (Typ.Procname.to_simplified_string pname)
+      MF.pp_monospaced ("@" ^ src_annot)
+      MF.pp_monospaced constr_str
+      MF.pp_monospaced (stack_str ^ ("new "^constr_str)) in
   let exn =
     Exceptions.Checkers (allocates_memory, Localise.verbatim_desc description) in
   Reporting.log_error pname ~loc:fst_call_loc ~ltr:final_trace exn
@@ -196,14 +196,13 @@ let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str sn
     let final_trace = List.rev (update_trace call_loc trace) in
     let exp_pname_str = string_of_pname snk_pname in
     let description =
-      Printf.sprintf
-        "Method `%s` annotated with `@%s` calls `%s%s` where `%s` is annotated with `@%s`"
-        (Typ.Procname.to_simplified_string src_pname)
-        src_annot
-        stack_str
-        exp_pname_str
-        exp_pname_str
-        snk_annot in
+      Format.asprintf
+        "Method %a annotated with %a calls %a where %a is annotated with %a"
+        MF.pp_monospaced (Typ.Procname.to_simplified_string src_pname)
+        MF.pp_monospaced ("@" ^ src_annot)
+        MF.pp_monospaced (stack_str ^ exp_pname_str)
+        MF.pp_monospaced exp_pname_str
+        MF.pp_monospaced ("@" ^ snk_annot) in
     let msg =
       if String.equal src_annot Annotations.performance_critical
       then calls_expensive_method
@@ -347,18 +346,19 @@ module Interprocedural = struct
   let method_is_expensive tenv pname =
     is_modeled_expensive tenv pname || is_expensive tenv pname
 
-  let check_and_report ({ Callbacks.proc_desc; proc_name; tenv; } as proc_data) =
+  let check_and_report ({ Callbacks.proc_desc; tenv; } as proc_data) : Specs.summary =
+    let proc_name = Procdesc.get_proc_name proc_desc in
     let loc = Procdesc.get_loc proc_desc in
     let expensive = is_expensive tenv proc_name in
     (* TODO: generalize so we can check subtyping on arbitrary annotations *)
     let check_expensive_subtyping_rules overridden_pname =
       if not (method_is_expensive tenv overridden_pname) then
         let description =
-          Printf.sprintf
-            "Method `%s` overrides unannotated method `%s` and cannot be annotated with `@%s`"
-            (Typ.Procname.to_string proc_name)
-            (Typ.Procname.to_string overridden_pname)
-            Annotations.expensive in
+          Format.asprintf
+            "Method %a overrides unannotated method %a and cannot be annotated with %a"
+            MF.pp_monospaced (Typ.Procname.to_string proc_name)
+            MF.pp_monospaced (Typ.Procname.to_string overridden_pname)
+            MF.pp_monospaced ("@" ^ Annotations.expensive) in
         let exn =
           Exceptions.Checkers
             (expensive_overrides_unexpensive, Localise.verbatim_desc description) in
@@ -380,7 +380,7 @@ module Interprocedural = struct
             report_annotation_stack src_annot.class_name snk_annot.class_name in
           report_call_stack
             (method_has_annot snk_annot tenv)
-            (lookup_annotation_calls snk_annot)
+            (lookup_annotation_calls proc_desc snk_annot)
             f_report
             (CallSite.make proc_name loc)
             calls in
@@ -397,14 +397,18 @@ module Interprocedural = struct
           (src_snk_pairs ()) in
       Domain.NonBottom
         (init_map, Domain.TrackingVar.empty) in
-    match compute_and_store_post
-            ~compute_post:(Analyzer.compute_post ~initial)
-            ~make_extras:ProcData.make_empty_extras
-            proc_data with
-    | Some Domain.NonBottom (call_map, _) ->
-        List.iter ~f:(report_src_snk_paths call_map) (src_snk_pairs ())
-    | Some Domain.Bottom | None ->
-        ()
+    begin
+      match compute_and_store_post
+              ~compute_post:(Analyzer.compute_post ~initial)
+              ~make_extras:ProcData.make_empty_extras
+              proc_data with
+      | Some Domain.NonBottom (call_map, _) ->
+          List.iter ~f:(report_src_snk_paths call_map) (src_snk_pairs ())
+      | Some Domain.Bottom | None ->
+          ()
+    end;
+    Specs.get_summary_unsafe "AnnotationReachability.checker" proc_name
+
 end
 
 let checker = Interprocedural.check_and_report

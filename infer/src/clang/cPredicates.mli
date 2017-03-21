@@ -13,7 +13,17 @@ type t = string * string list (* (name, [param1,...,paramK]) *)
 
 val captured_variables_cxx_ref : Ctl_parser_types.ast_node -> Clang_ast_t.named_decl_info list
 
-val call_method : string -> Ctl_parser_types.ast_node -> bool
+val call_method_strict : Ctl_parser_types.ast_node -> string -> bool
+
+val call_method : Ctl_parser_types.ast_node -> string -> bool
+
+val call_class_method : Ctl_parser_types.ast_node  -> string -> string -> bool
+
+val call_class_method_strict : Ctl_parser_types.ast_node  -> string -> string -> bool
+
+val is_objc_interface_named_strict : Ctl_parser_types.ast_node -> string -> bool
+
+val is_objc_interface_named : Ctl_parser_types.ast_node -> string -> bool
 
 val property_name_contains_word : string -> Ctl_parser_types.ast_node -> bool
 
@@ -50,6 +60,14 @@ val is_unop_with_kind : string -> Ctl_parser_types.ast_node -> bool
 val isa : string -> Ctl_parser_types.ast_node -> bool
 
 val is_node : string -> Ctl_parser_types.ast_node -> bool
+
+val declaration_has_name : Ctl_parser_types.ast_node -> string -> bool
+
+val declaration_has_name_strict : Ctl_parser_types.ast_node -> string -> bool
+
+val is_class : Ctl_parser_types.ast_node -> string -> bool
+
+val is_class_strict : Ctl_parser_types.ast_node -> string -> bool
 
 val pp_predicate : Format.formatter -> t -> unit
 

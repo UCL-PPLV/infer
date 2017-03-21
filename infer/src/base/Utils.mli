@@ -52,9 +52,6 @@ val directory_fold : ('a -> string -> 'a) -> 'a -> string -> 'a
 (** Functional iter function over all the file of a directory *)
 val directory_iter : (string -> unit) -> string -> unit
 
-(** Remove a directory and its contents *)
-val remove_directory_tree : string -> unit
-
 val read_optional_json_file : string -> (Yojson.Basic.json, string) Result.t
 
 val with_file : string -> f:(out_channel -> 'a) -> 'a
@@ -80,6 +77,27 @@ val suppress_stderr2 : ('a -> 'b -> 'c) -> 'a -> 'b -> 'c
     -1 if v1 is older than v2 and 0 if they are the same version.
     The versions are strings of the shape "n.m.t", the order is lexicographic. *)
 val compare_versions : string -> string -> int
+
+(** Like List.iter but operates in parallel up to a number of jobs *)
+val iter_parallel : f:('a -> unit) -> ?jobs:int -> 'a list -> unit
+
+(** Like List.iteri but operates in parallel up to a number of jobs *)
+val iteri_parallel : f:(int -> 'a -> unit) -> ?jobs:int -> 'a list -> unit
+
+(** Pool of processes to execute in parallel up to a number of jobs. *)
+module ProcessPool : sig
+  type t
+
+  (** Create a new pool of processes *)
+  val create : jobs:int -> t
+
+  (** Start a new child process in the pool.
+      If all the jobs are taken, wait until one is free. *)
+  val start_child : f:('a -> unit) -> pool:t -> 'a -> unit
+
+  (** Wait until all the currently executing processes terminate *)
+  val wait_all : t -> unit
+end
 
 (** Register a function to run when the program exits or is interrupted. Registered functions are
     run in the reverse order in which they were registered. *)

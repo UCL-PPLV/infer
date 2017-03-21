@@ -88,6 +88,7 @@ val checks_disabled_by_default : string list
 val clang_initializer_prefix : string
 val classpath : string option
 val cpp_extra_include_dir : string
+val duplicates_filename : string
 val relative_cpp_models_dir : string
 val csl_analysis : bool
 val default_failure_name : string
@@ -126,6 +127,7 @@ val os_type : os_type
 val patterns_modeled_expensive : string * Yojson.Basic.json
 val patterns_never_returning_null : string * Yojson.Basic.json
 val patterns_skip_translation : string * Yojson.Basic.json
+val per_procedure_parallelism : bool
 val perf_stats_prefix : string
 val proc_stats_filename : string
 val property_attributes : string
@@ -134,7 +136,6 @@ val report_custom_error : bool
 val report_nullable_inconsistency : bool
 val reporting_stats_dir_name : string
 val save_compact_summaries : bool
-val save_time_in_summaries : bool
 val smt_output : bool
 val source_file_extentions : string list
 val sources : string list
@@ -186,7 +187,6 @@ val bugs_txt : string option
 val bugs_xml : string option
 val changed_files_index : string option
 val calls_csv : string option
-val check_duplicate_symbols : bool
 val checkers : bool
 val checkers_enabled : bool
 val checkers_repeated_calls : bool
@@ -209,6 +209,7 @@ val dependency_mode : bool
 val developer_mode : bool
 val disable_checks : string list
 val dotty_cfg_libs : bool
+val dump_duplicate_symbols : bool
 val dynamic_dispatch : [ `None | `Interface | `Sound | `Lazy ]
 val enable_checks : string list
 val eradicate : bool
@@ -227,6 +228,7 @@ val fcp_apple_clang : string option
 val fcp_syntax_only : bool
 val file_renamings : string option
 val filter_paths : bool
+val filter_report_paths : string option
 val filtering : bool
 val final_parse_action : CommandLineOption.parse_action
 val flavors : bool
@@ -296,6 +298,7 @@ val reactive_mode : bool
 val reactive_capture : bool
 val report : string option
 val report_current : string option
+val report_formatter : [`No_formatter | `Phabricator_formatter]
 val report_hook : string option
 val report_previous : string option
 val report_runtime_exceptions : bool

@@ -11,7 +11,7 @@ open! IStd
 
 module F = Format
 module L = Logging
-
+module MF = MarkupFormatter
 
 module Summary = Summary.Make (struct
     type summary = ThreadSafetyDomain.summary
@@ -49,28 +49,43 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   type lock_model =
     | Lock
     | Unlock
+    | LockedIfTrue
     | NoEffect
+
+
+  let is_thread_utils_method method_name_str = function
+    | Typ.Procname.Java java_pname ->
+        String.is_suffix ~suffix:"ThreadUtils" (Typ.Procname.java_get_class_name java_pname)
+        && String.equal (Typ.Procname.java_get_method java_pname) method_name_str
+    | _ -> false
 
   let get_lock_model = function
     | Typ.Procname.Java java_pname ->
-        begin
-          match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
-          | "java.util.concurrent.locks.Lock", "lock" ->
-              Lock
-          | ("java.util.concurrent.locks.ReentrantLock"
-            | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-            | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-            ("lock" | "tryLock" | "lockInterruptibly") ->
-              Lock
-          | ("java.util.concurrent.locks.Lock"
-            |"java.util.concurrent.locks.ReentrantLock"
-            | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-            | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-            "unlock" ->
-              Unlock
-          | _ ->
-              NoEffect
-        end
+        if is_thread_utils_method "assertHoldsLock" (Typ.Procname.Java java_pname) then Lock
+        else
+          begin
+            match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
+            | ("java.util.concurrent.locks.Lock"
+              | "java.util.concurrent.locks.ReentrantLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
+              ("lock" | "lockInterruptibly") ->
+                Lock
+            | ("java.util.concurrent.locks.Lock"
+              |"java.util.concurrent.locks.ReentrantLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
+              "unlock" ->
+                Unlock
+            | ("java.util.concurrent.locks.Lock"
+              | "java.util.concurrent.locks.ReentrantLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
+              | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
+              "tryLock" ->
+                LockedIfTrue
+            | _ ->
+                NoEffect
+          end
     | pname when Typ.Procname.equal pname BuiltinDecl.__set_locked_attribute ->
         Lock
     | pname when Typ.Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
@@ -305,6 +320,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
             | "javax.inject.Provider", "get" ->
                 (* in dependency injection, the library allocates fresh values behind the scenes *)
                 true
+            | ("java.lang.Class" | "java.lang.reflect.Constructor"), "newInstance" ->
+                (* reflection can perform allocations *)
+                true
             | "java.lang.ThreadLocal", "get" ->
                 (* ThreadLocal prevents sharing between threads behind the scenes *)
                 true
@@ -323,13 +341,13 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   let exec_instr (astate : Domain.astate) ({ ProcData.pdesc; tenv; extras; } as proc_data) _ =
     let is_container_write pn tenv = match pn with
       | Typ.Procname.Java java_pname ->
-          let typename = Typename.Java.from_string (Typ.Procname.java_get_class_name java_pname) in
+          let typename = Typ.Name.Java.from_string (Typ.Procname.java_get_class_name java_pname) in
           let is_container_write_ typename _ =
-            match Typename.name typename, Typ.Procname.java_get_method java_pname with
+            match Typ.Name.name typename, Typ.Procname.java_get_method java_pname with
             | "java.util.List", ("add" | "addAll" | "clear" | "remove" | "set") -> true
             | "java.util.Map", ("clear" | "put" | "putAll" | "remove") -> true
             | _ -> false in
-          let is_threadsafe_collection typename _ = match Typename.name typename with
+          let is_threadsafe_collection typename _ = match Typ.Name.name typename with
             | "java.util.concurrent.ConcurrentMap" | "java.util.concurrent.CopyOnWriteArrayList" ->
                 true
             | _ ->
@@ -356,7 +374,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                   AccessDomain.empty
             | None ->
                 AccessDomain.empty in
-          Some (false, callee_accesses, AttributeSetDomain.empty)
+          Some (false, false, callee_accesses, AttributeSetDomain.empty)
       | _ ->
           failwithf
             "Call to %a is marked as a container write, but has no receiver"
@@ -415,31 +433,44 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     | Sil.Call (ret_opt, Const (Cfun callee_pname), actuals, loc, _) ->
         let astate_callee =
           (* assuming that modeled procedures do not have useful summaries *)
-          match get_lock_model callee_pname with
-          | Lock ->
-              { astate with locks = true; }
-          | Unlock ->
-              { astate with locks = false; }
-          | NoEffect ->
-              match
-                get_summary pdesc callee_pname actuals ~f_resolve_id loc tenv with
-              | Some (callee_locks, callee_accesses, return_attributes) ->
-                  let call_site = CallSite.make callee_pname loc in
-                  let combine_accesses_for_pre pre ~caller_accesses ~callee_accesses =
-                    let combined_accesses =
-                      PathDomain.with_callsite
-                        (AccessDomain.get_accesses pre callee_accesses) call_site
-                      |> PathDomain.join (AccessDomain.get_accesses pre caller_accesses) in
-                    AccessDomain.add pre combined_accesses caller_accesses in
-                  let combined_safe_accesses =
-                    combine_accesses_for_pre
-                      AccessPrecondition.Protected
-                      ~caller_accesses:astate.accesses
-                      ~callee_accesses in
-                  let locks' = callee_locks || astate.locks in
-                  let astate' =
-                    if is_unprotected locks' pdesc
-                    then
+          if is_thread_utils_method "assertMainThread" callee_pname then
+            { astate with threads = true; }
+          else
+            match get_lock_model callee_pname with
+            | Lock ->
+                { astate with locks = true; }
+            | Unlock ->
+                { astate with locks = false; }
+            | LockedIfTrue ->
+                begin
+                  match ret_opt with
+                  | Some (ret_id, ret_typ) ->
+                      let attribute_map =
+                        AttributeMapDomain.add_attribute
+                          (AccessPath.of_id ret_id ret_typ)
+                          (Choice Choice.LockHeld)
+                          astate.attribute_map in
+                      { astate with attribute_map; }
+                  | None ->
+                      failwithf
+                        "Procedure %a specified as returning boolean, but returns nothing"
+                        Typ.Procname.pp callee_pname
+                end
+            | NoEffect ->
+                match
+                  get_summary pdesc callee_pname actuals ~f_resolve_id loc tenv with
+                | Some (callee_threads, callee_locks, callee_accesses, return_attributes) ->
+                    let call_site = CallSite.make callee_pname loc in
+                    let combine_accesses_for_pre pre ~caller_accesses ~callee_accesses =
+                      let combined_accesses =
+                        PathDomain.with_callsite
+                          (AccessDomain.get_accesses pre callee_accesses) call_site
+                        |> PathDomain.join (AccessDomain.get_accesses pre caller_accesses) in
+                      AccessDomain.add pre combined_accesses caller_accesses in
+                    let locks' = callee_locks || astate.locks in
+                    let threads' = callee_threads || astate.threads in
+                    let astate' =
+                      let unprotected = is_unprotected locks' pdesc in
                       let add_conditional_accesses index accesses_acc (actual_exp, actual_typ) =
                         if is_constant actual_exp
                         then
@@ -463,11 +494,14 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                                   begin
                                     match FormalMap.get_formal_index base extras with
                                     | Some formal_index ->
+                                        let pre =
+                                          if unprotected
+                                          then AccessPrecondition.ProtectedIf (Some formal_index)
+                                          else AccessPrecondition.Protected in
                                         (* the actual passed to the current callee is rooted in a
                                            formal. add to conditional accesses *)
                                         PathDomain.Sinks.fold
-                                          (AccessDomain.add_access
-                                             (ProtectedIf (Some formal_index)))
+                                          (AccessDomain.add_access pre)
                                           (PathDomain.sinks callee_conditional_accesses)
                                           accesses_acc
                                     | None ->
@@ -477,20 +511,30 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                                               actual_access_path
                                               astate.attribute_map
                                           with
-                                          |(Some formal_index) ->
-                                              (* access path conditionally owned, add to
-                                                 protected-if accesses *)
+                                          | (Some formal_index) ->
+                                              let pre =
+                                                if unprotected
+                                                then
+                                                  AccessPrecondition.ProtectedIf (Some formal_index)
+                                                else
+                                                  AccessPrecondition.Protected in
+                                              (* access path conditionally owned, add to protected
+                                                 accesses if lock held, protected-if accesses
+                                                 otherwise *)
                                               PathDomain.Sinks.fold
-                                                (AccessDomain.add_access
-                                                   (ProtectedIf (Some formal_index)))
+                                                (AccessDomain.add_access pre)
                                                 (PathDomain.sinks callee_conditional_accesses)
                                                 accesses_acc
                                           | None ->
                                               (* access path not owned and not rooted in a formal.
-                                                 add to unprotected accesses *)
+                                                 add to protected accesses if lock held, unprotected
+                                                 accesses otherwise *)
+                                              let pre =
+                                                if unprotected
+                                                then AccessPrecondition.unprotected
+                                                else AccessPrecondition.Protected in
                                               PathDomain.Sinks.fold
-                                                (AccessDomain.add_access
-                                                   AccessPrecondition.unprotected)
+                                                (AccessDomain.add_access pre)
                                                 (PathDomain.sinks callee_conditional_accesses)
                                                 accesses_acc
                                         end
@@ -502,60 +546,76 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                                   accesses_acc
                           end in
 
-                      let unsafe_accesses =
+                      let combined_safe_accesses =
                         combine_accesses_for_pre
-                          AccessPrecondition.unprotected
-                          ~caller_accesses:combined_safe_accesses
+                          AccessPrecondition.Protected
+                          ~caller_accesses:astate.accesses
                           ~callee_accesses in
+                      let unsafe_accesses =
+                        if unprotected
+                        then
+                          combine_accesses_for_pre
+                            AccessPrecondition.unprotected
+                            ~caller_accesses:combined_safe_accesses
+                            ~callee_accesses
+                        else
+                          (* add callee unsafe accesses to caller safe accesses *)
+                          let combined_accesses =
+                            PathDomain.with_callsite
+                              (AccessDomain.get_accesses
+                                 AccessPrecondition.unprotected callee_accesses) call_site
+                            |> PathDomain.join
+                              (AccessDomain.get_accesses
+                                 AccessPrecondition.Protected combined_safe_accesses) in
+                          AccessDomain.add
+                            AccessPrecondition.Protected combined_accesses combined_safe_accesses in
                       let accesses =
                         List.foldi ~f:add_conditional_accesses ~init:unsafe_accesses actuals in
-                      { astate with accesses; }
+                      { astate with accesses; } in
+                    let attribute_map =
+                      propagate_return_attributes
+                        ret_opt
+                        return_attributes
+                        actuals
+                        astate.attribute_map
+                        ~f_resolve_id
+                        extras in
+                    { astate' with locks = locks'; threads = threads'; attribute_map; }
+                | None ->
+                    if is_box callee_pname
+                    then
+                      match ret_opt, actuals with
+                      | Some (ret_id, ret_typ), (actual_exp, actual_typ) :: _ ->
+                          begin
+                            match AccessPath.of_lhs_exp actual_exp actual_typ ~f_resolve_id with
+                            | Some ap
+                              when AttributeMapDomain.has_attribute
+                                  ap Functional astate.attribute_map ->
+                                let attribute_map =
+                                  AttributeMapDomain.add_attribute
+                                    (AccessPath.of_id ret_id ret_typ)
+                                    Functional
+                                    astate.attribute_map in
+                                { astate with attribute_map; }
+                            | _ ->
+                                astate
+                          end
+                      | _ ->
+                          astate
+                    else if FbThreadSafety.is_graphql_constructor callee_pname
+                    then
+                      (* assume generated GraphQL code returns ownership *)
+                      match ret_opt with
+                      | Some (ret_id, ret_typ) ->
+                          let attribute_map =
+                            AttributeMapDomain.add_attribute
+                              (AccessPath.of_id ret_id ret_typ)
+                              Attribute.unconditionally_owned
+                              astate.attribute_map in
+                          { astate with attribute_map; }
+                      | None -> astate
                     else
-                      { astate with accesses = combined_safe_accesses; } in
-                  let attribute_map =
-                    propagate_return_attributes
-                      ret_opt
-                      return_attributes
-                      actuals
-                      astate.attribute_map
-                      ~f_resolve_id
-                      extras in
-                  { astate' with locks = locks'; attribute_map; }
-              | None ->
-                  if is_box callee_pname
-                  then
-                    match ret_opt, actuals with
-                    | Some (ret_id, ret_typ), (actual_exp, actual_typ) :: _ ->
-                        begin
-                          match AccessPath.of_lhs_exp actual_exp actual_typ ~f_resolve_id with
-                          | Some ap
-                            when AttributeMapDomain.has_attribute
-                                ap Functional astate.attribute_map ->
-                              let attribute_map =
-                                AttributeMapDomain.add_attribute
-                                  (AccessPath.of_id ret_id ret_typ)
-                                  Functional
-                                  astate.attribute_map in
-                              { astate with attribute_map; }
-                          | _ ->
-                              astate
-                        end
-                    | _ ->
-                        astate
-                  else if FbThreadSafety.is_graphql_constructor callee_pname
-                  then
-                    (* assume generated GraphQL code returns ownership *)
-                    match ret_opt with
-                    | Some (ret_id, ret_typ) ->
-                        let attribute_map =
-                          AttributeMapDomain.add_attribute
-                            (AccessPath.of_id ret_id ret_typ)
-                            Attribute.unconditionally_owned
-                            astate.attribute_map in
-                        { astate with attribute_map; }
-                    | None -> astate
-                  else
-                    astate in
+                      astate in
         begin
           match ret_opt with
           | Some (_, (Typ.Tint ILong | Tfloat FDouble)) ->
@@ -617,6 +677,61 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
             lhs_access_path rhs_exp rhs_typ ~f_resolve_id astate.attribute_map extras in
         { astate with accesses; id_map; attribute_map; }
 
+    | Sil.Prune (prune_exp, _, _, _) ->
+        let rec eval_binop op var e1 e2 =
+          match eval_bexp var e1, eval_bexp var e2 with
+          | Some b1, Some b2 -> Some (op b1 b2)
+          | _ -> None
+        (* return Some bool_value if the given boolean expression evaluates to bool_value when [var]
+           is set to true. return None if it has free variables that stop us from evaluating it *)
+        and eval_bexp var = function
+          | Exp.Var id ->
+              begin
+                match f_resolve_id (Var.of_id id) with
+                | Some ap when AccessPath.Raw.equal ap var -> Some true
+                | _ -> None
+              end
+          | (Exp.Const _) as e ->
+              Some (not (Exp.is_zero e))
+          | Exp.UnOp (Unop.LNot, e, _) ->
+              let b_opt = eval_bexp var e in
+              Option.map ~f:not b_opt
+          | Exp.BinOp (Binop.LAnd, e1, e2) ->
+              eval_binop (&&) var e1 e2
+          | Exp.BinOp (Binop.LOr, e1, e2) ->
+              eval_binop (||) var e1 e2
+          | Exp.BinOp (Binop.Eq, e1, e2) ->
+              eval_binop Bool.equal var e1 e2
+          | Exp.BinOp (Binop.Ne, e1, e2) ->
+              eval_binop (<>) var e1 e2
+          | _ ->
+              (* non-boolean expression; can't evaluate it *)
+              None in
+        let add_choice bool_value acc = function
+          | Choice.LockHeld ->
+              let locks = bool_value in
+              { acc with locks; }
+          | Choice.OnMainThread ->
+              let threads = bool_value in
+              { acc with threads; } in
+
+        begin
+          match AccessPath.of_lhs_exp prune_exp (Typ.Tint IBool) ~f_resolve_id with
+          | Some access_path ->
+              let choices = AttributeMapDomain.get_choices access_path astate.attribute_map in
+              begin
+                match eval_bexp access_path prune_exp with
+                | Some bool_value ->
+                    (* prune (prune_exp) can only evaluate to true if the choice is [bool_value].
+                       add the constraint that the the choice must be [bool_value] to the state *)
+                    List.fold ~f:(add_choice bool_value) ~init:astate choices
+                | None ->
+                    astate
+              end
+          | _ ->
+              astate
+        end
+
     | Sil.Remove_temps (ids, _) ->
         let id_map =
           List.fold
@@ -625,7 +740,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
             ids in
         { astate with id_map; }
 
-    |  _  ->
+    | _ ->
         astate
 end
 
@@ -658,7 +773,7 @@ let is_immutable_collection_class class_name tenv =
   PatternMatch.supertype_exists
     tenv
     (fun typename _ ->
-       List.mem ~equal:String.equal immutable_collections (Typename.name typename))
+       List.mem ~equal:String.equal immutable_collections (Typ.Name.name typename))
     class_name
 
 let is_call_to_builder_class_method = function
@@ -752,8 +867,9 @@ let analyze_procedure callback =
     Typ.Procname.is_constructor proc_name || FbThreadSafety.is_custom_init tenv proc_name in
   let open ThreadSafetyDomain in
   let has_lock = false in
+  let known_on_ui_thread = false in
   let return_attrs = AttributeSetDomain.empty in
-  let empty = has_lock, AccessDomain.empty, return_attrs in
+  let empty =  known_on_ui_thread, has_lock, AccessDomain.empty, return_attrs in
   (* convert the abstract state to a summary by dropping the id map *)
   let compute_post ({ ProcData.pdesc; tenv; extras; } as proc_data) =
     if should_analyze_proc pdesc tenv
@@ -763,21 +879,30 @@ let analyze_procedure callback =
         let initial =
           if is_initializer tenv (Procdesc.get_proc_name pdesc)
           then
-            (* express that the constructor owns [this] *)
-            match FormalMap.get_formal_base 0 extras with
-            | Some base ->
-                let attribute_map =
-                  AttributeMapDomain.add_attribute
-                    (base, [])
-                    Attribute.unconditionally_owned
-                    ThreadSafetyDomain.empty.attribute_map in
-                { ThreadSafetyDomain.empty with attribute_map; }
-            | None -> ThreadSafetyDomain.empty
+            let add_owned_formal acc formal_index =
+              match FormalMap.get_formal_base formal_index extras with
+              | Some base ->
+                  AttributeMapDomain.add_attribute (base, []) Attribute.unconditionally_owned acc
+              | None ->
+                  acc in
+            let owned_formals =
+              (* if a constructer is called via DI, all of its formals will be freshly allocated
+                 and therefore owned. we assume that constructors annotated with @Inject will only
+                 be called via DI or using fresh parameters. *)
+              if Annotations.pdesc_has_return_annot pdesc Annotations.ia_is_inject
+              then List.mapi ~f:(fun i _ -> i)  (Procdesc.get_formals pdesc)
+              else [0] (* express that the constructor owns [this] *) in
+            let attribute_map =
+              List.fold
+                ~f:add_owned_formal
+                owned_formals
+                ~init:ThreadSafetyDomain.empty.attribute_map in
+            { ThreadSafetyDomain.empty with attribute_map; }
           else
             ThreadSafetyDomain.empty in
 
         match Analyzer.compute_post proc_data ~initial with
-        | Some { locks; accesses; attribute_map; } ->
+        | Some { threads; locks; accesses; attribute_map; } ->
             let return_var_ap =
               AccessPath.of_pvar
                 (Pvar.get_ret_pvar (Procdesc.get_proc_name pdesc))
@@ -785,7 +910,7 @@ let analyze_procedure callback =
             let return_attributes =
               try AttributeMapDomain.find return_var_ap attribute_map
               with Not_found -> AttributeSetDomain.empty in
-            Some (locks, accesses, return_attributes)
+            Some (threads, locks, accesses, return_attributes)
         | None ->
             None
       end
@@ -799,8 +924,10 @@ let analyze_procedure callback =
   | Some post -> post
   | None -> empty
 
-let checker callback =
-  ignore (analyze_procedure callback)
+let checker ({ Callbacks.summary } as callback_args) : Specs.summary =
+  let proc_name = Specs.get_proc_name summary in
+  ignore (analyze_procedure callback_args);
+  Specs.get_summary_unsafe "ThreadSafety.checker" proc_name
 
 (* creates a map from proc_envs to postconditions *)
 let make_results_table get_proc_desc file_env =
@@ -816,8 +943,9 @@ let make_results_table get_proc_desc file_env =
       | Some summ -> summ
       | None ->
           let callback_arg =
+            let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
             let get_procs_in_file _ = [] in
-            { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; proc_name; proc_desc } in
+            { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
           analyze_procedure callback_arg in
   map_post_computation_over_procs compute_post_for_procedure file_env
 
@@ -837,9 +965,12 @@ let get_current_class_and_threadsafe_superclasses tenv pname =
 let calculate_addendum_message tenv pname =
   match get_current_class_and_threadsafe_superclasses tenv pname with
   | Some (current_class,thread_safe_annotated_classes) ->
-      if not (List.mem ~equal:Typename.equal thread_safe_annotated_classes current_class) then
+      if not (List.mem ~equal:Typ.Name.equal thread_safe_annotated_classes current_class) then
         match thread_safe_annotated_classes with
-        | hd::_ -> F.asprintf "\n Note: Superclass %a is marked @ThreadSafe." Typename.pp hd
+        | hd::_ ->
+            F.asprintf "\n Note: Superclass %a is marked %a."
+              (MF.wrap_monospaced Typ.Name.pp) hd
+              MF.pp_monospaced "@ThreadSafe"
         | [] -> ""
       else ""
   | _ -> ""
@@ -900,16 +1031,24 @@ let filter_conflicting_sinks sink trace =
       (ThreadSafetyDomain.PathDomain.sinks trace) in
   ThreadSafetyDomain.PathDomain.update_sinks trace conflicts
 
-(* Given a sink representing a read access,
+(* Given a sink representing an access of kind (read or write),
    return a list of (proc_env,access-astate) pairs where
-   access-astate is a non-empty collection of conflicting
-   write accesses*)
-let collect_conflicting_writes sink tab =
-  let procs_and_writes =
+   access-astate is a collection of conflicting
+   accesses. If kind is READ, we look for conflicting writes,
+   and if threaded is TRUE we only take those accesses that are not known to be
+   threaded. If kind is WRITE we take all accesses, except again if threaded is true we keep only
+   those accesses that are unthreaded.
+   NOTE: as of now this is only used for conflicts with reads. TODO: do this for writes
+*)
+
+let collect_conflicts sink (*kind*) threaded tab = (*kind implicitly Read for now*)
+  let procs_and_accesses =
     List.map
-      ~f:(fun (key, (_, accesses, _)) ->
+      ~f:(fun (key, (other_access_threaded, _, accesses, _)) ->
           let conflicting_writes =
-            filter_conflicting_sinks sink (get_all_accesses Write accesses) in
+            if threaded && other_access_threaded then ThreadSafetyDomain.PathDomain.empty
+            else
+              filter_conflicting_sinks sink (get_all_accesses Write accesses) in
           key, conflicting_writes
         )
       (ResultsTableType.bindings tab) in
@@ -919,7 +1058,9 @@ let collect_conflicting_writes sink tab =
         && not (ThreadSafetyDomain.PathDomain.Sinks.is_empty
                   (ThreadSafetyDomain.PathDomain.sinks writes))
       )
-    procs_and_writes
+    procs_and_accesses
+
+
 
 (* keep only the first copy of an access per procedure,
    and keep at most one warning per line (they are usually interprocedural accesses
@@ -974,11 +1115,12 @@ let pp_accesses_sink fmt ~is_write_access sink =
      else snd access_path)
 
 (* trace is really a set of accesses*)
-let report_thread_safety_violations ( _, tenv, pname, pdesc) make_description trace tab =
+let report_thread_safety_violations
+    ( _, tenv, pname, pdesc) ~get_unsafe_accesses make_description trace threaded tab =
   let open ThreadSafetyDomain in
   let trace_of_pname callee_pname =
     match Summary.read_summary pdesc callee_pname with
-    | Some (_, accesses, _) -> get_possibly_unsafe_writes accesses
+    | Some (_, _, accesses, _) -> get_unsafe_accesses accesses
     | _ -> PathDomain.empty in
   let report_one_path ((_, sinks) as path) =
     let initial_sink, _ = List.last_exn sinks in
@@ -995,9 +1137,9 @@ let report_thread_safety_violations ( _, tenv, pname, pdesc) make_description tr
           "call to %a" Typ.Procname.pp (CallSite.pname (PathDomain.Sink.call_site sink)) in
     let loc = CallSite.loc (PathDomain.Sink.call_site initial_sink) in
     let ltr = PathDomain.to_sink_loc_trace ~desc_of_sink path in
-    let msg = Localise.to_string Localise.thread_safety_violation in
+    let msg = Localise.to_issue_id Localise.thread_safety_violation in
     let description = make_description tenv pname final_sink_site
-        initial_sink_site final_sink tab in
+        initial_sink_site final_sink threaded tab in
     let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
     Reporting.log_error pname ~loc ~ltr exn in
 
@@ -1007,19 +1149,20 @@ let report_thread_safety_violations ( _, tenv, pname, pdesc) make_description tr
 
 
 let make_unprotected_write_description
-    tenv pname final_sink_site initial_sink_site final_sink _ =
+    tenv pname final_sink_site initial_sink_site final_sink _ _ =
   Format.asprintf
     "Unprotected write. Public method %a%s %s %a outside of synchronization.%s"
-    Typ.Procname.pp pname
+    (MF.wrap_monospaced Typ.Procname.pp) pname
     (if CallSite.equal final_sink_site initial_sink_site then "" else " indirectly")
     (if is_container_write_sink final_sink then "mutates"  else "writes to field")
-    (pp_accesses_sink ~is_write_access:true) final_sink
+    (MF.wrap_monospaced (pp_accesses_sink ~is_write_access:true)) final_sink
     (calculate_addendum_message tenv pname)
 
-let make_read_write_race_description tenv pname final_sink_site initial_sink_site final_sink tab =
+let make_read_write_race_description
+    tenv pname final_sink_site initial_sink_site final_sink threaded tab =
   let conflicting_proc_envs = List.map
       ~f:fst
-      (collect_conflicting_writes final_sink tab) in
+      (collect_conflicts final_sink threaded tab) in
   let conflicting_proc_names = List.map
       ~f:(fun (_,_,proc_name,_) -> proc_name)
       conflicting_proc_envs in
@@ -1029,32 +1172,35 @@ let make_read_write_race_description tenv pname final_sink_site initial_sink_sit
   let conflicts_description =
     Format.asprintf "Potentially races with writes in method%s %a."
       (if List.length conflicting_proc_names > 1 then "s" else "")
-      pp_proc_name_list conflicting_proc_names in
+      (MF.wrap_monospaced pp_proc_name_list) conflicting_proc_names in
   Format.asprintf "Read/Write race. Public method %a%s reads from field %a. %s %s"
-    Typ.Procname.pp pname
+    (MF.wrap_monospaced Typ.Procname.pp) pname
     (if CallSite.equal final_sink_site initial_sink_site then "" else " indirectly")
-    (pp_accesses_sink ~is_write_access:false) final_sink
+    (MF.wrap_monospaced (pp_accesses_sink ~is_write_access:false)) final_sink
     conflicts_description
     (calculate_addendum_message tenv pname)
 
 (* find those elements of reads which have conflicts
         somewhere else, and report them *)
-let report_reads proc_env reads tab =
+let report_reads proc_env reads threaded tab =
   let racy_read_sinks =
     ThreadSafetyDomain.PathDomain.Sinks.filter
       (fun sink ->
          (* there exists a postcondition whose write set conflicts with
             sink*)
-         not (List.is_empty (collect_conflicting_writes sink tab))
+         not (List.is_empty (collect_conflicts sink threaded tab))
       )
       (ThreadSafetyDomain.PathDomain.sinks reads)
   in
   let racy_reads =
     ThreadSafetyDomain.PathDomain.update_sinks reads racy_read_sinks
   in
-  report_thread_safety_violations proc_env
+  report_thread_safety_violations
+    proc_env
+    ~get_unsafe_accesses:get_possibly_unsafe_reads
     make_read_write_race_description
     racy_reads
+    threaded
     tab
 
 (* Currently we analyze if there is an @ThreadSafe annotation on at least one of
@@ -1075,8 +1221,33 @@ let should_report_on_file file_env =
   not (List.exists ~f:current_class_marked_not_threadsafe file_env) &&
   List.exists ~f:current_class_or_super_marked_threadsafe file_env
 
-(* For now, just checks if there is one active element amongst the posts of the analyzed methods.
-   This indicates that the method races with itself. To be refined later. *)
+
+(**
+   Principles for race reporting.
+   Two accesses are excluded if they are both protetected by the same lock or
+   are known to be on the same thread. Otherwise they are in conflict. We want to report
+   conflicting accesses one of which is a write.
+
+   To cut down on duplication noise we don't always report at both sites (line numbers)
+   involved in a race.
+   -- If a protected access races with an unprotected one, we don't
+   report the protected but we do report the unprotected one (and we
+   point to the protected from the unprotected one).
+   This way the report is at the line number ina race-pair where the programmer should take action.
+   -- Similarly, if a threaded and unthreaded (not known to be threaded) access race,
+   we report at the unthreaded site.
+
+   Also, we avoid reporting multiple races at the same line (which can happen a lot in
+   an interprocedural scenario) or multiple accesses to the same field in a single method,
+   expecting that the programmer already gets signal from one report. To report all the races
+   with separate warnings leads to a lot of noise.  But note, we never suppress
+   all the potential issues in a class: if we don't report any races, it means we didn't
+   find any.
+
+   The above is tempered at the moment by abstractions of "same lock" and "same thread":
+   we are currently not distinguishing different locks, and are treating "known to be
+   confined to a thread" as if "known to be confined to UI thread".
+*)
 let process_results_table file_env tab =
   let should_report_on_all_procs = should_report_on_file file_env in
   (* TODO (t15588153): clean this up *)
@@ -1093,7 +1264,7 @@ let process_results_table file_env tab =
     (should_report_on_all_procs || is_thread_safe_method pdesc tenv)
     && should_report_on_proc proc_env in
   ResultsTableType.iter (* report errors for each method *)
-    (fun proc_env (_, accesses, _) ->
+    (fun proc_env (threaded, _, accesses, _) ->
        if should_report proc_env
        then
          let open ThreadSafetyDomain in
@@ -1112,9 +1283,16 @@ let process_results_table file_env tab =
            let stripped_unsafe_reads = strip_reads_that_have_co_located_write
                unsafe_reads
                unsafe_writes in
-           report_thread_safety_violations
-             proc_env make_unprotected_write_description unsafe_writes tab;
-           report_reads proc_env stripped_unsafe_reads tab
+           if not threaded
+           then (*don't report writes for threaded; TODO to extend this*)
+             report_thread_safety_violations
+               proc_env
+               ~get_unsafe_accesses:get_possibly_unsafe_writes
+               make_unprotected_write_description
+               unsafe_writes
+               threaded
+               tab;
+           report_reads proc_env stripped_unsafe_reads threaded tab
          end
     )
     tab

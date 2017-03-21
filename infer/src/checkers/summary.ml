@@ -39,13 +39,12 @@ module Make (H : Helper) = struct
     match Specs.get_summary pname with
     | Some global_summary ->
         let payload = H.update_payload summary global_summary.Specs.payload in
-        Specs.store_summary { global_summary with payload; }
+        Specs.add_summary pname { global_summary with payload; }
     | None ->
         failwithf "Summary for %a should exist, but does not!@." Typ.Procname.pp pname
 
   let read_summary caller_pdesc callee_pname =
-    ignore (Ondemand.analyze_proc_name ~propagate_exceptions:false caller_pdesc callee_pname);
-    match Specs.get_summary callee_pname with
+    match Ondemand.analyze_proc_name ~propagate_exceptions:false caller_pdesc callee_pname with
     | None -> None
     | Some summary -> H.read_from_payload summary.Specs.payload
 end

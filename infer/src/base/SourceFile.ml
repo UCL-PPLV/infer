@@ -90,9 +90,17 @@ let append_crc_cutoff ?(key="") name =
     Utils.string_crc_hex32 name_for_crc in
   name_up_to_cutoff ^ Char.to_string crc_token ^ crc_str
 
+(* Lengh of .crc part: 32 characters of digest, plus 1 character of crc_token *)
+let dot_crc_len = 1 + 32
+
 let strip_crc str =
-  (* Strip 32 characters of digest, plus 1 character of crc_token *)
-  String.sub ~pos:0 ~len:(String.length str - 33) str
+  Core.Std.String.slice str 0 (- dot_crc_len)
+
+let string_crc_has_extension ~ext name_crc =
+  let name = strip_crc name_crc in
+  match Filename.split_extension name with
+  | (_, Some ext') -> String.equal ext ext'
+  | (_, None) -> false
 
 (** string encoding of a source file (including path) as a single filename *)
 let encoding source_file =
@@ -150,18 +158,19 @@ let of_header header_file =
     | _ -> None in
   Option.map ~f:from_abs_path file_opt
 
+let create path =
+  if Filename.is_relative path then
+    (* sources in changed-files-index may be specified relative to project root *)
+    RelativeProjectRoot path
+  else
+    from_abs_path path
+
 let changed_files_set =
-  let create_source_file path =
-    if Filename.is_relative path then
-      (* sources in changed-files-index may be specified relative to project root *)
-      RelativeProjectRoot path
-    else
-      from_abs_path path in
   Option.bind Config.changed_files_index Utils.read_file |>
   Option.map ~f:(
     List.fold
       ~f:(fun changed_files line ->
-          let source_file = create_source_file line in
+          let source_file = create line in
           let changed_files' = Set.add source_file changed_files in
           (* Add source corresponding to changed header if it exists *)
           match of_header source_file with

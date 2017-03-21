@@ -76,4 +76,26 @@ public class ParameterNotNullable {
     return cls.getResource(null);
   }
 
+  void threeParameters(String s1, String s2, String s3) {
+  }
+
+  void testThreeParameters() {
+    String s = "";
+    threeParameters(null, s, s);
+    threeParameters(s, null, s);
+    threeParameters(s, s, null);
+  }
+
+  class ConstructorCall {
+    ConstructorCall(int x, String s) {
+    }
+
+    ConstructorCall() {
+      this(3, ""); // OK
+    }
+
+    ConstructorCall(int x) {
+      this(3, null); // NPE
+    }
+  }
 }

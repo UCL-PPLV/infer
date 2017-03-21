@@ -76,10 +76,60 @@ public class Locks {
     mReentrantLock.unlock();
   }
 
-  public void rReentrantLockTryLockOk() {
+  public void normalLockTryLockOk() {
+    if (mLock.tryLock()) {
+      f = 42;
+      mLock.unlock();
+    }
+  }
+
+  public void reentrantLockTryLockOk() {
     if (mReentrantLock.tryLock()) {
       f = 42;
       mReentrantLock.unlock();
+    }
+  }
+
+  public void tryLockNoCheckBad() {
+    mReentrantLock.tryLock(); // might return false
+    f = 42;
+  }
+
+  public void tryLockWrongBranchBad() {
+    if (mReentrantLock.tryLock()) {
+    } else {
+      f = 42;
+    }
+  }
+
+  public void tryLockPropagateOk() {
+    boolean result = mReentrantLock.tryLock();
+    boolean copy = result;
+    if (copy) {
+      f = 42;
+    }
+  }
+
+  public void negatedReentrantLockTryLockBad() {
+    if (!mReentrantLock.tryLock()) {
+      f = 42;
+    }
+  }
+
+  public void negatedReentrantLockTryLockOk() {
+    if (!mReentrantLock.tryLock()) {
+
+    } else {
+      f = 42;
+    }
+  }
+
+  // we could catch this by invalidating the choice predicates whenever we update the lock domain
+  public void FN_tryLockStaleBad() {
+    boolean result = mReentrantLock.tryLock();
+    mReentrantLock.unlock();
+    if (result) {
+      f = 42; // oops, actually not safe
     }
   }
 
@@ -129,13 +179,6 @@ public class Locks {
     mLock.lock();
     releaseLock();
     f = 42;
-  }
-
-  // we don't model the case where `tryLock` fails
-  public void FN_withReentrantLockTryLockBad() {
-    if (!mReentrantLock.tryLock()) {
-      f = 42;
-    }
   }
 
   // we shouldn't be able to write when holding a readLock

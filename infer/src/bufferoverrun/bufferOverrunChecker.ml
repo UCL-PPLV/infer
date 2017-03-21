@@ -405,7 +405,8 @@ struct
         | Some bucket when Typ.Procname.equal pname caller_pname ->
             let description = Dom.Condition.to_string cond in
             let error_desc = Localise.desc_buffer_overrun bucket description in
-            let exn = Exceptions.Checkers (Localise.to_string Localise.buffer_overrun, error_desc) in
+            let exn =
+              Exceptions.Checkers (Localise.to_issue_id Localise.buffer_overrun, error_desc) in
             let trace = [Errlog.make_trace_element 0 loc description []] in
             Reporting.log_error pname ~loc ~ltr:trace exn
         | _ -> ()
@@ -443,8 +444,9 @@ let print_summary : Typ.Procname.t -> Dom.Summary.t -> unit
     Dom.Summary.pp_summary F.err_formatter s;
     F.fprintf F.err_formatter "@]@."
 
-let checker : Callbacks.proc_callback_args -> unit
-  = fun ({ proc_name } as callback) ->
+let checker : Callbacks.proc_callback_args -> Specs.summary
+  = fun ({ summary } as callback) ->
+    let proc_name = Specs.get_proc_name summary in
     let make_extras _ = callback.get_proc_desc in
     let post =
       Interprocedural.compute_and_store_post
@@ -452,6 +454,9 @@ let checker : Callbacks.proc_callback_args -> unit
         ~make_extras
         callback
     in
-    match post with
-    | Some s when Config.bo_debug >= 1 -> print_summary proc_name s
-    | _ -> ()
+    begin
+      match post with
+      | Some s when Config.bo_debug >= 1 -> print_summary proc_name s
+      | _ -> ()
+    end;
+    Specs.get_summary_unsafe "bufferOverrunChecker.checker" proc_name

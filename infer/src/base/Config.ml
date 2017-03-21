@@ -144,6 +144,8 @@ let default_in_zip_results_dir = "infer"
 (** Dotty output filename **)
 let dotty_output = "icfg.dot"
 
+let duplicates_filename = "duplicates.txt"
+
 (** exit code to use for the --fail-on-issue option *)
 let fail_on_issue_exit_code = 2
 
@@ -209,10 +211,6 @@ let reporting_stats_dir_name = "reporting_stats"
 
 (** If true, compact summaries before saving *)
 let save_compact_summaries = true
-
-(** If true, save the execution time in summaries.  This makes the analysis
-    nondeterministic. *)
-let save_time_in_summaries = false
 
 (** If true enables printing proposition compatible for the SMT project *)
 let smt_output = false
@@ -384,7 +382,7 @@ let inferconfig_home =
     ~parse_mode:CLOpt.(Infer all_sections) ~meta:"dir" "Path to the .inferconfig file"
 
 and project_root =
-  CLOpt.mk_path ~deprecated:["project_root"; "-project_root"] ~long:"project-root" ~short:"pr"
+  CLOpt.mk_path ~deprecated:["project_root"; "-project_root"; "pr"] ~long:"project-root" ~short:'C'
     ~default:CLOpt.init_work_dir
     ~parse_mode:CLOpt.(Infer [Analysis;Clang;Driver;Print])
     ~meta:"dir" "Specify the root directory of the project"
@@ -513,7 +511,7 @@ and analyzer =
        documentation of this option *)
     | Capture | Compile | Infer | Eradicate | Checkers | Tracing | Crashcontext | Linters
     | Quandary | Threadsafety | Bufferoverrun | Permsafety -> () in
-  CLOpt.mk_symbol_opt ~deprecated:["analyzer"] ~long:"analyzer" ~short:"a"
+  CLOpt.mk_symbol_opt ~deprecated:["analyzer"] ~long:"analyzer" ~short:'a'
     ~parse_mode:CLOpt.(Infer [Driver])
     "Specify which analyzer to run (only one at a time is supported):\n\
      - infer, eradicate, checkers, quandary, threadsafety, bufferoverrun, permsafety: run the specified analysis\n\
@@ -546,7 +544,7 @@ and array_level =
                  - 2 = assumes that all heap dereferences via array indexing and pointer \
                  arithmetic are correct"
 and ast_file =
-  CLOpt.mk_path_opt ~long:"ast-file" ~short:"ast"
+  CLOpt.mk_path_opt ~deprecated:["ast"] ~long:"ast-file"
     ~meta:"file" "AST file for the translation"
 
 and blacklist =
@@ -576,6 +574,7 @@ and buck_build_args =
 
 and buck_compilation_database =
   CLOpt.mk_symbol_opt ~long:"buck-compilation-database" ~deprecated:["-use-compilation-database"]
+    ~parse_mode:CLOpt.(Infer [Driver])
     "Buck integration using the compilation database, with or without dependencies."
     ~symbols:[("deps", `Deps); ("no-deps", `NoDeps)]
 
@@ -621,11 +620,6 @@ and changed_files_index =
   CLOpt.mk_path_opt ~long:"changed-files-index" ~parse_mode:CLOpt.(Infer [Driver]) ~meta:"file"
     "Specify the file containing the list of source files from which reactive analysis should \
      start. Source files should be specified relative to project root or be absolute"
-
-and check_duplicate_symbols =
-  CLOpt.mk_bool ~long:"check-duplicate-symbols"
-    ~parse_mode:CLOpt.(Infer [Clang])
-    "Check if a symbol with the same name is defined in more than one file."
 
 and checkers, crashcontext, eradicate, quandary, threadsafety, bufferoverrun, permsafety =
   let checkers =
@@ -757,7 +751,7 @@ and (
       "Show internal exceptions"
 
   and filtering =
-    CLOpt.mk_bool ~long:"filtering" ~short:"f" ~default:true
+    CLOpt.mk_bool ~deprecated_no:["nf"] ~long:"filtering" ~short:'f' ~default:true
       ~parse_mode:CLOpt.(Infer [Driver])
       "Do not show the results from experimental checks (note: some of them may contain many false \
        alarms)"
@@ -793,7 +787,7 @@ and (
       "Produce dotty files for specs in the results directory"
   in
   let debug =
-    CLOpt.mk_bool_group ~deprecated:["debug"] ~long:"debug" ~short:"g"
+    CLOpt.mk_bool_group ~deprecated:["debug"] ~long:"debug" ~short:'g'
       ~parse_mode:CLOpt.(Infer [Driver])
       "Debug mode (also sets --developer-mode, --no-filtering, --print-buckets, --print-types, \
        --reports-include-ml-loc, --no-test, --trace-error, --write-dotty, --write-html)"
@@ -840,6 +834,10 @@ and disable_checks =
 and dotty_cfg_libs =
   CLOpt.mk_bool ~deprecated:["dotty_no_cfg_libs"] ~long:"dotty-cfg-libs" ~default:true
     "Print the cfg of the code coming from the libraries"
+
+and dump_duplicate_symbols =
+  CLOpt.mk_bool ~long:"dump-duplicate-symbols" ~parse_mode:CLOpt.(Infer [Clang])
+    "Dump all symbols with the same name that are defined in more than one file."
 
 and dynamic_dispatch =
   CLOpt.mk_symbol_opt ~long:"dynamic-dispatch"
@@ -917,6 +915,12 @@ and filter_paths =
   CLOpt.mk_bool ~long:"filter-paths" ~default:true
     "Filters specified in .inferconfig"
 
+and filter_report_paths =
+  CLOpt.mk_string_opt
+    ~long:"filter-report-paths" ~parse_mode:CLOpt.(Infer [Print])
+    "Specify the file containing a newline-separated list of files for which to emit a report. \
+     Source files should be specified relative to project root or be absolute."
+
 and flavors =
   CLOpt.mk_bool ~deprecated:["-use-flavors"] ~long:"flavors"
     ~parse_mode:CLOpt.(Infer [Driver])
@@ -931,12 +935,13 @@ and from_json_report =
      files generated by the analysis)."
 
 and frontend_debug =
-  CLOpt.mk_bool ~long:"frontend-debug" ~short:"fd"
+  CLOpt.mk_bool ~deprecated:["fd"] ~deprecated_no:["nfd"] ~long:"frontend-debug"
+    ~parse_mode:CLOpt.(Infer [Clang])
     "Emit debug info to *.o.astlog and a script *.o.sh that replays the command used to run clang \
-     with the plugin attached, piped to the InferClang frontend command (clang only)"
+     with the plugin attached, piped to the InferClang frontend command"
 
 and frontend_stats =
-  CLOpt.mk_bool ~long:"frontend-stats" ~short:"fs"
+  CLOpt.mk_bool ~deprecated:["fs"] ~deprecated_no:["nfs"] ~long:"frontend-stats"
     "Output statistics about the capture phase to *.o.astlog (clang only)"
 
 and frontend_tests =
@@ -950,7 +955,7 @@ and generated_classes =
     "Specify where to load the generated class files"
 
 and headers =
-  CLOpt.mk_bool ~deprecated:["headers"] ~deprecated_no:["no_headers"] ~long:"headers" ~short:"hd"
+  CLOpt.mk_bool ~deprecated:["headers"; "hd"] ~deprecated_no:["no_headers"; "nhd"] ~long:"headers"
     ~parse_mode:CLOpt.(Infer [Clang])
     "Analyze code in header files"
 
@@ -992,7 +997,7 @@ and java_jar_compiler =
     ~meta:"path" "Specifify the Java compiler jar used to generate the bytecode"
 
 and jobs =
-  CLOpt.mk_int ~deprecated:["-multicore"] ~long:"jobs" ~short:"j" ~default:ncpu
+  CLOpt.mk_int ~deprecated:["-multicore"] ~long:"jobs" ~short:'j' ~default:ncpu
     ~parse_mode:CLOpt.(Infer [Driver])
     ~meta:"int" "Run the specified number of analysis jobs simultaneously"
 
@@ -1018,7 +1023,7 @@ and linters_developer_mode =
      default linters and also sets --print-logs, --debug and --no-allowed-failures."
 
 and load_average =
-  CLOpt.mk_float_opt ~long:"load-average" ~short:"l"
+  CLOpt.mk_float_opt ~long:"load-average" ~short:'l'
     ~parse_mode:CLOpt.(Infer [Driver]) ~meta:"float"
     "Do not start new parallel jobs if the load average is greater than that specified (Buck and \
      make only)"
@@ -1101,6 +1106,11 @@ and patterns_skip_translation =
    CLOpt.mk_json ~deprecated:["skip_translation"] ~long
      "Matcher or list of matchers for names of files that should not be analyzed at all.")
 
+and per_procedure_parallelism =
+  CLOpt.mk_bool ~deprecated:["per-procedure-parallelism"] ~long:"per-procedure-parallelism"
+    "Perform analysis with per-procedure parallelism.\n\
+     Java is not supported."
+
 and pmd_xml =
   CLOpt.mk_bool ~long:"pmd-xml"
     ~parse_mode:CLOpt.(Infer [Driver])
@@ -1133,7 +1143,8 @@ and procs_xml =
      --results-dir)"
 
 and progress_bar =
-  CLOpt.mk_bool ~deprecated_no:["no_progress_bar"] ~long:"progress-bar" ~short:"pb" ~default:true
+  CLOpt.mk_bool ~deprecated:["pb"] ~deprecated_no:["no_progress_bar"; "npb"] ~short:'p'
+    ~long:"progress-bar" ~default:true
     ~parse_mode:CLOpt.(Infer [Driver])
     "Show a progress bar"
 
@@ -1148,12 +1159,13 @@ and quandary_sinks =
     "Specify custom sinks for Quandary"
 
 and quiet =
-  CLOpt.mk_bool ~long:"quiet" ~short:"q" ~default:(current_exe <> Print)
+  CLOpt.mk_bool ~long:"quiet" ~short:'q' ~default:(current_exe <> Print)
     ~parse_mode:CLOpt.(Infer [Print])
     "Do not print specs on standard output"
 
 and reactive =
-  CLOpt.mk_bool ~deprecated:["reactive"] ~long:"reactive" ~short:"r"
+  CLOpt.mk_bool ~deprecated:["reactive"] ~long:"reactive" ~short:'r'
+    ~parse_mode:CLOpt.(Infer [Driver])
     "Reactive mode: the analysis starts from the files captured since the `infer` command started"
 
 and reactive_capture =
@@ -1171,6 +1183,16 @@ and report_current =
 and report_custom_error =
   CLOpt.mk_bool ~long:"report-custom-error"
     ""
+
+and report_formatter =
+  CLOpt.mk_symbol ~long:"report-formatter"
+    ~parse_mode:CLOpt.(Infer [Driver; Print])
+    ~default:`Phabricator_formatter
+    ~symbols:[
+      ("none", `No_formatter);
+      ("phabricator", `Phabricator_formatter);
+    ] ~eq:PVariant.(=)
+    "Which formatter to use when emitting the report"
 
 and report_hook =
   CLOpt.mk_string_opt ~long:"report-hook"
@@ -1201,7 +1223,7 @@ and rest =
     )
 
 and results_dir =
-  CLOpt.mk_path ~deprecated:["results_dir"; "-out"] ~long:"results-dir" ~short:"o"
+  CLOpt.mk_path ~deprecated:["results_dir"; "-out"] ~long:"results-dir" ~short:'o'
     ~default:(CLOpt.init_work_dir ^/ "infer-out")
     ~parse_mode:CLOpt.(Infer [Analysis;Clang;Driver;Print])
     ~meta:"dir" "Write results and internal files in the specified directory"
@@ -1252,7 +1274,7 @@ and spec_abs_level =
 
 and specs_library =
   let specs_library =
-    CLOpt.mk_path_list ~long:"specs-library" ~short:"lib"
+    CLOpt.mk_path_list ~deprecated:["lib"] ~long:"specs-library" ~short:'L'
       ~meta:"dir|jar" "Search for .spec files in given directory or jar file" in
   let _ =
     (* Given a filename with a list of paths, convert it into a list of string iff they are
@@ -1278,7 +1300,7 @@ and specs_library =
   specs_library
 
 and stacktrace =
-  CLOpt.mk_path_opt ~long:"stacktrace" ~short:"st" ~parse_mode:CLOpt.(Infer [Crashcontext])
+  CLOpt.mk_path_opt ~deprecated:["st"] ~long:"stacktrace" ~parse_mode:CLOpt.(Infer [Crashcontext])
     ~meta:"file" "File path containing a json-encoded Java crash stacktrace. Used to guide the \
                   analysis (only with '-a crashcontext').  See \
                   tests/codetoanalyze/java/crashcontext/*.json for examples of the expected format."
@@ -1309,7 +1331,8 @@ and test_filtering =
     "List all the files Infer can report on (should be called from the root of the project)"
 
 and testing_mode =
-  CLOpt.mk_bool ~deprecated:["testing_mode"; "-testing_mode"] ~long:"testing-mode" ~short:"tm"
+  CLOpt.mk_bool ~deprecated:["testing_mode"; "-testing_mode"; "tm"] ~deprecated_no:["ntm"]
+    ~long:"testing-mode"
     "Mode for testing, where no headers are translated, and dot files are created (clang only)"
 
 and threadsafe_aliases =
@@ -1401,7 +1424,7 @@ and xml_specs =
    Infer.run_javac for a version that looks inside argfiles, and discussion in D4397716. *)
 let javac_classes_out =
   CLOpt.mk_string ~parse_mode:CLOpt.Javac
-    ~deprecated:["classes_out"] ~short:"d" ~long:"" ~default:CLOpt.init_work_dir
+    ~deprecated:["classes_out"] ~long:"" ~short:'d' ~default:CLOpt.init_work_dir
     ~f:(fun classes_out ->
         if !buck then (
           let classes_out_infer = resolve classes_out ^/ buck_results_dir_name in
@@ -1414,7 +1437,7 @@ let javac_classes_out =
 
 and java_classpath =
   CLOpt.mk_string_opt ~parse_mode:CLOpt.Javac
-    ~deprecated:["classpath"] ~short:"cp" ~long:""
+    ~deprecated:["classpath";"cp"] ~long:""
     ~f:(fun classpath ->
         if !buck then (
           let paths = String.split classpath ~on:':' in
@@ -1568,7 +1591,7 @@ and bugs_txt = !bugs_txt
 and bugs_xml = !bugs_xml
 and changed_files_index = !changed_files_index
 and calls_csv = !calls_csv
-and check_duplicate_symbols = !check_duplicate_symbols
+and dump_duplicate_symbols = !dump_duplicate_symbols
 and checkers = !checkers
 and checkers_repeated_calls = !checkers_repeated_calls
 and clang_biniou_file = !clang_biniou_file
@@ -1605,6 +1628,7 @@ and fcp_apple_clang = !fcp_apple_clang
 and fcp_syntax_only = !fcp_syntax_only
 and file_renamings = !file_renamings
 and filter_paths = !filter_paths
+and filter_report_paths = !filter_report_paths
 and filtering = !filtering
 and final_parse_action = parse_action
 and flavors = !flavors
@@ -1644,6 +1668,7 @@ and out_file_cmdline = !out_file
 and patterns_never_returning_null = match patterns_never_returning_null with (k,r) -> (k,!r)
 and patterns_skip_translation = match patterns_skip_translation with (k,r) -> (k,!r)
 and patterns_modeled_expensive = match patterns_modeled_expensive with (k,r) -> (k,!r)
+and per_procedure_parallelism = !per_procedure_parallelism
 and pmd_xml = !pmd_xml
 and precondition_stats = !precondition_stats
 and print_logs = !print_logs
@@ -1661,6 +1686,7 @@ and reactive_capture = !reactive_capture
 and report = !report
 and report_current = !report_current
 and report_custom_error = !report_custom_error
+and report_formatter = !report_formatter
 and report_hook = !report_hook
 and report_previous = !report_previous
 and report_runtime_exceptions = !tracing

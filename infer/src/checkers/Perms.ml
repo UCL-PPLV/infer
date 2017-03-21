@@ -53,7 +53,7 @@ let should_report_on_proc (_, _, proc_name, proc_desc) =
   Procdesc.get_access proc_desc <> PredSymb.Private &&
   not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting)
 
-module ClassMap = PrettyPrintable.MakePPMap(Typename)
+module ClassMap = PrettyPrintable.MakePPMap(Typ.Name)
 
 module Summary = struct
   module S = struct
@@ -212,7 +212,7 @@ module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
 
 (* compute the summary of a method *)
 let compute_and_store_post callback =
-  L.out "Analyzing method %a@." Typ.Procname.pp callback.Callbacks.proc_name ;
+  (* L.out "Analyzing method %a@." Typ.Procname.pp callback.Callbacks ; *)
   let compute_post pdata =
     let initial = State.empty in
     let pdata = ProcData.make_default pdata.ProcData.pdesc pdata.ProcData.tenv in
@@ -344,12 +344,16 @@ let should_analyze ((_,tenv,_,pdesc) as p) =
 
 (* run actual analysis, remembering proc info *)
 let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as p) =
-  let callback =
-    {Callbacks.get_proc_desc; get_procs_in_file = (fun _ -> []);
-     idenv; tenv; proc_name; proc_desc} in
-  match compute_and_store_post callback with
-  | Some sum -> Some (p, sum)
-  | None -> None
+  match Summary.read_summary proc_desc proc_name with
+  | Some summ -> Some (p, summ)
+  | None ->
+      let callback_arg =
+        let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
+        let get_procs_in_file _ = [] in
+        { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
+      match compute_and_store_post callback_arg with
+      | Some sum -> Some (p, sum)
+      | None -> None
 
 let run_check (vars, ctr_map, extra_ctrs) =
   (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
@@ -383,7 +387,7 @@ let run_check (vars, ctr_map, extra_ctrs) =
         let atoms = Atom.Set.elements (Atom.Set.remove w atoms) in
         let loc = CallSite.loc (List.last_exn w.path) in
         let pname = CallSite.pname (List.last_exn w.path) in
-        let msg = Localise.to_string Localise.thread_safety_violation in
+        let msg = Localise.to_issue_id Localise.thread_safety_violation in
         let description =
           match atoms with
           | [] -> F.asprintf "The <%a> is a potential self-race." Atom.pp w

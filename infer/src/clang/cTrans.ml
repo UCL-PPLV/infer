@@ -116,7 +116,7 @@ struct
     Logging.out_debug "Block %s field:\n" block_name;
     List.iter ~f:(fun (fn, _, _) ->
         Logging.out_debug "-----> field: '%s'\n" (Ident.fieldname_to_string fn)) fields;
-    let block_typename = Typename.Objc.from_string block_name in
+    let block_typename = Typ.Name.Objc.from_string block_name in
     ignore (Tenv.mk_struct tenv ~fields block_typename);
     let block_type = Typ.Tstruct block_typename in
     let trans_res =
@@ -566,7 +566,7 @@ struct
               type_ptr with
       | Some builtin_pname -> builtin_pname
       | None ->
-          let class_typename = Typename.Cpp.from_string
+          let class_typename = Typ.Name.Cpp.from_string
               (CAst_utils.get_class_name_from_member name_info) in
           CMethod_trans.create_procdesc_with_pointer context decl_ptr (Some class_typename)
             method_name in
@@ -656,8 +656,7 @@ struct
         init_expr_trans trans_state (var_exp, typ) stmt_info init_expr
       else empty_res_trans in
     let exps = if Self.is_var_self pvar (CContext.is_objc_method context) then
-        let curr_class = CContext.get_curr_class context in
-        let class_typename = CContext.get_curr_class_typename curr_class in
+        let class_typename = CContext.get_curr_class_typename context in
         if (CType.is_class typ) then
           raise (Self.SelfClassException class_typename)
         else
@@ -892,10 +891,9 @@ struct
           let params = List.tl_exn (collect_exprs result_trans_subexprs) in
           if Int.equal (List.length params) (List.length params_stmt) then
             params
-          else (Logging.err_debug
-                  "WARNING: stmt_list and res_trans_par.exps must have same size. \
-                   NEED TO BE FIXED\n\n";
-                fix_param_exps_mismatch params_stmt params) in
+          else
+            (Logging.out_debug "ERROR: stmt_list and res_trans_par.exps must have same size\n";
+             assert false) in
         let act_params = if is_cf_retain_release then
             (Exp.Const (Const.Cint IntLit.one), Typ.Tint Typ.IBool) :: act_params
           else act_params in
@@ -2588,7 +2586,7 @@ struct
     | CXXTryStmt (_, stmts) ->
         (Logging.out
            "\n!!!!WARNING: found statement %s. \nTranslation need to be improved.... \n"
-           (CAst_utils.string_of_stmt instr);
+           (Clang_ast_proj.get_stmt_kind_string instr);
          compoundStmt_trans trans_state stmts)
 
     | ObjCAtThrowStmt (stmt_info, stmts)
@@ -2675,7 +2673,7 @@ struct
     | s -> (Logging.out
               "\n!!!!WARNING: found statement %s. \nACTION REQUIRED: \
                Translation need to be defined. Statement ignored.... \n"
-              (CAst_utils.string_of_stmt s);
+              (Clang_ast_proj.get_stmt_kind_string s);
             assert false)
 
   (* Function similar to instruction function, but it takes C++ constructor initializer as

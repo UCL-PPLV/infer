@@ -126,7 +126,7 @@ struct
     | _ ->
         Logging.out
           "\nWARNING: found Method Declaration '%s' skipped. NEED TO BE FIXED\n\n"
-          (CAst_utils.string_of_decl dec);
+          (Clang_ast_proj.get_decl_kind_string dec);
         ()
 
   let process_methods trans_unit_ctx tenv cg cfg curr_class decl_list =
@@ -204,7 +204,7 @@ struct
 
        | ObjCImplementationDecl(decl_info, _, decl_list, _, _) ->
            let curr_class = CContext.ContextClsDeclPtr dec_ptr in
-           let class_typename = CType_decl.get_record_typename dec in
+           let class_typename = CType_decl.get_record_typename ~tenv dec in
            let type_ptr_to_sil_type = CType_decl.type_ptr_to_sil_type in
            ignore (ObjcInterface_decl.interface_impl_declaration type_ptr_to_sil_type tenv dec);
            CMethod_trans.add_default_method_for_class trans_unit_ctx class_typename decl_info;
@@ -223,7 +223,7 @@ struct
                 let curr_class = CContext.ContextClsDeclPtr parent_ptr in
                 process_methods trans_unit_ctx tenv cg cfg curr_class [dec]
             | Some dec ->
-                Logging.out "Methods of %s skipped\n" (CAst_utils.string_of_decl dec)
+                Logging.out "Methods of %s skipped\n" (Clang_ast_proj.get_decl_kind_string dec)
             | None -> ())
        | VarDecl (decl_info, named_decl_info, qt, ({ vdi_is_global; vdi_init_expr } as vdi))
          when vdi_is_global && Option.is_some vdi_init_expr ->

@@ -68,18 +68,35 @@ let make_access access_path access_kind loc =
 
 module LocksDomain = AbstractDomain.BooleanAnd
 
+(*At first we are modelling the distinction "true, known to be UI thread"
+  and "false, don't know definitley to be main tread". Can refine later *)
+module ThreadsDomain = AbstractDomain.BooleanAnd
+
 module PathDomain = SinkTrace.Make(TraceElem)
+
+module Choice = struct
+  type t =
+    | OnMainThread
+    | LockHeld
+  [@@deriving compare]
+
+  let pp fmt = function
+    | OnMainThread -> F.fprintf fmt "OnMainThread"
+    | LockHeld -> F.fprintf fmt "LockHeld"
+end
 
 module Attribute = struct
   type t =
     | OwnedIf of int option
     | Functional
+    | Choice of Choice.t
   [@@deriving compare]
 
   let pp fmt = function
     | OwnedIf None -> F.fprintf fmt "Owned"
     | OwnedIf (Some formal_index) -> F.fprintf fmt "Owned if formal %d is owned" formal_index
     | Functional -> F.fprintf fmt "Functional"
+    | Choice choice -> Choice.pp fmt choice
 
   let unconditionally_owned = OwnedIf None
 
@@ -112,6 +129,17 @@ module AttributeMapDomain = struct
          (AttributeSetDomain.elements attributes))
     with Not_found ->
       None
+
+  let get_choices access_path t =
+    try
+      let attributes = find access_path t in
+      (List.filter_map
+         ~f:(function
+             | Attribute.Choice c -> Some c
+             | _ -> None)
+         (AttributeSetDomain.elements attributes))
+    with Not_found ->
+      []
 
   let add_attribute access_path attribute t =
     let attribute_set =
@@ -158,25 +186,29 @@ end
 
 type astate =
   {
+    threads: ThreadsDomain.astate;
     locks : LocksDomain.astate;
     accesses : AccessDomain.astate;
     id_map : IdAccessPathMapDomain.astate;
     attribute_map : AttributeMapDomain.astate;
   }
 
-type summary = LocksDomain.astate * AccessDomain.astate * AttributeSetDomain.astate
+type summary = ThreadsDomain.astate * LocksDomain.astate
+               * AccessDomain.astate * AttributeSetDomain.astate
 
 let empty =
+  let threads = false in
   let locks = false in
   let accesses = AccessDomain.empty in
   let id_map = IdAccessPathMapDomain.empty in
   let attribute_map = AccessPath.UntypedRawMap.empty in
-  { locks; accesses; id_map; attribute_map; }
+  { threads; locks; accesses; id_map; attribute_map; }
 
 let (<=) ~lhs ~rhs =
   if phys_equal lhs rhs
   then true
   else
+    ThreadsDomain.(<=) ~lhs:lhs.threads ~rhs:rhs.threads &&
     LocksDomain.(<=) ~lhs:lhs.locks ~rhs:rhs.locks &&
     AccessDomain.(<=) ~lhs:lhs.accesses ~rhs:rhs.accesses &&
     IdAccessPathMapDomain.(<=) ~lhs:lhs.id_map ~rhs:rhs.id_map &&
@@ -187,37 +219,41 @@ let join astate1 astate2 =
   then
     astate1
   else
+    let threads = ThreadsDomain.join astate1.threads astate2.threads in
     let locks = LocksDomain.join astate1.locks astate2.locks in
     let accesses = AccessDomain.join astate1.accesses astate2.accesses in
     let id_map = IdAccessPathMapDomain.join astate1.id_map astate2.id_map in
     let attribute_map = AttributeMapDomain.join astate1.attribute_map astate2.attribute_map in
-    { locks; accesses; id_map; attribute_map; }
+    { threads; locks; accesses; id_map; attribute_map; }
 
 let widen ~prev ~next ~num_iters =
   if phys_equal prev next
   then
     prev
   else
+    let threads = ThreadsDomain.widen ~prev:prev.threads ~next:next.threads ~num_iters in
     let locks = LocksDomain.widen ~prev:prev.locks ~next:next.locks ~num_iters in
     let accesses = AccessDomain.widen ~prev:prev.accesses ~next:next.accesses ~num_iters in
     let id_map = IdAccessPathMapDomain.widen ~prev:prev.id_map ~next:next.id_map ~num_iters in
     let attribute_map =
       AttributeMapDomain.widen ~prev:prev.attribute_map ~next:next.attribute_map ~num_iters in
-    { locks; accesses; id_map; attribute_map; }
+    { threads; locks; accesses; id_map; attribute_map; }
 
-let pp_summary fmt (locks, accesses, return_attributes) =
+let pp_summary fmt (threads, locks, accesses, return_attributes) =
   F.fprintf
     fmt
-    "Locks: %a Accesses %a Return Attributes: %a"
+    "Threads: %a Locks: %a Accesses %a Return Attributes: %a"
+    ThreadsDomain.pp threads
     LocksDomain.pp locks
     AccessDomain.pp accesses
     AttributeSetDomain.pp return_attributes
 
-let pp fmt { locks; accesses; id_map; attribute_map; } =
+let pp fmt { threads; locks; accesses; id_map; attribute_map; } =
   F.fprintf
     fmt
-    "Locks: %a Accesses %a Id Map: %a Attribute Map:\
+    "Threads: %a Locks: %a Accesses %a Id Map: %a Attribute Map:\
      %a"
+    ThreadsDomain.pp threads
     LocksDomain.pp locks
     AccessDomain.pp accesses
     IdAccessPathMapDomain.pp id_map

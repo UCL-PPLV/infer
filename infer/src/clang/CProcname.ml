@@ -45,7 +45,8 @@ let mk_c_function translation_unit_context ?tenv name function_decl_info_opt =
         (match function_decl_info.Clang_ast_t.fdi_storage_class with
          | Some "static" ->
              let file_opt = (fst decl_info.Clang_ast_t.di_source_range).Clang_ast_t.sl_file in
-             Option.value_map ~f:SourceFile.to_string ~default:"" file_opt
+             let file_to_hex src = SourceFile.to_string src |> Utils.string_crc_hex32 in
+             Option.value_map ~f:file_to_hex ~default:"" file_opt
          | _ -> "")
     | None -> "" in
   let mangled_opt = match function_decl_info_opt with
@@ -57,8 +58,8 @@ let mk_c_function translation_unit_context ?tenv name function_decl_info_opt =
   let template_info = match function_decl_info_opt, tenv with
     | Some (_, function_decl_info), Some t -> get_template_info t function_decl_info
     | _ -> Typ.NoTemplate in
-  let mangled = (Utils.string_crc_hex32 file) ^ mangled_name in
-  if String.is_empty file && String.is_empty mangled_name then
+  let mangled = file ^ mangled_name in
+  if String.is_empty mangled then
     Typ.Procname.from_string_c_fun name
   else
     Typ.Procname.C (Typ.Procname.c name mangled template_info)
@@ -112,10 +113,10 @@ let mk_fresh_block_procname defining_proc =
   Typ.Procname.mangled_objc_block name
 
 
-let get_class_typename method_decl_info =
+let get_class_typename ?tenv method_decl_info =
   let class_ptr = Option.value_exn method_decl_info.Clang_ast_t.di_parent_pointer in
   match CAst_utils.get_decl class_ptr with
-  | Some class_decl -> CType_decl.get_record_typename class_decl
+  | Some class_decl -> CType_decl.get_record_typename ?tenv class_decl
   | None -> assert false
 
 module NoAstDecl = struct
@@ -142,10 +143,10 @@ let from_decl translation_unit_context ?tenv meth_decl =
   | CXXDestructorDecl (decl_info, name_info, _, fdi, mdi) ->
       let mangled = get_mangled_method_name fdi mdi in
       let method_name = CAst_utils.get_unqualified_name name_info in
-      let class_typename = get_class_typename decl_info in
+      let class_typename = get_class_typename ?tenv decl_info in
       mk_cpp_method ?tenv class_typename method_name ~meth_decl mangled
   | ObjCMethodDecl (decl_info, name_info, mdi) ->
-      let class_typename = get_class_typename decl_info in
+      let class_typename = get_class_typename ?tenv decl_info in
       let method_name = name_info.Clang_ast_t.ni_name in
       let is_instance = mdi.Clang_ast_t.omdi_is_instance_method in
       let method_kind = Typ.Procname.objc_method_kind_of_bool is_instance in

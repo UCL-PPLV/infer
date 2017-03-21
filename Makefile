@@ -21,11 +21,14 @@ BUILD_SYSTEMS_TESTS += \
   clang_multiple_files \
   clang_translation \
   clang_unknown_ext \
+  clang_with_E_flag \
+  clang_with_M_flag \
+  clang_with_MD_flag \
   delete_results_dir \
-	differential_resolve_infer_eradicate_conflict \
-	differential_skip_anonymous_class_renamings \
-	differential_skip_duplicated_types_on_filenames \
-	differential_skip_duplicated_types_on_filenames_with_renamings \
+  differential_resolve_infer_eradicate_conflict \
+  differential_skip_anonymous_class_renamings \
+  differential_skip_duplicated_types_on_filenames \
+  differential_skip_duplicated_types_on_filenames_with_renamings \
   fail_on_issue \
   j1 \
   linters \
@@ -36,6 +39,9 @@ BUILD_SYSTEMS_TESTS += \
   utf8_in_procname \
   waf \
 
+ifneq ($(BUCK),no)
+BUILD_SYSTEMS_TESTS += buck-clang-db
+endif
 ifneq ($(CMAKE),no)
 BUILD_SYSTEMS_TESTS += clang_compilation_db cmake
 endif
@@ -77,7 +83,7 @@ DIRECT_TESTS += \
 endif
 ifneq ($(XCODE_SELECT),no)
 DIRECT_TESTS += \
-  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters
+  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters objc_linters-for-test-only
 endif
 
 .PHONY: all
@@ -86,7 +92,7 @@ all: infer
 configure: configure.ac $(wildcard m4/*.m4)
 	./autogen.sh
 
-Makefile.autoconf: configure
+Makefile.autoconf: configure Makefile.autoconf.in
 #	rerun ./configure with the flags that were used last time it was run (if available)
 	./configure $(shell ./config.status --config || true)
 
@@ -114,6 +120,9 @@ infer: src_build
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	@$(MAKE) -C $(ANNOTATIONS_DIR)
 endif
+#	Delete existing specs so that they are not used during the analysis of models. Infer may
+#	segfault in some cases otherwise.
+	@$(MAKE) -C $(MODELS_DIR) clean_specs
 	@$(MAKE) -C $(MODELS_DIR) all
 
 .PHONY: clang_setup
@@ -149,11 +158,12 @@ test_build: clang_plugin
 ifeq ($(IS_FACEBOOK_TREE),yes)
 	@$(MAKE) -C facebook setup
 endif
-	@$(MAKE) -C $(SRC_DIR) test_build
+	@$(MAKE) -C $(SRC_DIR) TEST=1 byte
+	@$(MAKE) -C $(SRC_DIR) TEST=1 toplevel
 
 .PHONY: ocaml_unit_test
 ocaml_unit_test: test_build
-	$(call silent_on_success,$(TEST_BUILD_DIR)/unit/inferunit.byte)
+	$(call silent_on_success,$(BUILD_DIR)/test/infer/unit/inferunit.byte)
 
 DIRECT_TESTS_REPLACE = $(patsubst %_frontend,%_frontend_replace,$(filter %_frontend,$(DIRECT_TESTS)))
 
@@ -230,7 +240,7 @@ endtoend_test: print_direct_tests print_build_systems_tests
 inferTraceBugs_test: infer
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	$(INFER_BIN) -o __test-infer-out__ -- \
-	  javac $(EXAMPLES_DIR)/Hello.java \
+	  $(JAVAC) $(EXAMPLES_DIR)/Hello.java \
 	   > /dev/null
 else
 	$(INFER_BIN) -o __test-infer-out__ -- \

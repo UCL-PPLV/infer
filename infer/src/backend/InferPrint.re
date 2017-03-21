@@ -124,7 +124,6 @@ type summary_val = {
   vname: string,
   vname_id: string,
   vspecs: int,
-  vtime: string,
   vto: string,
   vsymop: int,
   verr: int,
@@ -173,7 +172,6 @@ let summary_values summary => {
     vname: Typ.Procname.to_string proc_name,
     vname_id: Typ.Procname.to_filename proc_name,
     vspecs: List.length specs,
-    vtime: Printf.sprintf "%.0f" stats.Specs.stats_time,
     vto: Option.value_map f::pp_failure default::"NONE" stats.Specs.stats_failure,
     vsymop: stats.Specs.symops,
     verr:
@@ -226,7 +224,6 @@ let module ProcsCsv = {
     pp "\"%s\"," (Escape.escape_csv sv.vname);
     pp "\"%s\"," (Escape.escape_csv sv.vname_id);
     pp "%d," sv.vspecs;
-    pp "%s," sv.vtime;
     pp "%s," sv.vto;
     pp "%d," sv.vsymop;
     pp "%d," sv.verr;
@@ -253,7 +250,6 @@ let module ProcsXml = {
         subtree Io_infer.Xml.tag_name (Escape.escape_xml sv.vname),
         subtree Io_infer.Xml.tag_name_id (Escape.escape_xml sv.vname_id),
         subtree Io_infer.Xml.tag_specs (string_of_int sv.vspecs),
-        subtree Io_infer.Xml.tag_time sv.vtime,
         subtree Io_infer.Xml.tag_to sv.vto,
         subtree Io_infer.Xml.tag_symop (string_of_int sv.vsymop),
         subtree Io_infer.Xml.tag_err (string_of_int sv.verr),
@@ -276,6 +272,16 @@ let module ProcsXml = {
   /** print the closing of the procedures xml file */
   let pp_procs_close fmt () => Io_infer.Xml.pp_close fmt "procedures";
 };
+
+let paths_to_filter =
+  Option.bind Config.filter_report_paths (fun f => Some (In_channel.read_lines f)) |>
+  Option.map f::(List.map f::SourceFile.create);
+
+let report_filter source_file =>
+  switch paths_to_filter {
+  | Some paths => List.mem equal::SourceFile.equal paths source_file
+  | None => true
+  };
 
 let should_report (issue_kind: Exceptions.err_kind) issue_type error_desc eclass =>
   if (not Config.filtering || Exceptions.equal_err_class eclass Exceptions.Linters) {
@@ -379,7 +385,7 @@ let module IssuesCsv = {
   /** Write bug report in csv format */
   let pp_issues_of_error_log fmt error_filter _ proc_loc_opt procname err_log => {
     let pp x => F.fprintf fmt x;
-    let pp_row (_, node_key) loc _ ekind in_footprint error_name error_desc severity ltr eclass _ => {
+    let pp_row (_, node_key) loc _ ekind in_footprint error_name error_desc severity ltr eclass _ _ => {
       let source_file =
         switch proc_loc_opt {
         | Some proc_loc => proc_loc.Location.file
@@ -388,7 +394,7 @@ let module IssuesCsv = {
       if (
         in_footprint &&
         error_filter source_file error_desc error_name &&
-        should_report ekind error_name error_desc eclass
+        should_report ekind error_name error_desc eclass && report_filter source_file
       ) {
         let err_desc_string = error_desc_to_csv_string error_desc;
         let err_advice_string = error_advice_to_csv_string error_desc;
@@ -401,7 +407,7 @@ let module IssuesCsv = {
           Escape.escape_csv s
         };
         let kind = Exceptions.err_kind_string ekind;
-        let type_str = Localise.to_string error_name;
+        let type_str = Localise.to_issue_id error_name;
         let procedure_id = Typ.Procname.to_filename procname;
         let filename = SourceFile.to_string source_file;
         let always_report =
@@ -452,7 +458,8 @@ let module IssuesJson = {
         severity
         ltr
         eclass
-        visibility => {
+        visibility
+        linters_def_file => {
       let (source_file, procedure_start_line) =
         switch proc_loc_opt {
         | Some proc_loc => (proc_loc.Location.file, proc_loc.Location.line)
@@ -464,10 +471,11 @@ let module IssuesJson = {
       if (
         in_footprint &&
         error_filter source_file error_desc error_name &&
-        should_report_source_file && should_report ekind error_name error_desc eclass
+        should_report_source_file &&
+        should_report ekind error_name error_desc eclass && report_filter source_file
       ) {
         let kind = Exceptions.err_kind_string ekind;
-        let bug_type = Localise.to_string error_name;
+        let bug_type = Localise.to_issue_id error_name;
         let procedure_id = Typ.Procname.to_filename procname;
         let file = SourceFile.to_string source_file;
         let json_ml_loc =
@@ -495,7 +503,9 @@ let module IssuesJson = {
           qualifier_tags: error_desc_to_qualifier_tags_records error_desc,
           hash: get_bug_hash kind bug_type procedure_id file node_key error_desc,
           dotty: error_desc_to_dotty_string error_desc,
-          infer_source_loc: json_ml_loc
+          infer_source_loc: json_ml_loc,
+          bug_type_hum: Localise.to_human_readable_string error_name,
+          linters_def_file
         };
         if (not !is_first_item) {
           pp ","
@@ -566,7 +576,7 @@ let module IssuesTxt = {
 
   /** Write bug report in text format */
   let pp_issues_of_error_log fmt error_filter _ proc_loc_opt _ err_log => {
-    let pp_row (node_id, node_key) loc _ ekind in_footprint error_name error_desc _ _ _ _ => {
+    let pp_row (node_id, node_key) loc _ ekind in_footprint error_name error_desc _ _ _ _ _ => {
       let source_file =
         switch proc_loc_opt {
         | Some proc_loc => proc_loc.Location.file
@@ -635,7 +645,7 @@ let module IssuesXml = {
 
   /** print issues from summary in xml */
   let pp_issues_of_error_log fmt error_filter linereader proc_loc_opt proc_name err_log => {
-    let do_row (_, node_key) loc _ ekind in_footprint error_name error_desc severity ltr eclass _ => {
+    let do_row (_, node_key) loc _ ekind in_footprint error_name error_desc severity ltr eclass _ _ => {
       let source_file =
         switch proc_loc_opt {
         | Some proc_loc => proc_loc.Location.file
@@ -646,7 +656,7 @@ let module IssuesXml = {
         let subtree label contents =>
           Io_infer.Xml.create_tree label [] [Io_infer.Xml.String contents];
         let kind = Exceptions.err_kind_string ekind;
-        let type_str = Localise.to_string error_name;
+        let type_str = Localise.to_issue_id error_name;
         let tree = {
           incr xml_issues_id;
           let attributes = [("id", string_of_int !xml_issues_id)];
@@ -776,8 +786,8 @@ let module Stats = {
   };
   let process_err_log error_filter linereader err_log stats => {
     let found_errors = ref false;
-    let process_row _ loc _ ekind in_footprint error_name error_desc _ ltr _ _ => {
-      let type_str = Localise.to_string error_name;
+    let process_row _ loc _ ekind in_footprint error_name error_desc _ ltr _ _ _ => {
+      let type_str = Localise.to_issue_id error_name;
       if (in_footprint && error_filter error_desc error_name) {
         switch ekind {
         | Exceptions.Kerror =>
@@ -863,12 +873,7 @@ let module Summary = {
     if Config.quiet {
       ()
     } else {
-      L.stdout
-        "Procedure: %a@\n%a@."
-        Typ.Procname.pp
-        proc_name
-        (Specs.pp_summary_text whole_seconds::Config.whole_seconds)
-        summary
+      L.stdout "Procedure: %a@\n%a@." Typ.Procname.pp proc_name Specs.pp_summary_text summary
     }
   };
 
@@ -877,8 +882,7 @@ let module Summary = {
     let proc_name = Specs.get_proc_name summary;
     Latex.pp_section
       fmt ("Analysis of function " ^ Latex.convert_string (Typ.Procname.to_string proc_name));
-    F.fprintf
-      fmt "@[<v>%a@]" (Specs.pp_summary_latex Black whole_seconds::Config.whole_seconds) summary
+    F.fprintf fmt "@[<v>%a@]" (Specs.pp_summary_latex Black) summary
   };
   let pp_summary_xml summary fname =>
     if Config.xml_specs {
