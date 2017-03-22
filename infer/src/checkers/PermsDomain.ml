@@ -162,13 +162,15 @@ module PvarMap = PrettyPrintable.MakePPMap
       let pp = pp Pp.text
     end)
 
-let subst theta (base, accesses) =
+let subst theta ((base, accesses) as original) =
   match base with
   | (Var.LogicalVar _, _) -> assert false
   | (Var.ProgramVar pvar, _) ->
-      match PvarMap.find pvar theta with
-      | Some argument -> AccessPath.append argument accesses
-      | None ->  assert false
+      try
+        match PvarMap.find pvar theta with
+        | Some argument -> AccessPath.append argument accesses
+        | None ->  assert false
+      with Not_found -> original
 
 module Atom = struct
   module A = struct
