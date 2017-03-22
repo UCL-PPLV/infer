@@ -83,7 +83,7 @@ module Summary = struct
         attrs.ProcAttributes.formals in
     (* demand that every atom refers to an lvalue (so no naked root vars)
        and which is rooted at a formal *)
-    let () =
+    (* let () =
       Atom.Set.iter
         (function
           | { Atom.lvalue=((Var.ProgramVar p, _), _::_) } ->
@@ -91,7 +91,7 @@ module Summary = struct
           | _ -> assert false
         )
         atoms
-    in
+    in *)
     (atoms, locks_held, formals, tenv)
 
   let pp fmt (sum_atoms, sum_locks, _) =
@@ -225,6 +225,11 @@ let compute_and_store_post callback =
     ~compute_post
     ~make_extras:ProcData.make_empty_extras
     callback
+
+let checker ({ Callbacks.summary } as callback_args) : Specs.summary =
+  let proc_name = Specs.get_proc_name summary in
+  ignore (compute_and_store_post callback_args);
+  Specs.get_summary_unsafe "ThreadSafety.checker" proc_name
 
 (* compute all pairs (as lists) but disregarding order within the pair *)
 let all_pairs =

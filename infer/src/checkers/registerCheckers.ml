@@ -40,6 +40,7 @@ let active_procedure_checkers () =
         AnnotationReachability.checker, Config.checkers_enabled;
         BufferOverrunChecker.checker, Config.bufferoverrun;
         ThreadSafety.checker, Config.threadsafety || Config.checkers_enabled;
+        Perms.checker, Config.permsafety;
       ] in
     (* make sure SimpleChecker.ml is not dead code *)
     if false then (let module SC = SimpleChecker.Make in ());
