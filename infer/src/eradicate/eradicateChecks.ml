@@ -189,13 +189,13 @@ let check_field_assignment tenv
     not (TypeAnnotation.get_value AnnotatedSignature.Nullable ta_lhs) &&
     TypeAnnotation.get_value AnnotatedSignature.Nullable ta_rhs &&
     PatternMatch.type_is_class t_lhs &&
-    not (Ident.java_fieldname_is_outer_instance fname) &&
+    not (Fieldname.java_is_outer_instance fname) &&
     not (field_is_field_injector_readwrite ()) in
   let should_report_absent =
     Config.eradicate_optional_present &&
     TypeAnnotation.get_value AnnotatedSignature.Present ta_lhs &&
     not (TypeAnnotation.get_value AnnotatedSignature.Present ta_rhs) &&
-    not (Ident.java_fieldname_is_outer_instance fname) in
+    not (Fieldname.java_is_outer_instance fname) in
   let should_report_mutable =
     let field_is_mutable () = match t_ia_opt with
       | Some (_, ia) -> Annotations.ia_is_mutable ia
@@ -261,7 +261,7 @@ let check_constructor_initialization tenv
                 List.exists
                   ~f:(function pname, typestate ->
                       let pvar = Pvar.mk
-                          (Mangled.from_string (Ident.fieldname_to_string fn))
+                          (Mangled.from_string (Fieldname.to_string fn))
                           pname in
                       filter_range_opt (TypeState.lookup_pvar pvar typestate))
                   list in
@@ -288,12 +288,12 @@ let check_constructor_initialization tenv
 
               let should_check_field_initialization =
                 let in_current_class =
-                  let fld_cname = Ident.java_fieldname_get_class fn in
+                  let fld_cname = Fieldname.java_get_class fn in
                   String.equal (Typ.Name.name name) fld_cname in
                 not injector_readonly_annotated &&
                 PatternMatch.type_is_class ft &&
                 in_current_class &&
-                not (Ident.java_fieldname_is_outer_instance fn) in
+                not (Fieldname.java_is_outer_instance fn) in
 
               if should_check_field_initialization then (
                 if Models.Inference.enabled then Models.Inference.field_add_nullable_annotation fn;
@@ -360,6 +360,8 @@ let check_return_annotation tenv
   let ret_annotated_nonnull =
     Annotations.ia_is_nonnull ret_ia in
   match ret_range with
+  (* Disables the warnings since it is not clear how to annotate the return value of lambdas *)
+  | Some _ when Typ.Procname.java_is_lambda curr_pname -> ()
   | Some (_, final_ta, _) ->
       let final_nullable = TypeAnnotation.get_value AnnotatedSignature.Nullable final_ta in
       let final_present = TypeAnnotation.get_value AnnotatedSignature.Present final_ta in

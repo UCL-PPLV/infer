@@ -115,7 +115,7 @@ struct
     let fields = List.map ~f:mk_field_from_captured_var captured_vars in
     Logging.out_debug "Block %s field:\n" block_name;
     List.iter ~f:(fun (fn, _, _) ->
-        Logging.out_debug "-----> field: '%s'\n" (Ident.fieldname_to_string fn)) fields;
+        Logging.out_debug "-----> field: '%s'\n" (Fieldname.to_string fn)) fields;
     let block_typename = Typ.Name.Objc.from_string block_name in
     ignore (Tenv.mk_struct tenv ~fields block_typename);
     let block_type = Typ.Tstruct block_typename in
@@ -2214,13 +2214,17 @@ struct
   and materializeTemporaryExpr_trans trans_state stmt_info stmt_list expr_info =
     let context = trans_state.context in
     let procdesc = context.CContext.procdesc in
-    let (pvar, typ) = mk_temp_sil_var_for_expr context.CContext.tenv procdesc
+    (* typ_tmp is 'best guess' type of variable - translation may decide to use different type
+       later *)
+    let (pvar, typ_tmp) = mk_temp_sil_var_for_expr context.CContext.tenv procdesc
         "SIL_materialize_temp__" expr_info in
     let temp_exp = match stmt_list with [p] -> p | _ -> assert false in
-    Procdesc.append_locals procdesc [(Pvar.get_name pvar, typ)];
-    let var_exp_typ = (Exp.Lvar pvar, typ) in
+    let var_exp_typ = (Exp.Lvar pvar, typ_tmp) in
     let res_trans = init_expr_trans trans_state var_exp_typ stmt_info (Some temp_exp) in
-    { res_trans with exps = [var_exp_typ] }
+    let _, typ = extract_exp_from_list res_trans.exps
+        "MaterializeExpr initializer missing\n" in
+    Procdesc.append_locals procdesc [(Pvar.get_name pvar, typ)];
+    res_trans
 
   and compoundLiteralExpr_trans trans_state stmt_list expr_info =
     let stmt = match stmt_list with [stmt] -> stmt | _ -> assert false in

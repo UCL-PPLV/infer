@@ -62,6 +62,7 @@ let deallocate_stack_variable = from_string "DEALLOCATE_STACK_VARIABLE"
 let deallocate_static_memory = from_string "DEALLOCATE_STATIC_MEMORY"
 let deallocation_mismatch = from_string "DEALLOCATION_MISMATCH"
 let divide_by_zero = from_string "DIVIDE_BY_ZERO"
+let double_lock = from_string "DOUBLE_LOCK"
 let empty_vector_access = from_string "EMPTY_VECTOR_ACCESS"
 let eradicate_condition_redundant =
   from_string "ERADICATE_CONDITION_REDUNDANT" ~hum:"Condition Redundant"
@@ -194,6 +195,7 @@ module Tags = struct
   let field_not_null_checked = "field_not_null_checked" (* describes a NPE that comes from field not nullable *)
   let nullable_src = "nullable_src" (* @Nullable-annoted field/param/retval that causes a warning *)
   let weak_captured_var_src = "weak_captured_var_src" (* Weak variable captured in a block that causes a warning *)
+  let double_lock = "double_lock"
   let empty_vector_access = "empty_vector_access"
   let create () = ref []
   let add tags tag value = tags := (tag, value) :: !tags
@@ -301,6 +303,12 @@ let by_call_to tags proc_name =
 let by_call_to_ra tags ra =
   "by " ^ call_to_at_line tags ra.PredSymb.ra_pname ra.PredSymb.ra_loc
 
+let add_by_call_to_opt problem_str tags proc_name_opt =
+  match proc_name_opt with
+  | Some proc_name ->
+      problem_str ^ " " ^ by_call_to tags proc_name
+  | None -> problem_str
+
 let rec format_typ = function
   | Typ.Tptr (typ, _) when Config.curr_language_is Config.Java ->
       format_typ typ
@@ -311,8 +319,8 @@ let rec format_typ = function
 
 let format_field f =
   if Config.curr_language_is Config.Java
-  then Ident.java_fieldname_get_field f
-  else Ident.fieldname_to_string f
+  then Fieldname.java_get_field f
+  else Fieldname.to_string f
 
 let format_method pname =
   match pname with
@@ -337,10 +345,7 @@ let pointer_or_object () =
   if Config.curr_language_is Config.Java then "object" else "pointer"
 
 let _deref_str_null proc_name_opt _problem_str tags =
-  let problem_str = match proc_name_opt with
-    | Some proc_name ->
-        _problem_str ^ " " ^ by_call_to tags proc_name
-    | None -> _problem_str in
+  let problem_str = add_by_call_to_opt _problem_str tags proc_name_opt in
   { tags = tags;
     value_pre = Some (pointer_or_object ());
     value_post = None;
@@ -471,11 +476,11 @@ let java_unchecked_exn_desc proc_name exn_name pre_str : error_desc =
   }
 
 let desc_context_leak pname context_typ fieldname leak_path : error_desc =
-  let fld_str = Ident.fieldname_to_string fieldname in
+  let fld_str = Fieldname.to_string fieldname in
   let leak_root = "Static field " ^ fld_str ^ " |->\n" in
   let leak_path_entry_to_str acc entry =
     let entry_str = match entry with
-      | (Some fld, _) -> Ident.fieldname_to_string fld
+      | (Some fld, _) -> Fieldname.to_string fld
       | (None, typ) -> Typ.to_string typ in
     (* intentionally omit space; [typ_to_string] adds an extra space *)
     acc ^ entry_str ^ " |->\n" in
@@ -497,9 +502,18 @@ let desc_context_leak pname context_typ fieldname leak_path : error_desc =
     "Context " ^ context_str ^ " may leak during method " ^ pname_str ^ ":\n" in
   { no_desc with descriptions = [preamble ^ MF.code_to_string (leak_root ^ path_str)] }
 
+let desc_double_lock pname_opt object_str loc =
+  let mutex_str = Format.sprintf "Mutex %s" object_str in
+  let tags = Tags.create () in
+  let msg = "could be locked and is locked again" in
+  let msg = add_by_call_to_opt msg tags pname_opt in
+  Tags.add tags Tags.double_lock object_str;
+  let descriptions = [mutex_str; msg; at_line tags loc] in
+  { no_desc with descriptions; tags = !tags }
+
 let desc_unsafe_guarded_by_access pname accessed_fld guarded_by_str loc =
   let line_info = at_line (Tags.create ()) loc in
-  let accessed_fld_str = Ident.fieldname_to_string accessed_fld in
+  let accessed_fld_str = Fieldname.to_string accessed_fld in
   let annot_str = Printf.sprintf "@GuardedBy(\"%s\")" guarded_by_str in
   let syncronized_str =
     MF.monospaced_to_string (Printf.sprintf "synchronized(%s)" guarded_by_str) in
@@ -600,7 +614,7 @@ let parameter_field_not_null_checked_desc (desc : error_desc) exp =
   let field_not_nullable_desc exp =
     let rec exp_to_string exp =
       match exp with
-      | Exp.Lfield (exp', field, _) -> (exp_to_string exp')^" -> "^(Ident.fieldname_to_string field)
+      | Exp.Lfield (exp', field, _) -> (exp_to_string exp')^" -> "^(Fieldname.to_string field)
       | Exp.Lvar pvar -> Mangled.to_string (Pvar.get_name pvar)
       | _ -> "" in
     let var_s = exp_to_string exp in
@@ -624,6 +638,8 @@ let is_field_not_null_checked_desc desc = has_tag desc Tags.field_not_null_check
 let is_parameter_field_not_null_checked_desc desc =
   is_parameter_not_null_checked_desc desc ||
   is_field_not_null_checked_desc desc
+
+let is_double_lock_desc desc = has_tag desc Tags.double_lock
 
 let desc_allocation_mismatch alloc dealloc =
   let tags = Tags.create () in
@@ -835,7 +851,7 @@ let desc_retain_cycle cycle loc cycle_dotty =
     match se with
     | Sil.Eexp(Exp.Lvar pvar, _) when Pvar.equal pvar Sil.block_pvar ->
         str_cycle:=!str_cycle^" ("^(string_of_int !ct)^") a block capturing " ^
-                   MF.monospaced_to_string (Ident.fieldname_to_string f)^"; ";
+                   MF.monospaced_to_string (Fieldname.to_string f)^"; ";
         ct:=!ct +1;
     | Sil.Eexp(Exp.Lvar pvar as e, _) ->
         let e_str = Exp.to_string e in
@@ -843,14 +859,14 @@ let desc_retain_cycle cycle loc cycle_dotty =
             remove_old e_str
           else e_str in
         str_cycle:=!str_cycle^" ("^(string_of_int !ct)^") object "^e_str^" retaining " ^
-                   MF.monospaced_to_string (e_str^"."^(Ident.fieldname_to_string f))^", ";
+                   MF.monospaced_to_string (e_str^"."^(Fieldname.to_string f))^", ";
         ct:=!ct +1
     | Sil.Eexp (Exp.Sizeof (typ, _, _), _) ->
         let step =
           " (" ^ (string_of_int !ct) ^ ") an object of " ^
           MF.monospaced_to_string (Typ.to_string typ) ^
           " retaining another object via instance variable " ^
-          MF.monospaced_to_string (Ident.fieldname_to_string f) ^ ", " in
+          MF.monospaced_to_string (Fieldname.to_string f) ^ ", " in
         str_cycle := !str_cycle ^ step;
         ct:=!ct +1
     | _ -> () in

@@ -16,31 +16,33 @@ module L = Logging
 module F = Format
 module DExp = DecompiledExp
 
-let vector_class = ["std"; "vector"]
+let vector_matcher = QualifiedCppName.Match.of_fuzzy_qual_names ["std::vector"]
+let mutex_matcher = QualifiedCppName.Match.of_fuzzy_qual_names ["std::mutex"]
 
-let is_one_of_classes class_name classes =
-  List.exists ~f:(fun wrapper_class ->
-      List.for_all ~f:(fun wrapper_class_substring ->
-          String.is_substring ~substring:wrapper_class_substring class_name) wrapper_class)
-    classes
+let is_one_of_classes = QualifiedCppName.Match.match_qualifiers
 
-let is_method_of_objc_cpp_class pname classes =
+
+let is_method_of_objc_cpp_class pname matcher =
   match pname with
-  | Typ.Procname.ObjC_Cpp name ->
-      let class_name = Typ.Procname.objc_cpp_get_class_name name in
-      is_one_of_classes class_name classes
+  | Typ.Procname.ObjC_Cpp objc_cpp ->
+      let class_qual_opt = Typ.Procname.objc_cpp_get_class_qualifiers objc_cpp in
+      is_one_of_classes matcher class_qual_opt
   | _ -> false
 
-let is_vector_method pname =
-  is_method_of_objc_cpp_class pname [vector_class]
+let is_mutex_method pname =
+  is_method_of_objc_cpp_class pname mutex_matcher
 
-let is_special_field class_names field_name_opt field =
-  let complete_fieldname = Ident.fieldname_to_complete_string field in
+let is_vector_method pname =
+  is_method_of_objc_cpp_class pname vector_matcher
+
+let is_special_field matcher field_name_opt field =
+  let field_name = Fieldname.to_flat_string field in
+  let class_qual_opt = Fieldname.clang_get_qual_class field in
   let field_ok =
     match field_name_opt with
-    | Some field_name -> String.is_substring ~substring:field_name complete_fieldname
+    | Some field_name' -> String.equal field_name' field_name
     | None -> true in
-  is_one_of_classes complete_fieldname class_names && field_ok
+  field_ok && Option.value_map ~f:(is_one_of_classes matcher) ~default:false class_qual_opt
 
 (** Check whether the hpred is a |-> representing a resource in the Racquire state *)
 let hpred_is_open_resource tenv prop = function
@@ -315,7 +317,7 @@ and _exp_lv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
           begin
             L.d_str "exp_lv_dexp: Lfield with var ";
             Sil.d_exp (Exp.Var id);
-            L.d_str (" " ^ Ident.fieldname_to_string f);
+            L.d_str (" " ^ Fieldname.to_string f);
             L.d_ln ()
           end;
         (match _find_normal_variable_load tenv seen node id with
@@ -326,7 +328,7 @@ and _exp_lv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
           begin
             L.d_str "exp_lv_dexp: Lfield ";
             Sil.d_exp e1;
-            L.d_str (" " ^ Ident.fieldname_to_string f);
+            L.d_str (" " ^ Fieldname.to_string f);
             L.d_ln ()
           end;
         (match _exp_lv_dexp tenv seen node e1 with
@@ -374,7 +376,7 @@ and _exp_rv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
           begin
             L.d_str "exp_rv_dexp: Lfield ";
             Sil.d_exp e1;
-            L.d_str (" " ^ Ident.fieldname_to_string f);
+            L.d_str (" " ^ Fieldname.to_string f);
             L.d_ln ()
           end;
         (match _exp_rv_dexp tenv seen node e1 with
@@ -582,7 +584,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
                  | Exp.Sizeof (Tstruct name, _, _) -> (
                      match Tenv.lookup tenv name with
                      | Some {fields} ->
-                         List.find ~f:(fun (f', _, _) -> Ident.equal_fieldname f' f) fields |>
+                         List.find ~f:(fun (f', _, _) -> Fieldname.equal f' f) fields |>
                          Option.map ~f:snd3
                      | _ ->
                          None
@@ -679,10 +681,10 @@ let explain_dexp_access prop dexp is_nullable =
     | [] ->
         if verbose
         then
-          (L.d_strln ("lookup_fld: can't find field " ^ Ident.fieldname_to_string f));
+          (L.d_strln ("lookup_fld: can't find field " ^ Fieldname.to_string f));
         None
     | (f1, se):: fsel' ->
-        if Ident.equal_fieldname f1 f then Some se
+        if Fieldname.equal f1 f then Some se
         else lookup_fld fsel' f in
   let rec lookup_esel esel e = match esel with
     | [] ->
@@ -830,12 +832,20 @@ let create_dereference_desc tenv
                Localise.parameter_field_not_null_checked_desc desc vfs
            | _ ->
                desc)
-      | Some (DExp.Dretcall (Dconst (Cfun pname), this_dexp :: _, loc, _ ))
-        when is_vector_method pname ->
-          Localise.desc_empty_vector_access (Some pname) (DExp.to_string this_dexp) loc
-      | Some (DExp.Darrow (dexp, fieldname))
-        when is_special_field [vector_class] (Some "beginPtr") fieldname ->
-          Localise.desc_empty_vector_access None (DExp.to_string dexp) loc
+      | Some (DExp.Dretcall (Dconst (Cfun pname), this_dexp :: _, loc, _ )) ->
+          if is_mutex_method pname then
+            Localise.desc_double_lock (Some pname) (DExp.to_string this_dexp) loc
+          else if is_vector_method pname then
+            Localise.desc_empty_vector_access (Some pname) (DExp.to_string this_dexp) loc
+          else
+            desc
+      | Some (DExp.Darrow (dexp, fieldname)) ->
+          if is_special_field mutex_matcher (Some "null_if_locked") fieldname then
+            Localise.desc_double_lock None (DExp.to_string dexp) loc
+          else if is_special_field vector_matcher (Some "beginPtr") fieldname then
+            Localise.desc_empty_vector_access None (DExp.to_string dexp) loc
+          else
+            desc
       | _ -> desc
     else desc in
   if use_buckets then Buckets.classify_access desc access_opt' de_opt is_nullable
@@ -944,7 +954,7 @@ type pvar_off =
   | Fpvar
 
   (* value obtained by dereferencing the pvar and following a sequence of fields *)
-  | Fstruct of Ident.fieldname list
+  | Fstruct of Fieldname.t list
 
 let dexp_apply_pvar_off dexp pvar_off =
   let rec add_ddot de = function

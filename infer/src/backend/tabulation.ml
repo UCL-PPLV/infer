@@ -422,7 +422,7 @@ let rec fsel_star_fld fsel1 fsel2 = match fsel1, fsel2 with
   | [], fsel2 -> fsel2
   | fsel1,[] -> fsel1
   | (f1, se1):: fsel1', (f2, se2):: fsel2' ->
-      (match Ident.compare_fieldname f1 f2 with
+      (match Fieldname.compare f1 f2 with
        | 0 -> (f1, sexp_star_fld se1 se2) :: fsel_star_fld fsel1' fsel2'
        | n when n < 0 -> (f1, se1) :: fsel_star_fld fsel1' fsel2
        | _ -> (f2, se2) :: fsel_star_fld fsel1 fsel2')
@@ -465,7 +465,7 @@ let texp_star tenv texp1 texp2 =
     | [], _ -> true
     | _, [] -> false
     | (f1, _, _):: ftal1', (f2, _, _):: ftal2' ->
-        begin match Ident.compare_fieldname f1 f2 with
+        begin match Fieldname.compare f1 f2 with
           | n when n < 0 -> false
           | 0 -> ftal_sub ftal1' ftal2'
           | _ -> ftal_sub ftal1 ftal2' end in
@@ -1084,7 +1084,7 @@ let exe_spec
             let split = do_split () in
             (* check if a missing_fld hpred is about a hidden field *)
             let hpred_missing_hidden = function
-              | Sil.Hpointsto (_, Sil.Estruct ([(fld, _)], _), _) -> Ident.fieldname_is_hidden fld
+              | Sil.Hpointsto (_, Sil.Estruct ([(fld, _)], _), _) -> Fieldname.is_hidden fld
               | _ -> false in
             (* missing fields minus hidden fields *)
             let missing_fld_nohidden =
@@ -1188,7 +1188,9 @@ let exe_call_postprocess tenv ret_id trace_call callee_pname callee_attrs loc re
                        raise (Exceptions.Parameter_not_null_checked (desc, __POS__))
                      else if Localise.is_field_not_null_checked_desc desc then
                        raise (Exceptions.Field_not_null_checked (desc, __POS__))
-                     else if (Localise.is_empty_vector_access_desc desc) then
+                     else if Localise.is_double_lock_desc desc then
+                       raise (Exceptions.Double_lock (desc, __POS__))
+                     else if Localise.is_empty_vector_access_desc desc then
                        raise (Exceptions.Empty_vector_access (desc, __POS__))
                      else raise (Exceptions.Null_dereference (desc, __POS__))
                  | Dereference_error (Deref_freed _, desc, path_opt) ->

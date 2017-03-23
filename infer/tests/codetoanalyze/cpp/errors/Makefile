@@ -19,6 +19,7 @@ SOURCES = \
   include_header/include_templ.cpp \
   $(wildcard memory_leaks/*.cpp) \
   $(wildcard models/*.cpp) \
+  $(wildcard mutex/*.cpp) \
   $(wildcard npe/*.cpp) \
   $(wildcard numeric/*.cpp) \
   $(wildcard overwrite_attribute/*.cpp) \
@@ -48,6 +49,7 @@ SOURCES = \
   shared/templates/function.cpp \
   shared/templates/function_pack.cpp \
   shared/templates/method.cpp \
+  shared/types/inheritance_casts.cpp \
   shared/types/inheritance_field.cpp \
   shared/types/operator_overload.cpp \
   shared/types/return_struct.cpp \

@@ -59,6 +59,7 @@ exception Dangling_pointer_dereference of
 exception Deallocate_stack_variable of Localise.error_desc
 exception Deallocate_static_memory of Localise.error_desc
 exception Deallocation_mismatch of Localise.error_desc * Logging.ml_loc
+exception Double_lock of Localise.error_desc * Logging.ml_loc
 exception Divide_by_zero of Localise.error_desc * Logging.ml_loc
 exception Field_not_null_checked of Localise.error_desc * Logging.ml_loc
 exception Empty_vector_access of Localise.error_desc * Logging.ml_loc
@@ -71,7 +72,7 @@ exception Java_runtime_exception of Typ.Name.t * string * Localise.error_desc
 exception Leak of
     bool * Sil.hpred * (visibility * Localise.error_desc)
     * bool * PredSymb.resource * Logging.ml_loc
-exception Missing_fld of Ident.fieldname * Logging.ml_loc
+exception Missing_fld of Fieldname.t * Logging.ml_loc
 exception Premature_nil_termination of Localise.error_desc * Logging.ml_loc
 exception Null_dereference of Localise.error_desc * Logging.ml_loc
 exception Null_test_after_dereference of Localise.error_desc * Logging.ml_loc
@@ -108,9 +109,8 @@ val handle_exception : exn -> bool
 (** print a description of the exception to the html output *)
 val print_exception_html : string -> exn -> unit
 
-(** pretty print an error given its (id,key), location, kind, name, description,
-    and optional ml location *)
-val pp_err : int * int -> Location.t -> err_kind -> Localise.t -> Localise.error_desc ->
+(** pretty print an error *)
+val pp_err : node_key:int -> Location.t -> err_kind -> Localise.t -> Localise.error_desc ->
   Logging.ml_loc option -> Format.formatter -> unit -> unit
 
 (** Turn an exception into an error name, error description,

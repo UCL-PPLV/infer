@@ -65,6 +65,7 @@ exception Deallocate_stack_variable of Localise.error_desc
 exception Deallocate_static_memory of Localise.error_desc
 exception Deallocation_mismatch of Localise.error_desc * L.ml_loc
 exception Divide_by_zero of Localise.error_desc * L.ml_loc
+exception Double_lock of Localise.error_desc * L.ml_loc
 exception Empty_vector_access of Localise.error_desc * L.ml_loc
 exception Eradicate of string * Localise.error_desc
 exception Field_not_null_checked of Localise.error_desc * L.ml_loc
@@ -76,7 +77,7 @@ exception Java_runtime_exception of Typ.Name.t * string * Localise.error_desc
 exception Leak of
     bool * Sil.hpred * (visibility * Localise.error_desc)
     * bool * PredSymb.resource * L.ml_loc
-exception Missing_fld of Ident.fieldname * L.ml_loc
+exception Missing_fld of Fieldname.t * L.ml_loc
 exception Premature_nil_termination of Localise.error_desc * L.ml_loc
 exception Null_dereference of Localise.error_desc * L.ml_loc
 exception Null_test_after_dereference of Localise.error_desc * L.ml_loc
@@ -175,6 +176,9 @@ let recognize_exception exn =
     | Divide_by_zero (desc, ml_loc) ->
         (Localise.divide_by_zero,
          desc, Some ml_loc, Exn_user, High, Some Kerror, Checker)
+    | Double_lock (desc, ml_loc) ->
+        (Localise.double_lock,
+         desc, Some ml_loc, Exn_user, High, Some Kerror, Prover)
     | Eradicate (kind_s, desc) ->
         (Localise.from_string kind_s, desc, None, Exn_user, High, None, Prover)
     | Empty_vector_access (desc, ml_loc) ->
@@ -230,7 +234,7 @@ let recognize_exception exn =
         (Localise.from_string "Match failure",
          Localise.no_desc, Some ml_loc, Exn_developer, High, None, Nocat)
     | Missing_fld (fld, ml_loc) ->
-        let desc = Localise.verbatim_desc (Ident.fieldname_to_string fld) in
+        let desc = Localise.verbatim_desc (Fieldname.to_string fld) in
         (Localise.from_string "Missing_fld" ~hum:"Missing Field",
          desc, Some ml_loc, Exn_developer, Medium, None, Nocat)
     | Premature_nil_termination (desc, ml_loc) ->
@@ -340,8 +344,8 @@ let err_class_string = function
 (** whether to print the bug key together with the error message *)
 let print_key = false
 
-(** pretty print an error given its (id,key), location, kind, name, description, and optional ml location *)
-let pp_err (_, node_key) loc ekind ex_name desc ml_loc_opt fmt () =
+(** pretty print an error  *)
+let pp_err ~node_key loc ekind ex_name desc ml_loc_opt fmt () =
   let kind = err_kind_string (if equal_err_kind ekind Kinfo then Kwarning else ekind) in
   let pp_key fmt k = if print_key then F.fprintf fmt " key: %d " k else () in
   F.fprintf fmt "%a:%d: %s: %a %a%a%a@\n"
