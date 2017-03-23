@@ -1,11 +1,61 @@
 open! IStd
-open! PermsDomain
+(* open! PermsDomain *)
+open! ThreadSafetyDomain
 
 module F = Format
 module L = Logging
 
+let mk_permvar () =
+  Ident.create_fresh Ident.kprimed
+
+module Constr = struct
+  type t = Exp.t
+
+  let rec sum = function
+    | [p] -> Exp.Var p
+    | p::ps -> Exp.BinOp (Binop.PlusA, Exp.Var p, sum ps)
+    | _ -> assert false
+
+  let mk_sum q ps =
+    Exp.eq (Exp.Var q) (sum ps)
+  let mk_lb ps =
+    Exp.BinOp (Binop.Ge, sum ps, Exp.zero)
+  let mk_ub ps =
+    Exp.BinOp (Binop.Le, sum ps, Exp.one)
+  let mk_eq_one ps =
+    Exp.eq (sum ps) (Exp.one)
+  let mk_gt_zero ps =
+    Exp.BinOp (Binop.Gt, sum ps, Exp.zero)
+
+  let rec to_z3 fmt e = match e with
+    | Exp.Var id ->
+        F.pp_print_string fmt (Ident.to_string id)
+    | Exp.BinOp(Binop.Eq, t1, t2) ->
+        F.fprintf fmt "(= %a %a)" to_z3 t1 to_z3 t2
+    | Exp.BinOp(op, t1, t2) ->
+        F.fprintf fmt "(%s %a %a)" (Binop.str Pp.text op) to_z3 t1 to_z3 t2
+    | Exp.Const _ ->
+        F.pp_print_string fmt (if Exp.is_zero e then "0.0" else "1.0")
+    | _ ->
+        assert false
+
+  let rec vars = function
+    | Exp.Var v -> Ident.IdentSet.singleton v
+    | Exp.BinOp(_, t1, t2) -> Ident.IdentSet.union (vars t1) (vars t2)
+    | _ -> Ident.IdentSet.empty
+
+  (* ordered set of permission constraints *)
+  module Set = struct
+    include PrettyPrintable.MakePPSet(Exp)
+
+    (* variables of a constraint set *)
+    let vars c =
+      fold (fun exp a -> Ident.IdentSet.union (vars exp) a) c Ident.IdentSet.empty
+  end
+end
+
 (* stuff stolen from ThreadSafety due to mli *)
-type lock_model =
+(* type lock_model =
   | Lock
   | Unlock
   | NoEffect
@@ -35,13 +85,13 @@ let get_lock_model = function
   | pname when Typ.Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
       Unlock
   | _ ->
-      NoEffect
+      NoEffect *)
 
-let should_analyze_proc pdesc _ =
+(* let should_analyze_proc pdesc _ =
   let pn = Procdesc.get_proc_name pdesc in
   not (Typ.Procname.is_constructor pn) &&
   not (Typ.Procname.is_class_initializer pn) &&
-  not (FbThreadSafety.is_logging_method pn)
+  not (FbThreadSafety.is_logging_method pn) *)
   (* not (is_call_to_builder_class_method pn) &&
   not (is_call_to_immutable_collection_method tenv pn) &&
   not (runs_on_ui_thread pdesc) &&
@@ -55,7 +105,7 @@ let should_report_on_proc (_, _, proc_name, proc_desc) =
 
 module ClassMap = PrettyPrintable.MakePPMap(Typ.Name)
 
-module Summary = struct
+(* module Summary = struct
   module S = struct
     type summary = PermsDomain.summary
 
@@ -107,9 +157,9 @@ module Summary = struct
       Lock.Set.union
       Lock.Set.empty
       sum_atoms
-end
+end *)
 
-module MakeTransferFunctions(CFG : ProcCfg.S) = struct
+(* module MakeTransferFunctions(CFG : ProcCfg.S) = struct
   module CFG = CFG
   module Domain = PermsDomain.Domain
   type extras = ProcData.no_extras
@@ -229,7 +279,7 @@ let compute_and_store_post callback =
 let checker ({ Callbacks.summary } as callback_args) : Specs.summary =
   let proc_name = Specs.get_proc_name summary in
   ignore (compute_and_store_post callback_args);
-  Specs.get_summary_unsafe "ThreadSafety.checker" proc_name
+  Specs.get_summary_unsafe "ThreadSafety.checker" proc_name *)
 
 (* compute all pairs (as lists) but disregarding order within the pair *)
 let all_pairs =
@@ -240,14 +290,13 @@ let all_pairs =
       with_x @ (aux xs) in
   aux
 
-let may_alias a1 a2 =
-  let open AccessPath in
-  let p1, p2 = a1.Atom.lvalue, a2.Atom.lvalue in
+let may_alias _ _ = true
+  (* let open AccessPath in
   let unrelated_types () =
-    let get_type a =
-      let p = a.Atom.lvalue in
+    let get_type p =
       let (_,_,_,tenv) =
-        Option.value_exn (List.last_exn a.Atom.path |> CallSite.pname |> Summary.get_summary) in
+        Option.value_exn
+          (List.last_exn a.Atom.path |> CallSite.pname |> Summary.get_summary) in
       (Option.value_exn(Raw.get_typ p tenv), tenv)
     in
     let (typ1, tenv1), (typ2, tenv2) = get_type a1, get_type a2 in
@@ -271,35 +320,13 @@ let may_alias a1 a2 =
       -> false
     | _, _ -> true
 (* if type of lvalue is primitive then the lvalues may alias
-   if the types are equal and the enclosing types may alias
+   if the types are equal and the enclosing types may alias *)
    | Typ.Tint _, _ | Typ.Tfloat _, _ ->
     Typ.equal typ1 typ2 &&
-    may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2) *)
-(* | _ ->
-        let pre1, pre2 = Raw.truncate p1, Raw.truncate p2 in
-        not (Typ.equal typ1 typ2) *)
-        (* match typ1, typ2 with
-        (* if type of lvalue is primitive then the lvalues may alias
-           if the types are equal and the enclosing types may alias *)
-        | Typ.Tint _, _ | Typ.Tfloat _, _ ->
-            Typ.equal typ1 typ2 &&
-            may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
-        | Typ.Tptr (Typ.Tstruct tn1, _), Typ.Tptr (Typ.Tstruct tn2, _)
-        | Typ.Tstruct tn1, Typ.Tstruct tn2 ->
-        | Typ.Tvoid , _ | _, Typ.Tvoid
-        | Typ.Tfun _, _ | _, Typ.Tfun _
-        | Typ.Tptr _, _ | _, Typ.Tptr _
-        | Typ.Tarray _, _ | _, Typ.Tarray _ -> assert false (* FIXME *)
-        | _, _ -> false *)
+    may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
   in
   L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
-  res
-
-
-(* let may_alias _ _ = true *)
-
-
-
+  res *)
 
 (* run z3 on a set of constraints
    and return the output as a list of strings/lines *)
@@ -343,24 +370,25 @@ let run_z3 vars merged =
 
 module IntMap = PrettyPrintable.MakePPMap(Int)
 
+module Summary = Summary.Make (struct
+    type summary = ThreadSafetyDomain.summary
 
-let should_analyze ((_,tenv,_,pdesc) as p) =
-  should_analyze_proc pdesc tenv && should_report_on_proc p
+    let update_payload summary payload =
+      { payload with Specs.threadsafety = Some summary }
+
+    let read_from_payload payload =
+      payload.Specs.threadsafety
+  end)
 
 (* run actual analysis, remembering proc info *)
-let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as p) =
-  match Summary.read_summary proc_desc proc_name with
-  | Some summ -> Some (p, summ)
-  | None ->
-      let callback_arg =
-        let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
-        let get_procs_in_file _ = [] in
-        { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-      match compute_and_store_post callback_arg with
-      | Some sum -> Some (p, sum)
-      | None -> None
+let summarise get_proc_desc (idenv, tenv, proc_name, proc_desc) =
+  let callback_arg =
+    let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
+    let get_procs_in_file _ = [] in
+    { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
+  (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
 
-let run_check (vars, ctr_map, extra_ctrs) =
+(* let run_check (vars, ctr_map, extra_ctrs) =
   (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
   L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ; *)
   (* parse a z3 model (without the enclosing braces and model statement) *)
@@ -410,7 +438,7 @@ let run_check (vars, ctr_map, extra_ctrs) =
   let merged = IntMap.fold (fun i (c,_) acc -> (i,c)::acc) ctr_map merged in
   let output = run_z3 vars merged in
   List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
-  parse_unsat_core output
+  parse_unsat_core output *)
 (* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
 (* begin
    let varmap = Ident.Set.mk_string_map vars in
@@ -453,25 +481,33 @@ let merge compiled =
       star_intro_ctrs in
   (vars, ctr_map, bounded_ctrs @ star_intro_ctrs)
 
+let compile_access pre inv t =
+  let (_, access) = TraceElem.kind t in
+  match access with
+  | Access.Read -> Constr.mk_gt_zero [pre; inv]
+  | Access.Write -> Constr.mk_eq_one [pre; inv]
+
+
 (* for a given pair of methods, generate appropriate constraints *)
-let compile_case partition locks invmap summaries =
+let compile_case partition inv summaries =
   (* for each method create a precondition permission variable for the given location *)
   let pres = List.map summaries ~f:(fun _ -> mk_permvar ()) in
   (* for a given summary and precondition var generate constraints
   as well as a map that will allow converting back from a Z3 unsat core *)
-  let compile_summary ctr_map pre (sum_atoms, _, _, _) =
-    Atom.Set.fold
+  let compile_summary ctr_map pre (_, _, accesses, _) =
+    let loc_accesses =
+      PathDomain.Sinks.inter partition (PathDomain.sinks accesses) in
+    PathDomain.Sinks.fold
       (fun a acc ->
-         let c = Atom.compile pre invmap a in
+         let c = compile_access pre inv a in
          IntMap.add (Hashtbl.hash c) (c, a) acc
       )
-      (Atom.Set.inter partition sum_atoms)
+      loc_accesses
       ctr_map
   in
   let ctr_map = List.fold2_exn pres summaries ~init:IntMap.empty ~f:compile_summary in
-  let lockinvs = List.map locks ~f:(fun l -> Lock.Map.find l invmap) in
   (* add the constraint by star introduction *)
-  let star_intro_ctr = Constr.mk_eq_one (pres @ lockinvs) in
+  let star_intro_ctr = Constr.mk_eq_one (inv :: pres) in
   (ctr_map, star_intro_ctr)
 
 
@@ -483,54 +519,64 @@ let process_case = function
   | _ -> assert false
 
 (* run the analysis relative to the given heap location *)
-let analyse_location locks summary_pairs partition =
+let analyse_location cases partition =
   (* let accesses_partition (_,(atoms,_,_,_)) =
     not (Atom.Set.is_empty (Atom.Set.inter atoms partition)) in *)
   (* only keep method pairs that both access the given location *)
   (* let summary_pairs =
      List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in *)
   (* build a map from locks to permission variables in each lock's resource invariant *)
-  let invmap =
-    List.fold
-      locks
-      ~init:Lock.Map.empty
-      ~f:(fun acc l -> Lock.Map.add l (mk_permvar ()) acc)
-  in
+  let inv = mk_permvar () in
   (* throw away info from file_env -- we don't need it for now *)
-  let cases = List.map ~f:process_case summary_pairs in
+  (* let cases = List.map ~f:process_case summary_pairs in *)
   (* for each pair of methods, generate the permissions constraints *)
-  let compiled = List.map ~f:(compile_case partition locks invmap) cases in
-  let merged = merge compiled in
-  run_check merged
+  let compiled = List.map ~f:(compile_case partition inv) cases in
+  (* let merged = merge compiled in *)
+  (* run_check merged *)
+  assert false
+
+(* quotient an atom set by pred2 -- pred2 must be eq. relation *)
+let quotient pred2 init =
+  let rec aux acc s =
+    if PathDomain.Sinks.is_empty s then acc else
+      let a = PathDomain.Sinks.choose s in
+      let (a_part, non_a_part) = PathDomain.Sinks.partition (pred2 a) s in
+      aux (a_part::acc) non_a_part
+  in
+  aux [] init
 
 let analyse_class get_proc_desc _ methods =
   L.out "SUMMARISATION START@." ;
-  (* summarise all methods -- NB for now we ignore methods that fail analysis. *)
   let method_summaries =
-    List.filter ~f:should_analyze methods |>
+    (* List.filter ~f:should_analyze  *)
+    methods |>
     List.map ~f:(summarise get_proc_desc) |>
     List.filter_opt in
-  (* compute all atoms and locks across all methods *)
   L.out "SUMMARISATION END@." ;
-  let (locks_set, all_atoms) =
+  let all_accesses =
     List.fold
       method_summaries
-      ~init:(Lock.Set.empty, Atom.Set.empty)
-      ~f:(fun (lock_acc, atoms_acc) (_, ((atoms, _, _, _) as sum)) ->
-          let lock_acc' = Summary.get_lockset sum |> Lock.Set.union lock_acc in
-          let atoms_acc' = Atom.Set.union atoms atoms_acc in
-          (lock_acc', atoms_acc')
+      ~init:PathDomain.empty
+      ~f:(fun paths_acc (_,_,accesses,_) ->
+          AccessDomain.fold
+            (fun _ v acc -> PathDomain.join v acc)
+            accesses
+            paths_acc
         )
   in
-  let locks = Lock.Set.elements locks_set in
-  L.out "LOCKS %d /ATOMS %d @." (List.length locks) (Atom.Set.cardinal all_atoms);
+  let all_traceelems = PathDomain.sinks all_accesses
+    (* PathDomain.Sinks.fold
+      (fun t acc -> AccessPath.RawSet.add (TraceElem.kind t |> fst) acc)
+      ()
+      AccessPath.RawSet.empty *)
+  in
+  L.out "Paths %d @." (PathDomain.Sinks.cardinal all_traceelems) ;
   (* quotient set of atoms by may_alias *)
-  let partitions = Atom.Set.quotient may_alias all_atoms in
-  L.out "PARTITIONS@." ;
+  let partitions = quotient may_alias all_traceelems in
   (* create all pairs of analyseable methods *)
   let summary_pairs = all_pairs method_summaries in
   (* for each heap location, run the analysis on the method pairs *)
-  List.iter ~f:(analyse_location locks summary_pairs) partitions
+  List.iter ~f:(analyse_location summary_pairs) partitions
 
 (* partition methods in file by class and then run analyse_class on each set *)
 let file_analysis _ _ get_proc_desc file_env =
