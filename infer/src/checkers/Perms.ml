@@ -1,7 +1,7 @@
 open! IStd
 (* open! PermsDomain *)
-open! ThreadSafetyDomain
 
+module T = ThreadSafetyDomain
 module F = Format
 module L = Logging
 
@@ -54,232 +54,10 @@ module Constr = struct
   end
 end
 
-(* stuff stolen from ThreadSafety due to mli *)
-(* type lock_model =
-  | Lock
-  | Unlock
-  | NoEffect
-
-let get_lock_model = function
-  | Typ.Procname.Java java_pname ->
-      begin
-        match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
-        | "java.util.concurrent.locks.Lock", "lock" ->
-            Lock
-        | ("java.util.concurrent.locks.ReentrantLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-          ("lock" | "tryLock" | "lockInterruptibly") ->
-            Lock
-        | ("java.util.concurrent.locks.Lock"
-          |"java.util.concurrent.locks.ReentrantLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock"
-          | "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock"),
-          "unlock" ->
-            Unlock
-        | _ ->
-            NoEffect
-      end
-  | pname when Typ.Procname.equal pname BuiltinDecl.__set_locked_attribute ->
-      Lock
-  | pname when Typ.Procname.equal pname BuiltinDecl.__delete_locked_attribute ->
-      Unlock
-  | _ ->
-      NoEffect *)
-
-(* let should_analyze_proc pdesc _ =
-  let pn = Procdesc.get_proc_name pdesc in
-  not (Typ.Procname.is_constructor pn) &&
-  not (Typ.Procname.is_class_initializer pn) &&
-  not (FbThreadSafety.is_logging_method pn) *)
-  (* not (is_call_to_builder_class_method pn) &&
-  not (is_call_to_immutable_collection_method tenv pn) &&
-  not (runs_on_ui_thread pdesc) &&
-  not (is_thread_confined_method tenv pdesc) &&
-  not (pdesc_is_assumed_thread_safe pdesc tenv) *)
-
-let should_report_on_proc (_, _, proc_name, proc_desc) =
+(* let should_report_on_proc (_, _, proc_name, proc_desc) =
   not (Typ.Procname.java_is_autogen_method proc_name) &&
   Procdesc.get_access proc_desc <> PredSymb.Private &&
-  not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting)
-
-module ClassMap = PrettyPrintable.MakePPMap(Typ.Name)
-
-(* module Summary = struct
-  module S = struct
-    type summary = PermsDomain.summary
-
-    let update_payload summary payload =
-      { payload with Specs.permsafety = Some summary }
-
-    let read_from_payload payload =
-      payload.Specs.permsafety
-  end
-  include Summary.Make (S)
-
-  let get_summary callee_pname =
-    match Specs.get_summary callee_pname with
-    | None -> None
-    | Some summary -> S.read_from_payload summary.Specs.payload
-
-  let of_state pdata { atoms; locks_held } =
-    let pdesc = pdata.ProcData.pdesc in
-    let pname = Procdesc.get_proc_name pdesc in
-    let attrs = Procdesc.get_attributes pdesc in
-    let tenv = pdata.ProcData.tenv in
-    let formals =
-      List.map
-        ~f:(fun (name, _) -> Pvar.mk name pname)
-        attrs.ProcAttributes.formals in
-    (* demand that every atom refers to an lvalue (so no naked root vars)
-       and which is rooted at a formal *)
-    (* let () =
-      Atom.Set.iter
-        (function
-          | { Atom.lvalue=((Var.ProgramVar p, _), _::_) } ->
-              assert (List.mem ~equal:Pvar.equal formals p)
-          | _ -> assert false
-        )
-        atoms
-    in *)
-    (atoms, locks_held, formals, tenv)
-
-  let pp fmt (sum_atoms, sum_locks, _) =
-    F.fprintf fmt "{ sum_atoms=%a; sum_locks=%a }"
-      Atom.Set.pp sum_atoms
-      Lock.MultiSet.pp sum_locks
-
-(* return set of locks that is used in accesses
-   (does not include other locks held)*)
-  let get_lockset (sum_atoms, _, _, _) =
-    Atom.Set.map_to
-      (fun a -> Lock.MultiSet.to_set a.Atom.locks)
-      Lock.Set.union
-      Lock.Set.empty
-      sum_atoms
-end *)
-
-(* module MakeTransferFunctions(CFG : ProcCfg.S) = struct
-  module CFG = CFG
-  module Domain = PermsDomain.Domain
-  type extras = ProcData.no_extras
-
-  let is_un_lock pn =
-    match get_lock_model pn with
-    | NoEffect -> false
-    | _ -> true
-
-  let is_lock pn =
-    match get_lock_model pn with
-    | Lock -> true
-    | _ -> false
-
-  let do_call caller_pdesc callee_pname args astate site =
-    match Summary.read_summary caller_pdesc callee_pname with
-    | None ->
-        L.out "Couldn't find summary for %a@." Typ.Procname.pp callee_pname ;
-        astate
-    | Some (sum_atoms, sum_locks, formals, _) ->
-        let f_resolve_id = IdMap.resolve astate.must_point in
-        let args = List.map args
-            ~f:(fun (arg, typ) -> AccessPath.of_lhs_exp arg typ ~f_resolve_id) in
-        let theta = List.fold2_exn formals args ~init:PvarMap.empty
-            ~f:(fun acc formal arg -> PvarMap.add formal arg acc) in
-        let new_atoms =
-          Atom.Set.union
-            astate.atoms
-            (Atom.Set.endomap (Atom.adapt astate.locks_held site theta) sum_atoms)
-        in
-        let new_locks = Lock.MultiSet.union sum_locks astate.locks_held in
-        {astate with atoms=new_atoms; locks_held=new_locks}
-
-  (* actual transfer function *)
-  let exec_instr astate pdata _ cmd =
-    let curr_pdesc = pdata.ProcData.pdesc in
-    let procname = Procdesc.get_proc_name curr_pdesc in
-    match cmd with
-    | Sil.Load (lhs_id, rhs_exp, rhs_typ, location) ->
-        let site = CallSite.make procname location in
-        (* below we should be using a may-resolve FIXME *)
-        let lvalue = State.must_resolve rhs_exp rhs_typ astate in
-        let astate =
-          match rhs_exp with
-          | Exp.Lfield _ | Exp.Lindex _ -> State.add_read lvalue site astate
-          | _ -> astate
-        in
-        State.update_id lhs_id rhs_exp rhs_typ astate
-
-    | Sil.Store (lhs_exp, lhs_typ, rhs_exp, location) ->
-        let site = CallSite.make procname location in
-        let astate =
-          match lhs_exp with
-          | Exp.Lfield _ | Exp.Lindex _ ->
-              (* below we should be using a may-resolve FIXME *)
-              let lvalue = State.must_resolve lhs_exp lhs_typ astate in
-              State.add_write lvalue site astate
-          | Exp.Lvar lhs_pvar ->
-              if Pvar.is_frontend_tmp lhs_pvar then
-                State.update_pvar lhs_pvar rhs_exp lhs_typ astate
-              else
-                astate
-          | _ -> assert false in
-        let () =
-          match rhs_exp with
-          | Exp.Lfield _ | Exp.Lindex _ -> assert false
-          | _ -> () in
-        astate
-
-    | Sil.Remove_temps (ids, _) ->
-        State.remove_ids ids astate
-
-    | Sil.Call (_, Const (Cfun pn), [(exp, typ)], _, _) when is_un_lock pn ->
-        let lock = State.must_resolve exp typ astate in
-        let f = if is_lock pn then Lock.MultiSet.add else Lock.MultiSet.remove in
-        { astate with locks_held = f lock astate.locks_held }
-
-    | Sil.Call (_, Const (Cfun pn), args, location, _) ->
-        let site = CallSite.make procname location in
-        do_call curr_pdesc pn args astate site
-
-    | Sil.Declare_locals _ | Sil.Prune _ -> astate
-
-    | _ ->
-       L.out "***Instruction %a escapes***@." (Sil.pp_instr Pp.text) cmd ;
-       astate
-
-  (* let exec_instr astate pdata x cmd =
-    L.out "***START ANALYSIS OF %a ***@." (Sil.pp_instr Pp.text) cmd ;
-    L.out "***ATOMS BEFORE = %a ***@." Atom.Set.pp astate.atoms ;
-    let astate' = exec_instr astate pdata x cmd in
-    L.out "***ATOMS AFTER = %a ***@." Atom.Set.pp astate'.atoms ;
-    astate' *)
-
-
-end
-
-module Analyzer = AbstractInterpreter.Make(ProcCfg.Normal)(MakeTransferFunctions)
-module Interprocedural = AbstractInterpreter.Interprocedural (Summary)
-
-(* compute the summary of a method *)
-let compute_and_store_post callback =
-  (* L.out "Analyzing method %a@." Typ.Procname.pp callback.Callbacks ; *)
-  let compute_post pdata =
-    let initial = State.empty in
-    let pdata = ProcData.make_default pdata.ProcData.pdesc pdata.ProcData.tenv in
-    match Analyzer.compute_post ~initial pdata with
-    | None -> L.out "No spec found@." ; None
-    | Some ((s) as a) ->
-        L.out "Found spec: %a@." Analyzer.TransferFunctions.Domain.pp a ;
-        Some (Summary.of_state pdata s) in
-  Interprocedural.compute_and_store_post
-    ~compute_post
-    ~make_extras:ProcData.make_empty_extras
-    callback
-
-let checker ({ Callbacks.summary } as callback_args) : Specs.summary =
-  let proc_name = Specs.get_proc_name summary in
-  ignore (compute_and_store_post callback_args);
-  Specs.get_summary_unsafe "ThreadSafety.checker" proc_name *)
+  not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting) *)
 
 (* compute all pairs (as lists) but disregarding order within the pair *)
 let all_pairs =
@@ -368,27 +146,10 @@ let run_z3 vars merged =
   ignore (Unix.close_process (in_ch, out_ch)) ;
   output
 
+
 module IntMap = PrettyPrintable.MakePPMap(Int)
 
-module Summary = Summary.Make (struct
-    type summary = ThreadSafetyDomain.summary
-
-    let update_payload summary payload =
-      { payload with Specs.threadsafety = Some summary }
-
-    let read_from_payload payload =
-      payload.Specs.threadsafety
-  end)
-
-(* run actual analysis, remembering proc info *)
-let summarise get_proc_desc (idenv, tenv, proc_name, proc_desc) =
-  let callback_arg =
-    let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
-    let get_procs_in_file _ = [] in
-    { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-  (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
-
-(* let run_check (vars, ctr_map, extra_ctrs) =
+let run_check (vars, ctr_map, extra_ctrs) =
   (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
   L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ; *)
   (* parse a z3 model (without the enclosing braces and model statement) *)
@@ -411,26 +172,25 @@ let summarise get_proc_desc (idenv, tenv, proc_name, proc_desc) =
         let ls = String.split l ~on:' ' in
         let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
         let is = List.map ls ~f:Int.of_string in
-        let atoms = List.map is
+        let traceelems = List.map is
             ~f:(fun i -> snd (IntMap.find i ctr_map)) in
-        let atoms = Atom.Set.of_list atoms in
+        let traceelems = T.TraceElem.Set.of_list traceelems in
         let () =
-          Atom.Set.iter (fun c -> L.out "Z3: unsat core: %a@." Atom.pp c) atoms in
-        let w = Atom.Set.choose (Atom.Set.filter Atom.is_write atoms) in
-        let atoms = Atom.Set.elements (Atom.Set.remove w atoms) in
-        let loc = CallSite.loc (List.last_exn w.path) in
-        let pname = CallSite.pname (List.last_exn w.path) in
+          T.TraceElem.Set.iter (fun c -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
+        let w = T.TraceElem.Set.choose (T.TraceElem.Set.filter T.TraceElem.is_write traceelems) in
+        let traceelems = T.TraceElem.Set.elements (T.TraceElem.Set.remove w traceelems) in
+        let site = T.TraceElem.call_site w in
+        let pname, loc = CallSite.pname site, CallSite.loc site in
         let msg = Localise.to_issue_id Localise.thread_safety_violation in
         let description =
-          match atoms with
-          | [] -> F.asprintf "The <%a> is a potential self-race." Atom.pp w
-          | _ -> F.asprintf "The <%a> potentially races with:@.%a" Atom.pp w
-                   (Pp.comma_seq Atom.pp) atoms
+          match traceelems with
+          | [] -> F.asprintf "The <%a> is a potential self-race." T.TraceElem.pp w
+          | _ -> F.asprintf "The <%a> potentially races with:@.%a" T.TraceElem.pp w
+                   (Pp.comma_seq T.TraceElem.pp) traceelems
         in
-        let ltr =
-          List.mapi w.path
-            ~f:(fun i s -> Errlog.make_trace_element i (CallSite.loc s) "" []) in
+        let ltr = [Errlog.make_trace_element 0 loc "" []] in
         let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
+        L.out "about to report %a" Typ.Procname.pp pname ;
         Reporting.log_error pname ~loc ~ltr exn
     | _ -> ()
   in
@@ -438,7 +198,7 @@ let summarise get_proc_desc (idenv, tenv, proc_name, proc_desc) =
   let merged = IntMap.fold (fun i (c,_) acc -> (i,c)::acc) ctr_map merged in
   let output = run_z3 vars merged in
   List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
-  parse_unsat_core output *)
+  parse_unsat_core output
 (* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
 (* begin
    let varmap = Ident.Set.mk_string_map vars in
@@ -478,15 +238,43 @@ let merge compiled =
     Ident.IdentSet.fold
       (fun v acc -> (Constr.mk_lb [v])::(Constr.mk_ub [v])::acc)
       vars
-      star_intro_ctrs in
+      [] in
   (vars, ctr_map, bounded_ctrs @ star_intro_ctrs)
 
-let compile_access pre inv t =
-  let (_, access) = TraceElem.kind t in
+let compile_access pre inv k t =
+  L.out "compiling %a %a@." T.AccessPrecondition.pp k T.TraceElem.pp t ;
+  let (_, access) = T.TraceElem.kind t in
+  let definitely_locked = match k with
+    | T.AccessPrecondition.Protected -> true
+    | _ -> false  in
+  let vars = if definitely_locked then [pre;inv] else [pre] in
   match access with
-  | Access.Read -> Constr.mk_gt_zero [pre; inv]
-  | Access.Write -> Constr.mk_eq_one [pre; inv]
+  | T.Access.Read -> Constr.mk_gt_zero vars
+  | T.Access.Write -> Constr.mk_eq_one vars
 
+let summary_to_paths (_,_,accesses,_) =
+  T.AccessDomain.fold
+    (fun _ v acc -> T.PathDomain.join v acc)
+    accesses
+    T.PathDomain.empty
+
+let compile_summary partition inv ctr_map pre (_,_,accesses,_) =
+  let accesses_to_compile =
+    T.AccessDomain.map
+      (fun v -> T.PathDomain.Sinks.inter (T.PathDomain.sinks v) partition)
+      accesses in
+  T.AccessDomain.fold
+    (fun k v acc ->
+       T.PathDomain.Sinks.fold
+         (fun t acc ->
+            let c = compile_access pre inv k t in
+            IntMap.add (Hashtbl.hash c) (c, t) acc
+         )
+         v
+         acc
+    )
+    accesses_to_compile
+    ctr_map
 
 (* for a given pair of methods, generate appropriate constraints *)
 let compile_case partition inv summaries =
@@ -494,89 +282,59 @@ let compile_case partition inv summaries =
   let pres = List.map summaries ~f:(fun _ -> mk_permvar ()) in
   (* for a given summary and precondition var generate constraints
   as well as a map that will allow converting back from a Z3 unsat core *)
-  let compile_summary ctr_map pre (_, _, accesses, _) =
-    let loc_accesses =
-      PathDomain.Sinks.inter partition (PathDomain.sinks accesses) in
-    PathDomain.Sinks.fold
-      (fun a acc ->
-         let c = compile_access pre inv a in
-         IntMap.add (Hashtbl.hash c) (c, a) acc
-      )
-      loc_accesses
-      ctr_map
-  in
-  let ctr_map = List.fold2_exn pres summaries ~init:IntMap.empty ~f:compile_summary in
+  let ctr_map = List.fold2_exn pres summaries ~init:IntMap.empty ~f:(compile_summary partition inv) in
   (* add the constraint by star introduction *)
   let star_intro_ctr = Constr.mk_eq_one (inv :: pres) in
   (ctr_map, star_intro_ctr)
 
-
-(* combine list of summaries of methods called in parallel,
-   currently expects a pair of summaries as we only consider two threads --
-   this is meant to be generalised in the future to n threads *)
-let process_case = function
-  | [ (_, sum1); (_, sum2)] -> [sum1; sum2]
-  | _ -> assert false
-
 (* run the analysis relative to the given heap location *)
 let analyse_location cases partition =
-  (* let accesses_partition (_,(atoms,_,_,_)) =
-    not (Atom.Set.is_empty (Atom.Set.inter atoms partition)) in *)
-  (* only keep method pairs that both access the given location *)
   (* let summary_pairs =
      List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in *)
-  (* build a map from locks to permission variables in each lock's resource invariant *)
   let inv = mk_permvar () in
-  (* throw away info from file_env -- we don't need it for now *)
-  (* let cases = List.map ~f:process_case summary_pairs in *)
-  (* for each pair of methods, generate the permissions constraints *)
+  L.out "compiling %d cases@." (List.length cases) ;
   let compiled = List.map ~f:(compile_case partition inv) cases in
-  (* let merged = merge compiled in *)
-  (* run_check merged *)
-  assert false
+  let merged = merge compiled in
+  run_check merged
 
-(* quotient an atom set by pred2 -- pred2 must be eq. relation *)
 let quotient pred2 init =
   let rec aux acc s =
-    if PathDomain.Sinks.is_empty s then acc else
-      let a = PathDomain.Sinks.choose s in
-      let (a_part, non_a_part) = PathDomain.Sinks.partition (pred2 a) s in
+    if T.PathDomain.Sinks.is_empty s then acc else
+      let a = T.PathDomain.Sinks.choose s in
+      let (a_part, non_a_part) = T.PathDomain.Sinks.partition (pred2 a) s in
       aux (a_part::acc) non_a_part
   in
   aux [] init
 
+let should_analyze (_,_,_,pdesc) =
+  let pn = Procdesc.get_proc_name pdesc in
+  not (Typ.Procname.is_constructor pn) &&
+  not (Typ.Procname.is_class_initializer pn) &&
+  not (FbThreadSafety.is_logging_method pn)
+
 let analyse_class get_proc_desc _ methods =
-  L.out "SUMMARISATION START@." ;
+  let summarise (idenv, tenv, proc_name, proc_desc) =
+    let callback_arg =
+      let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
+      let get_procs_in_file _ = [] in
+      { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
+    (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
+  in
   let method_summaries =
-    (* List.filter ~f:should_analyze  *)
-    methods |>
-    List.map ~f:(summarise get_proc_desc) |>
-    List.filter_opt in
-  L.out "SUMMARISATION END@." ;
+    methods |> List.filter ~f:should_analyze |> List.map ~f:summarise |> List.filter_opt in
+  L.out "Found %d summaries@." (List.length method_summaries) ;
   let all_accesses =
     List.fold
       method_summaries
-      ~init:PathDomain.empty
-      ~f:(fun paths_acc (_,_,accesses,_) ->
-          AccessDomain.fold
-            (fun _ v acc -> PathDomain.join v acc)
-            accesses
-            paths_acc
-        )
+      ~init:T.PathDomain.empty
+      ~f:(fun acc s -> summary_to_paths s |> T.PathDomain.join acc)
   in
-  let all_traceelems = PathDomain.sinks all_accesses
-    (* PathDomain.Sinks.fold
-      (fun t acc -> AccessPath.RawSet.add (TraceElem.kind t |> fst) acc)
-      ()
-      AccessPath.RawSet.empty *)
-  in
-  L.out "Paths %d @." (PathDomain.Sinks.cardinal all_traceelems) ;
-  (* quotient set of atoms by may_alias *)
+  let all_traceelems = T.PathDomain.sinks all_accesses in
   let partitions = quotient may_alias all_traceelems in
-  (* create all pairs of analyseable methods *)
   let summary_pairs = all_pairs method_summaries in
-  (* for each heap location, run the analysis on the method pairs *)
   List.iter ~f:(analyse_location summary_pairs) partitions
+
+module ClassMap = PrettyPrintable.MakePPMap(Typ.Name)
 
 (* partition methods in file by class and then run analyse_class on each set *)
 let file_analysis _ _ get_proc_desc file_env =
