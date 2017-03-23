@@ -1,5 +1,4 @@
 open! IStd
-(* open! PermsDomain *)
 
 module T = ThreadSafetyDomain
 module F = Format
@@ -130,11 +129,11 @@ let run_z3 vars merged =
   L.out "Passing to Z3:@." ;
   List.iter ~f:(fun id_c -> L.out "%a@." z3assert id_c) merged ;
   (* ask for a satisfying model if sat *)
-  F.fprintf fmt "(set-option :dump-models true)@." ;
+  (* F.fprintf fmt "(set-option :dump-models true)@." ; *)
   (* ask for an unsat core if unsat *)
   F.fprintf fmt "(set-option :unsat_core true)@." ;
   (* request decimals, not fractions, may append "?" if imprecise *)
-  F.fprintf fmt "(set-option :pp.decimal true)@." ;
+  (* F.fprintf fmt "(set-option :pp.decimal true)@." ; *)
   F.fprintf fmt "%a@." to_z3 vars ;
   List.iter ~f:(fun id_c -> F.fprintf fmt "%a@." z3assert id_c) merged ;
   F.fprintf fmt "(check-sat)@." ;
@@ -242,7 +241,7 @@ let merge compiled =
   (vars, ctr_map, bounded_ctrs @ star_intro_ctrs)
 
 let compile_access pre inv k t =
-  L.out "compiling %a %a@." T.AccessPrecondition.pp k T.TraceElem.pp t ;
+  (* L.out "compiling %a %a@." T.AccessPrecondition.pp k T.TraceElem.pp t ; *)
   let (_, access) = T.TraceElem.kind t in
   let definitely_locked = match k with
     | T.AccessPrecondition.Protected -> true
@@ -251,12 +250,6 @@ let compile_access pre inv k t =
   match access with
   | T.Access.Read -> Constr.mk_gt_zero vars
   | T.Access.Write -> Constr.mk_eq_one vars
-
-let summary_to_paths (_,_,accesses,_) =
-  T.AccessDomain.fold
-    (fun _ v acc -> T.PathDomain.join v acc)
-    accesses
-    T.PathDomain.empty
 
 let compile_summary partition inv ctr_map pre (_,_,accesses,_) =
   let accesses_to_compile =
@@ -292,7 +285,7 @@ let analyse_location cases partition =
   (* let summary_pairs =
      List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in *)
   let inv = mk_permvar () in
-  L.out "compiling %d cases@." (List.length cases) ;
+  (* L.out "compiling %d cases@." (List.length cases) ; *)
   let compiled = List.map ~f:(compile_case partition inv) cases in
   let merged = merge compiled in
   run_check merged
@@ -312,6 +305,12 @@ let should_analyze (_,_,_,pdesc) =
   not (Typ.Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn)
 
+let summary_to_paths (_,_,accesses,_) =
+  T.AccessDomain.fold
+    (fun _ v acc -> T.PathDomain.join v acc)
+    accesses
+    T.PathDomain.empty
+
 let analyse_class get_proc_desc _ methods =
   let summarise (idenv, tenv, proc_name, proc_desc) =
     let callback_arg =
@@ -321,8 +320,8 @@ let analyse_class get_proc_desc _ methods =
     (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
   in
   let method_summaries =
-    methods |> List.filter ~f:should_analyze |> List.map ~f:summarise |> List.filter_opt in
-  L.out "Found %d summaries@." (List.length method_summaries) ;
+    List.filter methods ~f:should_analyze |> List.map ~f:summarise |> List.filter_opt in
+  (* L.out "Found %d summaries@." (List.length method_summaries) ; *)
   let all_accesses =
     List.fold
       method_summaries
