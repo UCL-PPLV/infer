@@ -171,13 +171,14 @@ let run_check (vars, ctr_map, extra_ctrs) =
         let ls = String.split l ~on:' ' in
         let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
         let is = List.map ls ~f:Int.of_string in
-        let traceelems = List.map is
-            ~f:(fun i -> snd (IntMap.find i ctr_map)) in
-        let traceelems = T.TraceElem.Set.of_list traceelems in
+        let traceelems = List.map is ~f:(fun i -> snd (IntMap.find i ctr_map)) in
+        (* let traceelems = T.TraceElem.Set.of_list traceelems in *)
         let () =
-          T.TraceElem.Set.iter (fun c -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
-        let w = T.TraceElem.Set.choose (T.TraceElem.Set.filter T.TraceElem.is_write traceelems) in
-        let traceelems = T.TraceElem.Set.elements (T.TraceElem.Set.remove w traceelems) in
+          List.iter ~f:(fun (_,c,_) -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
+        (* let w = T.TraceElem.Set.choose (T.TraceElem.Set.filter T.TraceElem.is_write traceelems) in *)
+        let (_,w,_) = List.hd_exn traceelems in
+        (* let traceelems = T.TraceElem.Set.elements (T.TraceElem.Set.remove w traceelems) in *)
+        let traceelems = List.map (List.tl_exn traceelems) ~f:(fun (_,t,_) -> t) in
         let site = T.TraceElem.call_site w in
         let pname, loc = CallSite.pname site, CallSite.loc site in
         let msg = Localise.to_issue_id Localise.thread_safety_violation in
@@ -252,22 +253,21 @@ let compile_access pre inv k t =
   | T.Access.Write -> Constr.mk_eq_one vars
 
 let compile_summary partition inv ctr_map pre (_,_,accesses,_) =
-  let accesses_to_compile =
-    T.AccessDomain.map
-      (fun v -> T.PathDomain.Sinks.inter (T.PathDomain.sinks v) partition)
-      accesses in
-  T.AccessDomain.fold
-    (fun k v acc ->
-       T.PathDomain.Sinks.fold
-         (fun t acc ->
-            let c = compile_access pre inv k t in
-            IntMap.add (Hashtbl.hash c) (c, t) acc
-         )
-         v
-         acc
-    )
-    accesses_to_compile
-    ctr_map
+  let pd_to_triples (k, paths) =
+    T.PathDomain.get_reports paths |>
+    List.map ~f:(fun (_,t,ps) -> (k, t, T.PathDomain.Passthroughs.elements ps))
+  in
+  let elems =
+    T.AccessDomain.bindings accesses |>
+    List.map ~f:pd_to_triples |>
+    List.concat |>
+    List.filter ~f:(fun (_,t,_) -> T.PathDomain.Sinks.mem t partition) in
+  List.fold elems
+    ~init:ctr_map
+    ~f:(fun acc ((k, t, _) as elem)->
+        let c = compile_access pre inv k t in
+        IntMap.add (Hashtbl.hash c) (c, elem) acc
+      )
 
 (* for a given pair of methods, generate appropriate constraints *)
 let compile_case partition inv summaries =
@@ -317,7 +317,7 @@ let analyse_class get_proc_desc _ methods =
       let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
       let get_procs_in_file _ = [] in
       { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-    (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
+      (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
   in
   let method_summaries =
     List.filter methods ~f:should_analyze |> List.map ~f:summarise |> List.filter_opt in
