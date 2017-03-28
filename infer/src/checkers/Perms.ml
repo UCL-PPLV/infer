@@ -148,20 +148,53 @@ let run_z3 vars merged =
 
 module IntMap = PrettyPrintable.MakePPMap(Int)
 
+(* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
+   L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ; *)
+(* parse a z3 model (without the enclosing braces and model statement) *)
+(* let parse_z3_model varmap =
+   let rec aux acc = function
+    | [] | [_] -> acc
+    | l1::l2::ls ->
+      let varstr = Scanf.sscanf l1 "  (define-fun %s () Real" (fun v -> v) in
+      let var = String.Map.find_exn varmap varstr in
+      let value = Scanf.sscanf l2 " %f" (fun v -> v) in
+      aux (Ident.Map.add var value acc) ls in
+   aux Ident.Map.empty
+   in *)
+(* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
+(* begin
+   let varmap = Ident.Set.mk_string_map vars in
+   let model = parse_z3_model varmap output in
+   L.out "Z3 model: %a@.@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
+   end *)
+(* | _ -> assert false *)
+
+let summary_to_paths (_,_,accesses,_) =
+  T.AccessDomain.fold
+    (fun _ v acc -> T.PathDomain.join v acc)
+    accesses
+    T.PathDomain.empty
+
+(* let trace_of_pname callee_pname =
+  match Specs.get_summary callee_pname with
+  | None -> assert false
+  | Some s ->
+      match s.Specs.payload.threadsafety with
+      | Some sum -> summary_to_paths sum
+      | None -> T.PathDomain.empty *)
+
+module Summary = Summary.Make (struct
+    type summary = ThreadSafetyDomain.summary
+
+    let update_payload summary payload =
+      { payload with Specs.threadsafety = Some summary }
+
+    let read_from_payload payload =
+      payload.Specs.threadsafety
+  end)
+
+
 let run_check (vars, ctr_map, extra_ctrs) =
-  (* let pnames = List.map pinfos ~f:(fun (_,_,pn,_) -> pn) in
-  L.out "Analysing case: %a@." (Pp.or_seq Pp.text Procname.pp) pnames ; *)
-  (* parse a z3 model (without the enclosing braces and model statement) *)
-  (* let parse_z3_model varmap =
-    let rec aux acc = function
-      | [] | [_] -> acc
-      | l1::l2::ls ->
-        let varstr = Scanf.sscanf l1 "  (define-fun %s () Real" (fun v -> v) in
-        let var = String.Map.find_exn varmap varstr in
-        let value = Scanf.sscanf l2 " %f" (fun v -> v) in
-        aux (Ident.Map.add var value acc) ls in
-    aux Ident.Map.empty
-     in *)
   let rec parse_unsat_core = function
     | "sat"::_ -> ()
     | "unsat"::rest -> parse_unsat_core rest
@@ -171,27 +204,42 @@ let run_check (vars, ctr_map, extra_ctrs) =
         let ls = String.split l ~on:' ' in
         let ls = List.map ls ~f:(fun l -> String.slice l 1 (String.length l)) in
         let is = List.map ls ~f:Int.of_string in
-        let traceelems = List.map is ~f:(fun i -> snd (IntMap.find i ctr_map)) in
-        (* let traceelems = T.TraceElem.Set.of_list traceelems in *)
+        let traceelems = List.map is ~f:(fun i -> (IntMap.find i ctr_map) |> snd) in
         let () =
-          List.iter ~f:(fun (_,c,_) -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
-        (* let w = T.TraceElem.Set.choose (T.TraceElem.Set.filter T.TraceElem.is_write traceelems) in *)
-        let (_,w,_) = List.hd_exn traceelems in
-        (* let traceelems = T.TraceElem.Set.elements (T.TraceElem.Set.remove w traceelems) in *)
-        let traceelems = List.map (List.tl_exn traceelems) ~f:(fun (_,t,_) -> t) in
-        let site = T.TraceElem.call_site w in
-        let pname, loc = CallSite.pname site, CallSite.loc site in
-        let msg = Localise.to_issue_id Localise.thread_safety_violation in
-        let description =
-          match traceelems with
-          | [] -> F.asprintf "The <%a> is a potential self-race." T.TraceElem.pp w
-          | _ -> F.asprintf "The <%a> potentially races with:@.%a" T.TraceElem.pp w
-                   (Pp.comma_seq T.TraceElem.pp) traceelems
-        in
-        let ltr = [Errlog.make_trace_element 0 loc "" []] in
-        let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
-        L.out "about to report %a" Typ.Procname.pp pname ;
-        Reporting.log_error pname ~loc ~ltr exn
+          List.iter ~f:(fun (_, (_,c,_)) -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
+        let ((_, _, proc_name, proc_desc), (_,w,_)) = List.hd_exn traceelems in
+        let trace_of_pname callee_pname =
+          match Summary.read_summary proc_desc callee_pname with
+          | Some sum -> summary_to_paths sum
+          | _ -> T.PathDomain.empty in
+        let sum_trace = trace_of_pname proc_name in
+        let trace = T.PathDomain.update_sinks sum_trace (T.PathDomain.Sinks.singleton w) in
+        let traceelems = List.map (List.tl_exn traceelems) ~f:(fun (_,(_,t,_)) -> t) in
+        let report_one_path ((_, sinks) as path) =
+          let initial_sink, _ = List.last_exn sinks in
+          let final_sink, _ = List.hd_exn sinks in
+          (* let initial_sink_site = T.PathDomain.Sink.call_site initial_sink in *)
+          let final_sink_site = T.PathDomain.Sink.call_site final_sink in
+          let desc_of_sink sink =
+            if
+              CallSite.equal (T.PathDomain.Sink.call_site sink) final_sink_site
+            then
+              match traceelems with
+              | [] -> F.asprintf "The <%a> is a potential self-race." T.TraceElem.pp w
+              | _ -> F.asprintf "The <%a> potentially races with:@.%a" T.TraceElem.pp w
+                       (Pp.comma_seq T.TraceElem.pp) traceelems
+            else
+              Format.asprintf
+                "call to %a" Typ.Procname.pp (CallSite.pname (T.PathDomain.Sink.call_site sink)) in
+          let loc = CallSite.loc (T.PathDomain.Sink.call_site initial_sink) in
+          let ltr = T.PathDomain.to_sink_loc_trace ~desc_of_sink path in
+          let msg = Localise.to_issue_id Localise.thread_safety_violation in
+          let description = desc_of_sink final_sink in
+          let exn = Exceptions.Checkers (msg, Localise.verbatim_desc description) in
+          Reporting.log_error proc_name ~loc ~ltr exn in
+        List.iter
+          ~f:report_one_path
+          (T.PathDomain.get_reportable_sink_paths trace ~trace_of_pname)
     | _ -> ()
   in
   let merged = List.map extra_ctrs ~f:(fun c -> (-1, c)) in
@@ -199,13 +247,6 @@ let run_check (vars, ctr_map, extra_ctrs) =
   let output = run_z3 vars merged in
   List.iter output ~f:(fun s -> L.out "Z3 says: %s.@." s) ;
   parse_unsat_core output
-(* | "sat" :: _ :: output -> (* drop first "(model" line as _ *) *)
-(* begin
-   let varmap = Ident.Set.mk_string_map vars in
-   let model = parse_z3_model varmap output in
-   L.out "Z3 model: %a@.@." (Ident.Map.pp ~pp_value:F.pp_print_float) model
-   end *)
-(* | _ -> assert false *)
 
 (* merge sets of variables, constraint maps and extra constraints for each method pair,
    and bound every permission variable along the way *)
@@ -252,7 +293,7 @@ let compile_access pre inv k t =
   | T.Access.Read -> Constr.mk_gt_zero vars
   | T.Access.Write -> Constr.mk_eq_one vars
 
-let compile_summary partition inv ctr_map pre (_,_,accesses,_) =
+let compile_summary partition inv ctr_map pre (pname, (_,_,accesses,_)) =
   let pd_to_triples (k, paths) =
     T.PathDomain.get_reports paths |>
     List.map ~f:(fun (_,t,ps) -> (k, t, T.PathDomain.Passthroughs.elements ps))
@@ -266,7 +307,7 @@ let compile_summary partition inv ctr_map pre (_,_,accesses,_) =
     ~init:ctr_map
     ~f:(fun acc ((k, t, _) as elem)->
         let c = compile_access pre inv k t in
-        IntMap.add (Hashtbl.hash c) (c, elem) acc
+        IntMap.add (Hashtbl.hash c) (c, (pname, elem)) acc
       )
 
 (* for a given pair of methods, generate appropriate constraints *)
@@ -285,7 +326,7 @@ let analyse_location cases partition =
   (* let summary_pairs =
      List.filter summary_pairs ~f:(List.for_all ~f:accesses_partition) in *)
   let inv = mk_permvar () in
-  (* L.out "compiling %d cases@." (List.length cases) ; *)
+  L.out "compiling %d cases@." (List.length cases) ;
   let compiled = List.map ~f:(compile_case partition inv) cases in
   let merged = merge compiled in
   run_check merged
@@ -305,28 +346,27 @@ let should_analyze (_,_,_,pdesc) =
   not (Typ.Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn)
 
-let summary_to_paths (_,_,accesses,_) =
-  T.AccessDomain.fold
-    (fun _ v acc -> T.PathDomain.join v acc)
-    accesses
-    T.PathDomain.empty
+
+let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as env) =
+  let callback_arg =
+    let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
+    let get_procs_in_file _ = [] in
+    { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
+  Option.map
+    (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
+    ~f:(fun s -> (env, s))
 
 let analyse_class get_proc_desc _ methods =
-  let summarise (idenv, tenv, proc_name, proc_desc) =
-    let callback_arg =
-      let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
-      let get_procs_in_file _ = [] in
-      { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-      (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
-  in
   let method_summaries =
-    List.filter methods ~f:should_analyze |> List.map ~f:summarise |> List.filter_opt in
-  (* L.out "Found %d summaries@." (List.length method_summaries) ; *)
+    List.filter methods ~f:should_analyze |>
+    List.map ~f:(summarise get_proc_desc) |>
+    List.filter_opt in
+  L.out "Found %d summaries@." (List.length method_summaries) ;
   let all_accesses =
     List.fold
       method_summaries
       ~init:T.PathDomain.empty
-      ~f:(fun acc s -> summary_to_paths s |> T.PathDomain.join acc)
+      ~f:(fun acc (_, s) -> summary_to_paths s |> T.PathDomain.join acc)
   in
   let all_traceelems = T.PathDomain.sinks all_accesses in
   let partitions = quotient may_alias all_traceelems in
