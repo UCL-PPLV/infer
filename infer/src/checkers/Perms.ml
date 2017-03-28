@@ -367,12 +367,14 @@ let should_report_on_proc (_, tenv, proc_name, proc_desc) =
    not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting))
 
 let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as env) =
+  L.out "Summarising %a@." Typ.Procname.pp proc_name ;
   let callback_arg =
     let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
     let get_procs_in_file _ = [] in
     { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-  Option.map
-    (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
+  let res = ThreadSafety.checker callback_arg in
+  let () = Specs.store_summary res in
+  Option.map res.Specs.payload.threadsafety
     ~f:(fun s -> (env, s))
   (* Option.map
     (get_summary proc_name)
