@@ -175,24 +175,14 @@ let summary_to_paths (_,_,accesses,_) =
     accesses
     T.PathDomain.empty
 
-(* let trace_of_pname callee_pname =
-  match Specs.get_summary callee_pname with
+let get_summary callee_pname =
+  let s = Specs.get_summary_unsafe "compute_post_for_procedure" callee_pname in
+  s.Specs.payload.threadsafety
+
+let trace_of_pname callee_pname =
+  match get_summary callee_pname with
   | None -> assert false
-  | Some s ->
-      match s.Specs.payload.threadsafety with
-      | Some sum -> summary_to_paths sum
-      | None -> T.PathDomain.empty *)
-
-module Summary = Summary.Make (struct
-    type summary = ThreadSafetyDomain.summary
-
-    let update_payload summary payload =
-      { payload with Specs.threadsafety = Some summary }
-
-    let read_from_payload payload =
-      payload.Specs.threadsafety
-  end)
-
+  | Some sum -> summary_to_paths sum
 
 let run_check (vars, ctr_map, extra_ctrs) =
   let rec parse_unsat_core = function
@@ -207,11 +197,7 @@ let run_check (vars, ctr_map, extra_ctrs) =
         let traceelems = List.map is ~f:(fun i -> (IntMap.find i ctr_map) |> snd) in
         let () =
           List.iter ~f:(fun (_, (_,c,_)) -> L.out "Z3: unsat core: %a@." T.TraceElem.pp c) traceelems in
-        let ((_, _, proc_name, proc_desc), (_,w,_)) = List.hd_exn traceelems in
-        let trace_of_pname callee_pname =
-          match Summary.read_summary proc_desc callee_pname with
-          | Some sum -> summary_to_paths sum
-          | _ -> T.PathDomain.empty in
+        let ((_, _, proc_name, _), (_,w,_)) = List.hd_exn traceelems in
         let sum_trace = trace_of_pname proc_name in
         let trace = T.PathDomain.update_sinks sum_trace (T.PathDomain.Sinks.singleton w) in
         let traceelems = List.map (List.tl_exn traceelems) ~f:(fun (_,(_,t,_)) -> t) in
@@ -346,6 +332,39 @@ let should_analyze (_,_,_,pdesc) =
   not (Typ.Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn)
 
+let threadsafe_annotations =
+  Annotations.thread_safe ::
+  (ThreadSafetyConfig.AnnotationAliases.of_json Config.threadsafe_aliases)
+
+
+let is_thread_safe item_annot =
+  let f ((annot : Annot.t), _) =
+    List.exists
+      ~f:(fun annot_string ->
+          Annotations.annot_ends_with annot annot_string ||
+          String.equal annot.class_name annot_string)
+      threadsafe_annotations &&
+    match annot.Annot.parameters with
+    | ["false"] -> false
+    | _ -> true in
+  List.exists ~f item_annot
+
+
+let is_thread_safe_method pdesc tenv =
+  PatternMatch.override_exists
+    (fun pn ->
+       Annotations.pname_has_return_annot
+         pn
+         ~attrs_of_pname:Specs.proc_resolve_attributes
+         is_thread_safe)
+    tenv
+    (Procdesc.get_proc_name pdesc)
+
+let should_report_on_proc (_, tenv, proc_name, proc_desc) =
+  is_thread_safe_method proc_desc tenv ||
+  (not (Typ.Procname.java_is_autogen_method proc_name) &&
+   Procdesc.get_access proc_desc <> PredSymb.Private &&
+   not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting))
 
 let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as env) =
   let callback_arg =
@@ -355,10 +374,14 @@ let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as env) =
   Option.map
     (ThreadSafety.checker callback_arg).Specs.payload.threadsafety
     ~f:(fun s -> (env, s))
+  (* Option.map
+    (get_summary proc_name)
+    ~f:(fun s -> (env, s)) *)
 
 let analyse_class get_proc_desc _ methods =
   let method_summaries =
     List.filter methods ~f:should_analyze |>
+    List.filter ~f:should_report_on_proc |>
     List.map ~f:(summarise get_proc_desc) |>
     List.filter_opt in
   L.out "Found %d summaries@." (List.length method_summaries) ;
