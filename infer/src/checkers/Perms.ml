@@ -67,9 +67,10 @@ let all_pairs =
       with_x @ (aux xs) in
   aux
 
-let may_alias _ _ = true
-  (* let open AccessPath in
-  let unrelated_types () =
+let may_alias e1 e2 =
+  let p1, p2 = fst (T.TraceElem.kind e1), fst (T.TraceElem.kind e2) in
+  let open AccessPath in
+  (* let unrelated_types () =
     let get_type p =
       let (_,_,_,tenv) =
         Option.value_exn
@@ -83,27 +84,27 @@ let may_alias _ _ = true
         not (PatternMatch.is_subtype tenv2 tn2 tn1)
     | _, Typ.Tstruct _ | Typ.Tstruct _, _ -> assert false
     | _, _ -> false
-  in
+  in *)
   let res = match List.last_exn (snd p1), List.last_exn (snd p2) with
     | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
     | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
     (* fields in Infer contain class name *)
     | FieldAccess f1, FieldAccess f2 when
         not (String.equal
-          (Ident.java_fieldname_get_field f1)
-          (Ident.java_fieldname_get_field f2))
-        ||
-        unrelated_types ()
+          (Fieldname.java_get_field f1)
+          (Fieldname.java_get_field f2))
+        (* ||
+        unrelated_types () *)
       -> false
     | _, _ -> true
 (* if type of lvalue is primitive then the lvalues may alias
    if the types are equal and the enclosing types may alias *)
-   | Typ.Tint _, _ | Typ.Tfloat _, _ ->
+   (* | Typ.Tint _, _ | Typ.Tfloat _, _ ->
     Typ.equal typ1 typ2 &&
-    may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2)
+    may_alias_ tenv1 (Raw.truncate p1) tenv2 (Raw.truncate p2) *)
   in
-  L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ;
-  res *)
+  (* L.out "MAY_ALIAS? (%a <~> %a) = %b@." Atom.pp a1 Atom.pp a2 res ; *)
+  res
 
 (* run z3 on a set of constraints
    and return the output as a list of strings/lines *)
@@ -176,13 +177,18 @@ let summary_to_paths (_,_,accesses,_) =
     T.PathDomain.empty
 
 let get_summary callee_pname =
-  let s = Specs.get_summary_unsafe "compute_post_for_procedure" callee_pname in
+  let s = Specs.get_summary_unsafe "compute_post_for_procedurez" callee_pname in
   s.Specs.payload.threadsafety
 
 let trace_of_pname callee_pname =
-  match get_summary callee_pname with
-  | None -> assert false
-  | Some sum -> summary_to_paths sum
+  if Typ.Procname.equal Typ.Procname.empty_block callee_pname
+  then
+    (* somebody is giving us bad trace elems in the ctr_map below, which is why we need this *)
+    ThreadSafetyDomain.PathDomain.empty
+  else
+    match get_summary callee_pname with
+    | None -> assert false
+    | Some sum -> summary_to_paths sum
 
 let run_check (vars, ctr_map, extra_ctrs) =
   let rec parse_unsat_core = function
@@ -366,25 +372,17 @@ let should_report_on_proc (_, tenv, proc_name, proc_desc) =
    Procdesc.get_access proc_desc <> PredSymb.Private &&
    not (Annotations.pdesc_return_annot_ends_with proc_desc Annotations.visibleForTesting))
 
-let summarise get_proc_desc ((idenv, tenv, proc_name, proc_desc) as env) =
+let summarise ((_, _, proc_name, _) as env) =
   L.out "Summarising %a@." Typ.Procname.pp proc_name ;
-  let callback_arg =
-    let summary = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
-    let get_procs_in_file _ = [] in
-    { Callbacks.get_proc_desc; get_procs_in_file; idenv; tenv; summary; proc_desc } in
-  let res = ThreadSafety.checker callback_arg in
-  let () = Specs.store_summary res in
+  let res = Specs.get_summary_unsafe "compute_post_for_procedure" proc_name in
   Option.map res.Specs.payload.threadsafety
     ~f:(fun s -> (env, s))
-  (* Option.map
-    (get_summary proc_name)
-    ~f:(fun s -> (env, s)) *)
 
-let analyse_class get_proc_desc _ methods =
+let analyse_class _ methods =
   let method_summaries =
     List.filter methods ~f:should_analyze |>
     List.filter ~f:should_report_on_proc |>
-    List.map ~f:(summarise get_proc_desc) |>
+    List.map ~f:summarise |>
     List.filter_opt in
   L.out "Found %d summaries@." (List.length method_summaries) ;
   let all_accesses =
@@ -401,7 +399,7 @@ let analyse_class get_proc_desc _ methods =
 module ClassMap = PrettyPrintable.MakePPMap(Typ.Name)
 
 (* partition methods in file by class and then run analyse_class on each set *)
-let file_analysis _ _ get_proc_desc file_env =
+let file_analysis _ _ _ file_env =
   let get_class = function
     | Typ.Procname.Java java_pname -> Typ.Procname.java_get_class_type_name java_pname
     | _ -> assert false
@@ -416,4 +414,4 @@ let file_analysis _ _ get_proc_desc file_env =
       ~init:ClassMap.empty
       file_env
   in
-  ClassMap.iter (analyse_class get_proc_desc) classmap
+  ClassMap.iter analyse_class classmap
