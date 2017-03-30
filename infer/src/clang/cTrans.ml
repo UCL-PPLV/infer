@@ -437,7 +437,7 @@ struct
     let root_node' = GotoLabel.find_goto_label trans_state.context label_name sil_loc in
     { empty_res_trans with root_nodes = [root_node']; leaf_nodes = trans_state.succ_nodes }
 
-  let get_builtin_pname_opt trans_unit_ctx name decl_opt type_ptr =
+  let get_builtin_pname_opt trans_unit_ctx qual_name decl_opt type_ptr =
     let get_deprecated_attr_arg decl =
       let open Clang_ast_t in
       let decl_info = Clang_ast_proj.get_decl_tuple decl in
@@ -451,6 +451,7 @@ struct
                   coming from ASTExporter.h in facebook-clang-plugins *)
                assert false)
       | None -> None in
+    let name = QualifiedCppName.to_qual_string qual_name in
     let function_attr_opt = Option.bind decl_opt get_deprecated_attr_arg in
     match function_attr_opt with
     | Some attr when CTrans_models.is_modeled_attribute attr ->
@@ -473,12 +474,14 @@ struct
     let name_info, decl_ptr, type_ptr = CAst_utils.get_info_from_decl_ref decl_ref in
     let decl_opt = CAst_utils.get_function_decl_with_body decl_ptr in
     Option.iter ~f:(call_translation context) decl_opt;
-    let name = CAst_utils.get_qualified_name name_info in
+    let qual_name = CAst_utils.get_qualified_name name_info in
     let typ = CType_decl.type_ptr_to_sil_type context.tenv type_ptr in
     let pname =
-      match get_builtin_pname_opt context.translation_unit_context name decl_opt type_ptr with
+      match get_builtin_pname_opt context.translation_unit_context qual_name decl_opt type_ptr with
       | Some builtin_pname -> builtin_pname
-      | None -> CMethod_trans.create_procdesc_with_pointer context decl_ptr None name in
+      | None ->
+          let name = QualifiedCppName.to_qual_string qual_name in
+          CMethod_trans.create_procdesc_with_pointer context decl_ptr None name in
     { empty_res_trans with exps = [(Exp.Const (Const.Cfun pname), typ)] }
 
   let field_deref_trans trans_state stmt_info pre_trans_result decl_ref ~is_constructor_init =
@@ -566,7 +569,7 @@ struct
               type_ptr with
       | Some builtin_pname -> builtin_pname
       | None ->
-          let class_typename = Typ.Name.Cpp.from_string
+          let class_typename = Typ.Name.Cpp.from_qual_name Typ.NoTemplate
               (CAst_utils.get_class_name_from_member name_info) in
           CMethod_trans.create_procdesc_with_pointer context decl_ptr (Some class_typename)
             method_name in
@@ -633,28 +636,6 @@ struct
     let pvar = CVar_decl.sil_var_of_decl_ref context decl_ref procname in
     CContext.add_block_static_var context procname (pvar, typ);
     let var_exp = Exp.Lvar pvar in
-    (* handle references to global const *)
-    (* if there's a reference to a global const, add a fake instruction that *)
-    (* assigns the global again to its initialization value right before the *)
-    (* place where it is used *)
-    let trans_result' =
-      let is_global_const, init_expr =
-        match CAst_utils.get_decl decl_ref.dr_decl_pointer with
-        | Some VarDecl (_, _, qual_type, vdi) -> (
-            match ast_typ with
-            | Tstruct _
-              when not (CGeneral_utils.is_cpp_translation context.translation_unit_context) ->
-                (* Do not convert a global struct to a local because SIL
-                   values do not include structs, they must all be heap-allocated  *)
-                (false, None)
-            | _ ->
-                (vdi.vdi_is_global && (vdi.vdi_is_const_expr || qual_type.qt_is_const),
-                 vdi.vdi_init_expr)
-          )
-        | _ -> false, None in
-      if is_global_const then
-        init_expr_trans trans_state (var_exp, typ) stmt_info init_expr
-      else empty_res_trans in
     let exps = if Self.is_var_self pvar (CContext.is_objc_method context) then
         let class_typename = CContext.get_curr_class_typename context in
         if (CType.is_class typ) then
@@ -664,7 +645,7 @@ struct
           [(var_exp, typ)]
       else [(var_exp, typ)] in
     Logging.out_debug "\n\n PVAR ='%s'\n\n" (Pvar.to_string pvar);
-    let res_trans = { trans_result' with exps } in
+    let res_trans = { empty_res_trans with exps } in
     match typ with
     | Tptr (_, Pk_reference) ->
         (* dereference pvar due to the behavior of reference types in clang's AST *)

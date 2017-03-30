@@ -26,9 +26,9 @@ let src_snk_pairs () =
   let parse_user_defined_specs = function
     | `List user_specs ->
         let parse_user_spec json =
-          let open Yojson.Basic.Util in
-          let sources = member "sources" json |> to_list |> List.map ~f:to_string in
-          let sinks = member "sink" json |> to_string in
+          let open Yojson.Basic in
+          let sources = Util.member "sources" json |> Util.to_list |> List.map ~f:Util.to_string in
+          let sinks = Util.member "sink" json |> Util.to_string in
           sources, sinks in
         List.map ~f:parse_user_spec user_specs
     | _ ->
@@ -47,53 +47,39 @@ let src_snk_pairs () =
 module Domain = struct
   module TrackingVar = AbstractDomain.FiniteSet (Var.Set)
   module TrackingDomain = AbstractDomain.Pair (CallsDomain) (TrackingVar)
-  include AbstractDomain.BottomLifted (TrackingDomain)
+  include TrackingDomain
 
-  let add_call key call = function
-    | Bottom -> Bottom
-    | NonBottom (call_map, vars) as astate ->
-        let call_set =
-          try CallsDomain.find key call_map
-          with Not_found -> CallSiteSet.empty in
-        let call_set' = CallSiteSet.add call call_set in
-        if phys_equal call_set' call_set
-        then astate
-        else NonBottom (CallsDomain.add key call_set' call_map, vars)
+  let add_call key call ((call_map, vars) as astate) =
+    let call_set =
+      try CallsDomain.find key call_map
+      with Not_found -> CallSiteSet.empty in
+    let call_set' = CallSiteSet.add call call_set in
+    if phys_equal call_set' call_set
+    then astate
+    else (CallsDomain.add key call_set' call_map, vars)
 
-  let stop_tracking (_ : astate) = Bottom
+  let stop_tracking (_ : astate) =
+    (* The empty call map here prevents any subsequent calls to be added *)
+    (CallsDomain.empty, TrackingVar.empty)
 
-  let add_tracking_var var = function
-    | Bottom -> Bottom
-    | NonBottom (calls, previous_vars) ->
-        NonBottom (calls, TrackingVar.add var previous_vars)
+  let add_tracking_var var (calls, previous_vars) =
+    (calls, TrackingVar.add var previous_vars)
 
-  let remove_tracking_var var = function
-    | Bottom -> Bottom
-    | NonBottom (calls, previous_vars) ->
-        NonBottom (calls, TrackingVar.remove var previous_vars)
+  let remove_tracking_var var (calls, previous_vars) =
+    (calls, TrackingVar.remove var previous_vars)
 
-  let is_tracked_var var = function
-    | Bottom -> false
-    | NonBottom (_, vars) ->
-        TrackingVar.mem var vars
+  let is_tracked_var var (_, vars) =
+    TrackingVar.mem var vars
 end
 
 module Summary = Summary.Make (struct
-    type summary = Domain.astate
+    type payload = CallsDomain.astate
 
-    let call_summary_of_astate = function
-      | Domain.Bottom -> assert false
-      | Domain.NonBottom (call_map, _) ->
-          call_map
+    let update_payload call_map (summary : Specs.summary) =
+      { summary with payload = { summary.payload with calls = Some call_map }}
 
-    let update_payload astate payload =
-      let calls = Some (call_summary_of_astate astate) in
-      { payload with Specs.calls; }
-
-    let read_from_payload payload =
-      match payload.Specs.calls with
-      | Some call_summary -> Some (Domain.NonBottom (call_summary, Domain.TrackingVar.empty))
-      | None -> None
+    let read_payload (summary : Specs.summary) =
+      summary.payload.calls
   end)
 
 (* Warning name when a performance critical method directly or indirectly
@@ -175,7 +161,8 @@ let string_of_pname =
   Typ.Procname.to_simplified_string ~withclass:true
 
 let report_allocation_stack
-    src_annot pname fst_call_loc trace stack_str constructor_pname call_loc =
+    src_annot summary fst_call_loc trace stack_str constructor_pname call_loc =
+  let pname = Specs.get_proc_name summary in
   let final_trace = List.rev (update_trace call_loc trace) in
   let constr_str = string_of_pname constructor_pname in
   let description =
@@ -187,11 +174,12 @@ let report_allocation_stack
       MF.pp_monospaced (stack_str ^ ("new "^constr_str)) in
   let exn =
     Exceptions.Checkers (allocates_memory, Localise.verbatim_desc description) in
-  Reporting.log_error pname ~loc:fst_call_loc ~ltr:final_trace exn
+  Reporting.log_error_from_summary summary ~loc:fst_call_loc ~ltr:final_trace exn
 
-let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str snk_pname call_loc =
+let report_annotation_stack src_annot snk_annot src_summary loc trace stack_str snk_pname call_loc =
+  let src_pname = Specs.get_proc_name src_summary in
   if String.equal snk_annot dummy_constructor_annot
-  then report_allocation_stack src_annot src_pname loc trace stack_str snk_pname call_loc
+  then report_allocation_stack src_annot src_summary loc trace stack_str snk_pname call_loc
   else
     let final_trace = List.rev (update_trace call_loc trace) in
     let exp_pname_str = string_of_pname snk_pname in
@@ -209,9 +197,9 @@ let report_annotation_stack src_annot snk_annot src_pname loc trace stack_str sn
       else annotation_reachability_error in
     let exn =
       Exceptions.Checkers (msg, Localise.verbatim_desc description) in
-    Reporting.log_error src_pname ~loc ~ltr:final_trace exn
+    Reporting.log_error_from_summary src_summary ~loc ~ltr:final_trace exn
 
-let report_call_stack end_of_stack lookup_next_calls report call_site calls =
+let report_call_stack summary end_of_stack lookup_next_calls report call_site calls =
   (* TODO: stop using this; we can use the call site instead *)
   let lookup_location pname =
     match Specs.get_summary pname with
@@ -219,7 +207,7 @@ let report_call_stack end_of_stack lookup_next_calls report call_site calls =
     | Some summary -> summary.Specs.attributes.ProcAttributes.loc in
   let rec loop fst_call_loc visited_pnames (trace, stack_str) (callee_pname, call_loc) =
     if end_of_stack callee_pname then
-      report (CallSite.pname call_site) fst_call_loc trace stack_str callee_pname call_loc
+      report summary fst_call_loc trace stack_str callee_pname call_loc
     else
       let callee_def_loc = lookup_location callee_pname in
       let next_calls = lookup_next_calls callee_pname in
@@ -283,10 +271,11 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     then method_has_ignore_allocation_annot tenv pname
     else false
 
-  let add_call call_map tenv callee_pname caller_pname call_site astate =
+  let merge_call_map
+      callee_call_map tenv callee_pname caller_pname call_site ((call_map, _) as astate) =
     let add_call_for_annot annot _ astate =
       let calls =
-        try Annot.Map.find annot call_map
+        try Annot.Map.find annot callee_call_map
         with Not_found -> CallSiteSet.empty in
       if (not (CallSiteSet.is_empty calls) || method_has_annot annot tenv callee_pname) &&
          (not (method_is_sanitizer annot tenv caller_pname))
@@ -294,12 +283,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         Domain.add_call annot call_site astate
       else
         astate in
-    match astate with
-    | Domain.Bottom -> astate
-    | Domain.NonBottom (map, _) ->
-        (* for each annotation type T in domain(astate), check if method calls something annotated
-           with T *)
-        Annot.Map.fold add_call_for_annot map astate
+    (* for each annotation type T in domain(astate), check if method calls
+       something annotated with T *)
+    Annot.Map.fold add_call_for_annot call_map astate
 
   let exec_instr astate { ProcData.pdesc; tenv; } _ = function
     | Sil.Call (Some (id, _), Const (Cfun callee_pname), _, _, _)
@@ -311,12 +297,10 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         begin
           (* Runs the analysis of callee_pname if not already analyzed *)
           match Summary.read_summary pdesc callee_pname with
-          | Some Domain.NonBottom (call_map, _) ->
-              add_call call_map tenv callee_pname caller_pname call_site astate
+          | Some call_map ->
+              merge_call_map call_map tenv callee_pname caller_pname call_site astate
           | None ->
-              add_call Annot.Map.empty tenv callee_pname caller_pname call_site astate
-          | Some Domain.Bottom ->
-              astate
+              merge_call_map Annot.Map.empty tenv callee_pname caller_pname call_site astate
         end
     | Sil.Load (id, exp, _, _)
       when is_tracking_exp astate exp ->
@@ -346,7 +330,7 @@ module Interprocedural = struct
   let method_is_expensive tenv pname =
     is_modeled_expensive tenv pname || is_expensive tenv pname
 
-  let check_and_report ({ Callbacks.proc_desc; tenv; } as proc_data) : Specs.summary =
+  let check_and_report ({ Callbacks.proc_desc; tenv; summary } as proc_data) : Specs.summary =
     let proc_name = Procdesc.get_proc_name proc_desc in
     let loc = Procdesc.get_loc proc_desc in
     let expensive = is_expensive tenv proc_name in
@@ -362,7 +346,7 @@ module Interprocedural = struct
         let exn =
           Exceptions.Checkers
             (expensive_overrides_unexpensive, Localise.verbatim_desc description) in
-        Reporting.log_error proc_name ~loc exn in
+        Reporting.log_error_from_summary summary ~loc exn in
 
     if expensive then
       PatternMatch.override_iter check_expensive_subtyping_rules tenv proc_name;
@@ -379,6 +363,7 @@ module Interprocedural = struct
           let f_report =
             report_annotation_stack src_annot.class_name snk_annot.class_name in
           report_call_stack
+            summary
             (method_has_annot snk_annot tenv)
             (lookup_annotation_calls proc_desc snk_annot)
             f_report
@@ -395,19 +380,22 @@ module Interprocedural = struct
               CallsDomain.add snk_annot CallSiteSet.empty astate_acc)
           ~init:CallsDomain.empty
           (src_snk_pairs ()) in
-      Domain.NonBottom
-        (init_map, Domain.TrackingVar.empty) in
+      (init_map, Domain.TrackingVar.empty) in
+    let compute_post proc_data =
+      Option.map ~f:fst (Analyzer.compute_post ~initial proc_data) in
+    let updated_summary : Specs.summary =
+      compute_and_store_post
+        ~compute_post:compute_post
+        ~make_extras:ProcData.make_empty_extras
+        proc_data in
     begin
-      match compute_and_store_post
-              ~compute_post:(Analyzer.compute_post ~initial)
-              ~make_extras:ProcData.make_empty_extras
-              proc_data with
-      | Some Domain.NonBottom (call_map, _) ->
+      match updated_summary.payload.calls with
+      | Some call_map ->
           List.iter ~f:(report_src_snk_paths call_map) (src_snk_pairs ())
-      | Some Domain.Bottom | None ->
+      | None ->
           ()
     end;
-    Specs.get_summary_unsafe "AnnotationReachability.checker" proc_name
+    updated_summary
 
 end
 

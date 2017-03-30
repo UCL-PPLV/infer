@@ -249,7 +249,7 @@ let whitelisted_cpp_methods = [
 let whitelisted_cpp_classes = [
   "std::__less";
   "std::__wrap_iter"; (* libc++ internal name of vector iterator *)
-  "std::__normal_iterator"; (* libstdc++ internal name of vector iterator *)
+  "__gnu_cxx::__normal_iterator"; (* libstdc++ internal name of vector iterator *)
 ]
 
 type dynamic_dispatch_policy = [
@@ -1593,7 +1593,7 @@ and changed_files_index = !changed_files_index
 and calls_csv = !calls_csv
 and dump_duplicate_symbols = !dump_duplicate_symbols
 and checkers = !checkers
-and checkers_repeated_calls = !checkers_repeated_calls
+and checkers_repeated_calls = !checkers && !checkers_repeated_calls
 and clang_biniou_file = !clang_biniou_file
 and clang_include_to_override = !clang_include_to_override
 and classpath = !classpath

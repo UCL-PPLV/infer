@@ -18,11 +18,11 @@ SOURCES = $(CMAKE_DIR)/hello.c
 OBJECTS = $(CMAKE_BUILD_DIR)/CMakeFiles/Hello.dir/hello.c.o
 INFERPRINT_OPTIONS = --issues-tests
 
-include $(TESTS_DIR)/base.make
+include $(TESTS_DIR)/infer.make
 
 $(CMAKE_BUILD_DIR)/Makefile: $(CMAKE_DIR)/CMakeLists.txt
-	@$(MKDIR_P) $(CMAKE_BUILD_DIR)
-	@cd $(CMAKE_BUILD_DIR) && \
+	$(QUIET)$(MKDIR_P) $(CMAKE_BUILD_DIR)
+	$(QUIET)cd $(CMAKE_BUILD_DIR) && \
 	$(CMAKE) ..
 
 $(OBJECTS): $(SOURCES) $(CMAKE_BUILD_DIR)/Makefile
@@ -31,12 +31,12 @@ $(OBJECTS): $(SOURCES) $(CMAKE_BUILD_DIR)/Makefile
 
 infer-out/report.json: $(SOURCES) $(CMAKE_DIR)/CMakeLists.txt $(CLANG_DEPS)
 #	nuke the build dir and recreate everything to avoid stale compilation/analysis results
-	@$(REMOVE_DIR) $(CMAKE_ANALYZE_DIR) && \
-	$(MKDIR_P) $(CMAKE_ANALYZE_DIR) && \
-	cd $(CMAKE_ANALYZE_DIR) && \
-	$(call silent_on_success,\
+	$(QUIET)$(REMOVE_DIR) $(CMAKE_ANALYZE_DIR)
+	$(QUIET)$(MKDIR_P) $(CMAKE_ANALYZE_DIR)
+	$(QUIET)cd $(CMAKE_ANALYZE_DIR) && \
+	$(call silent_on_success,Testing CMake integration: Generate Makefiles,\
 	  $(INFER_BIN) -a compile $(INFER_OPTIONS) -- cmake ..)
-	$(call silent_on_success,\
+	$(QUIET)$(call silent_on_success,Testing CMake integration: Run Makefiles,\
 	  $(INFER_BIN) -a $(ANALYZER) $(INFER_OPTIONS) -- $(MAKE) -C $(CMAKE_ANALYZE_DIR))
 #	cmake makes all paths absolute
-	@sed -i -e 's#$(abspath $(TESTS_DIR))/##g' $@
+	$(QUIET)sed -i -e 's#$(abspath $(TESTS_DIR))/##g' $@
