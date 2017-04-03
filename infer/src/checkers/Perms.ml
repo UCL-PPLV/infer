@@ -83,13 +83,14 @@ let may_alias e1 e2 =
     | FieldAccess _, ArrayAccess _ | ArrayAccess _, FieldAccess _ -> false
     | ArrayAccess _, ArrayAccess _ -> assert false (*FIXME*)
     (* fields in Infer contain class name *)
-    | FieldAccess f1, FieldAccess f2 when
-        not (String.equal
-          (Fieldname.java_get_field f1)
-          (Fieldname.java_get_field f2))
+    | FieldAccess f1, FieldAccess f2
+      when not (String.equal
+                  (Fieldname.java_get_field f1)
+                  (Fieldname.java_get_field f2))
+      -> false
         (* ||
         unrelated_types () *)
-      -> false
+      (* -> false *)
     | _, _ -> true
 (* if type of lvalue is primitive then the lvalues may alias
    if the types are equal and the enclosing types may alias *)
@@ -353,7 +354,7 @@ let is_thread_safe item_annot =
     | _ -> true in
   List.exists ~f item_annot
 
-let should_keep (_,_,pn,proc_desc) =
+let should_keep ((_,_,pn,proc_desc), _) =
   not (Typ.Procname.is_constructor pn) &&
   not (Typ.Procname.is_class_initializer pn) &&
   not (FbThreadSafety.is_logging_method pn) &&
@@ -368,9 +369,11 @@ let summarise ((_, _, proc_name, _) as env) =
 
 let analyse_class _ methods =
   let method_summaries =
-    List.filter methods ~f:should_keep |>
-    List.map ~f:summarise |>
-    List.filter_opt in
+    List.map methods ~f:summarise |>
+    List.filter_opt
+    (* |>
+    List.filter ~f:should_keep  *)
+  in
   L.out "Found %d summaries@." (List.length method_summaries) ;
   let summary_pairs = all_pairs method_summaries in
   let all_accesses =
