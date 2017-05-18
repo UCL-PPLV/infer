@@ -17,38 +17,8 @@ let add_predefined_objc_types tenv =
   ignore (Tenv.mk_struct tenv (CType_to_sil_type.get_builtin_objc_typename `ObjCClass));
   ignore (Tenv.mk_struct tenv (CType_to_sil_type.get_builtin_objc_typename `ObjCId))
 
-(* Whenever new type are added manually to the translation in ast_expressions, *)
-(* they should be added here too!! *)
-let add_predefined_basic_types () =
-  let open Ast_expressions in
-  let add_basic_type tp basic_type_kind =
-    let sil_type = CType_to_sil_type.sil_type_of_builtin_type_kind basic_type_kind in
-    CAst_utils.update_sil_types_map tp sil_type in
-  let add_pointer_type tp sil_type =
-    let pointer_type = CType.add_pointer_to_typ sil_type in
-    CAst_utils.update_sil_types_map tp pointer_type in
-  let add_function_type tp return_type =
-    (* We translate function types as the return type of the function *)
-    CAst_utils.update_sil_types_map tp return_type in
-  let sil_void_type = CType_to_sil_type.sil_type_of_builtin_type_kind `Void in
-  let sil_char_type = CType_to_sil_type.sil_type_of_builtin_type_kind `Char_S in
-  let sil_nsarray_type = Typ.Tstruct (Typ.Name.Objc.from_string CFrontend_config.nsarray_cl) in
-  let sil_id_type = CType_to_sil_type.get_builtin_objc_type `ObjCId in
-  add_basic_type create_int_type `Int;
-  add_basic_type create_void_type `Void;
-  add_basic_type create_char_type `Char_S;
-  add_basic_type create_BOOL_type `SChar;
-  add_basic_type create_unsigned_long_type `ULong;
-  add_pointer_type create_void_star_type sil_void_type;
-  add_pointer_type create_char_star_type sil_char_type;
-  add_pointer_type create_nsarray_star_type sil_nsarray_type;
-  add_pointer_type create_id_type sil_id_type;
-  add_function_type create_void_unsigned_long_type sil_void_type;
-  add_function_type create_void_void_type sil_void_type
-
 let add_predefined_types tenv =
-  add_predefined_objc_types tenv;
-  add_predefined_basic_types ()
+  add_predefined_objc_types tenv
 
 let create_c_record_typename opt_type =
   match opt_type with
@@ -123,7 +93,7 @@ let rec get_struct_fields tenv decl =
   let do_one_decl decl = match decl with
     | FieldDecl (_, name_info, qt, _) ->
         let id = CGeneral_utils.mk_class_field_name name_info in
-        let typ = type_ptr_to_sil_type tenv qt.Clang_ast_t.qt_type_ptr in
+        let typ = qual_type_to_sil_type tenv qt in
         let annotation_items = [] in (* For the moment we don't use them*)
         [(id, typ, annotation_items)]
     | _ -> [] in
@@ -135,7 +105,7 @@ let rec get_struct_fields tenv decl =
 and get_record_declaration_type tenv decl =
   let definition_decl = get_record_definition decl in
   match get_record_custom_type tenv definition_decl with
-  | Some t -> t
+  | Some t -> t.Typ.desc
   | None -> get_record_struct_type tenv definition_decl
 
 and get_record_custom_type tenv definition_decl =
@@ -143,42 +113,36 @@ and get_record_custom_type tenv definition_decl =
   match definition_decl with
   | ClassTemplateSpecializationDecl (_, _, _, _, decl_list, _, _, _, _)
   | CXXRecordDecl (_, _, _, _, decl_list, _, _, _) ->
-      Option.map ~f:(type_ptr_to_sil_type tenv) (get_translate_as_friend_decl decl_list)
+      Option.map ~f:(qual_type_to_sil_type tenv) (get_translate_as_friend_decl decl_list)
   | _ -> None
-
-and get_template_specialization tenv = function
-  | Clang_ast_t.ClassTemplateSpecializationDecl (_, _, _, _, _, _, _, _, spec_info) ->
-      let tname = match CAst_utils.get_decl spec_info.tsi_template_decl with
-        | Some decl -> get_class_template_name decl
-        | None -> assert false in
-      let args_in_sil = List.map spec_info.tsi_specialization_args ~f:(function
-          | `Type t_ptr -> Some (type_ptr_to_sil_type tenv t_ptr)
-          | _ -> None) in
-      Typ.Template (tname, args_in_sil)
-  | _ -> Typ.NoTemplate
 
 (* We need to take the name out of the type as the struct can be anonymous
    If tenv is not passed, then template instantiaion information may be incorrect,
    as it defaults to Typ.NoTemplate *)
 and get_record_typename ?tenv decl =
   let open Clang_ast_t in
-  match decl with
-  | RecordDecl (_, name_info, opt_type, _, _, _, _) ->
+  match decl, tenv with
+  | RecordDecl (_, name_info, opt_type, _, _, _, _), _ ->
       CAst_utils.get_qualified_name name_info |> create_c_record_typename opt_type
-  | CXXRecordDecl (_, name_info, _, _, _, _, _, _)
-  | ClassTemplateSpecializationDecl (_, name_info, _, _, _, _, _, _, _) ->
+  | ClassTemplateSpecializationDecl (_, _, _, _, _, _, _, _, spec_info), Some tenv ->
+      let tname = match CAst_utils.get_decl spec_info.tsi_template_decl with
+        | Some dec -> get_class_template_name dec
+        | None -> assert false in
+      let args_in_sil = List.map spec_info.tsi_specialization_args ~f:(function
+          | `Type qual_type -> Some (qual_type_to_sil_type tenv qual_type)
+          | _ -> None) in
+      Typ.Name.Cpp.from_qual_name (Typ.Template args_in_sil) tname
+  | CXXRecordDecl (_, name_info, _, _, _, _, _, _), _
+  | ClassTemplateSpecializationDecl (_, name_info, _, _, _, _, _, _, _), _ ->
       (* we use Typ.CppClass for C++ because we expect Typ.CppClass from *)
       (* types that have methods. And in C++ struct/class/union can have methods *)
-      let qual_name = CAst_utils.get_qualified_name name_info in
-      let templ_info = match tenv with
-        | Some t -> get_template_specialization t decl
-        | None -> Typ.NoTemplate in
-      Typ.Name.Cpp.from_qual_name templ_info qual_name
-  | ObjCInterfaceDecl (_, name_info, _, _, _)
-  | ObjCImplementationDecl (_, name_info, _, _, _)
-  | ObjCProtocolDecl (_, name_info, _, _, _)
-  | ObjCCategoryDecl (_, name_info, _, _, _)
-  | ObjCCategoryImplDecl (_, name_info, _, _, _) ->
+      Typ.Name.Cpp.from_qual_name Typ.NoTemplate (CAst_utils.get_qualified_name name_info)
+
+  | ObjCInterfaceDecl (_, name_info, _, _, _), _
+  | ObjCImplementationDecl (_, name_info, _, _, _), _
+  | ObjCProtocolDecl (_, name_info, _, _, _), _
+  | ObjCCategoryDecl (_, name_info, _, _, _), _
+  | ObjCCategoryImplDecl (_, name_info, _, _, _), _ ->
       CAst_utils.get_qualified_name name_info |> Typ.Name.Objc.from_qual_name
   | _ -> assert false
 
@@ -188,15 +152,16 @@ and get_superclass_list_cpp tenv decl =
   let get_super_field super_decl = get_record_typename ~tenv super_decl in
   List.map ~f:get_super_field base_decls
 
-and get_record_struct_type tenv definition_decl =
+and get_record_struct_type tenv definition_decl : Typ.desc =
   let open Clang_ast_t in
   match definition_decl with
   | ClassTemplateSpecializationDecl (_, _, _, type_ptr, _, _, record_decl_info, _, _)
   | CXXRecordDecl (_, _, _, type_ptr, _, _, record_decl_info, _)
   | RecordDecl (_, _, _, type_ptr, _, _, record_decl_info) ->
       let sil_typename = get_record_typename ~tenv definition_decl in
+      let sil_desc = Typ.Tstruct sil_typename in
       (match Tenv.lookup tenv sil_typename with
-       | Some _ -> Typ.Tstruct sil_typename (* just reuse what is already in tenv *)
+       | Some _ -> sil_desc (* just reuse what is already in tenv *)
        | None ->
            let is_complete_definition = record_decl_info.Clang_ast_t.rdi_is_complete_definition in
            let extra_fields =
@@ -207,25 +172,22 @@ and get_record_struct_type tenv definition_decl =
              if Typ.Name.Cpp.is_class sil_typename then Annot.Class.cpp
              else Annot.Item.empty (* No annotations for structs *) in
            if is_complete_definition then (
-             CAst_utils.update_sil_types_map type_ptr (Typ.Tstruct sil_typename);
+             CAst_utils.update_sil_types_map type_ptr sil_desc;
              let non_statics = get_struct_fields tenv definition_decl in
              let fields = CGeneral_utils.append_no_duplicates_fields non_statics extra_fields in
              let statics = [] in (* Note: We treat static field same as global variables *)
              let methods = [] in (* C++ methods are not put into tenv (info isn't used) *)
              let supers = get_superclass_list_cpp tenv definition_decl in
-             let specialization = get_template_specialization tenv definition_decl in
-             Tenv.mk_struct tenv ~fields ~statics ~methods ~supers ~annots ~specialization
+             Tenv.mk_struct tenv ~fields ~statics ~methods ~supers ~annots
                sil_typename |> ignore;
-             let sil_type = Typ.Tstruct sil_typename in
-             CAst_utils.update_sil_types_map type_ptr sil_type;
-             sil_type
+             CAst_utils.update_sil_types_map type_ptr sil_desc;
+             sil_desc
            ) else (
              (* There is no definition for that struct in whole translation unit.
                 Put empty struct into tenv to prevent backend problems *)
              ignore (Tenv.mk_struct tenv ~fields:extra_fields sil_typename);
-             let tvar_type = Typ.Tstruct sil_typename in
-             CAst_utils.update_sil_types_map type_ptr tvar_type;
-             tvar_type))
+             CAst_utils.update_sil_types_map type_ptr sil_desc;
+             sil_desc))
   | _ -> assert false
 
 and add_types_from_decl_to_tenv tenv decl =
@@ -233,30 +195,30 @@ and add_types_from_decl_to_tenv tenv decl =
   match decl with
   | ClassTemplateSpecializationDecl _ | CXXRecordDecl _ | RecordDecl _ ->
       get_record_declaration_type tenv decl
-  | ObjCInterfaceDecl _ -> ObjcInterface_decl.interface_declaration type_ptr_to_sil_type tenv decl
+  | ObjCInterfaceDecl _ -> ObjcInterface_decl.interface_declaration qual_type_to_sil_type tenv decl
   | ObjCImplementationDecl _ ->
-      ObjcInterface_decl.interface_impl_declaration type_ptr_to_sil_type tenv decl
-  | ObjCProtocolDecl _ -> ObjcProtocol_decl.protocol_decl type_ptr_to_sil_type tenv decl
-  | ObjCCategoryDecl _ -> ObjcCategory_decl.category_decl type_ptr_to_sil_type tenv decl
-  | ObjCCategoryImplDecl _ -> ObjcCategory_decl.category_impl_decl type_ptr_to_sil_type tenv decl
+      ObjcInterface_decl.interface_impl_declaration qual_type_to_sil_type tenv decl
+  | ObjCProtocolDecl _ -> ObjcProtocol_decl.protocol_decl qual_type_to_sil_type tenv decl
+  | ObjCCategoryDecl _ -> ObjcCategory_decl.category_decl qual_type_to_sil_type tenv decl
+  | ObjCCategoryImplDecl _ -> ObjcCategory_decl.category_impl_decl qual_type_to_sil_type tenv decl
   | EnumDecl _ -> CEnum_decl.enum_decl decl
   | _ -> assert false
 
-and type_ptr_to_sil_type tenv tp =
-  CType_to_sil_type.type_ptr_to_sil_type add_types_from_decl_to_tenv tenv tp
+and qual_type_to_sil_type tenv qual_type =
+  CType_to_sil_type.qual_type_to_sil_type add_types_from_decl_to_tenv tenv qual_type
 
 let get_type_from_expr_info ei tenv =
-  let tp = ei.Clang_ast_t.ei_type_ptr in
-  type_ptr_to_sil_type tenv tp
+  let qt = ei.Clang_ast_t.ei_qual_type in
+  qual_type_to_sil_type tenv qt
 
-let class_from_pointer_type tenv type_ptr =
-  match type_ptr_to_sil_type tenv type_ptr with
-  | Typ.Tptr(Typ.Tstruct typename, _) -> typename
+let class_from_pointer_type tenv qual_type =
+  match (qual_type_to_sil_type tenv qual_type).Typ.desc with
+  | Tptr({desc=Tstruct typename}, _) -> typename
   | _ -> assert false
 
 let get_class_type_np tenv expr_info obj_c_message_expr_info =
-  let tp =
+  let qt =
     match obj_c_message_expr_info.Clang_ast_t.omei_receiver_kind with
-    | `Class tp -> tp
-    | _ -> expr_info.Clang_ast_t.ei_type_ptr in
-  type_ptr_to_sil_type tenv tp
+    | `Class qt -> qt
+    | _ -> expr_info.Clang_ast_t.ei_qual_type in
+  qual_type_to_sil_type tenv qt

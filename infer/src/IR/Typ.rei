@@ -11,7 +11,7 @@ open! IStd;
 
 
 /** The Smallfoot Intermediate Language: Types */
-let module F = Format;
+module F = Format;
 
 
 /** Kinds of integers */
@@ -65,24 +65,40 @@ type ptr_kind =
 
 let equal_ptr_kind: ptr_kind => ptr_kind => bool;
 
+type type_quals [@@deriving compare];
 
-/** statically determined length of an array type, if any */
-type static_length = option IntLit.t [@@deriving compare];
+let mk_type_quals:
+  default::type_quals? =>
+  is_const::bool? =>
+  is_restrict::bool? =>
+  is_volatile::bool? =>
+  unit =>
+  type_quals;
+
+let is_const: type_quals => bool;
+
+let is_restrict: type_quals => bool;
+
+let is_volatile: type_quals => bool;
 
 
 /** types for sil (structured) expressions */
-type t =
+type t = {desc, quals: type_quals} [@@deriving compare]
+and desc =
   | Tint ikind /** integer type */
   | Tfloat fkind /** float type */
   | Tvoid /** void type */
   | Tfun bool /** function type with noreturn attribute */
   | Tptr t ptr_kind /** pointer type */
   | Tstruct name /** structured value type name */
-  | Tarray t static_length /** array type with statically fixed length */
+  | Tarray t (option IntLit.t) (option IntLit.t) /** array type with statically fixed stride and length */
 [@@deriving compare]
 and name =
   | CStruct QualifiedCppName.t
   | CUnion QualifiedCppName.t
+  /* qualified name does NOT contain template arguments of the class. It will contain template
+     args of its parent classes, for example: MyClass<int>::InnerClass<int> will store
+     "MyClass<int>", "InnerClass" */
   | CppClass QualifiedCppName.t template_spec_info
   | JavaClass Mangled.t
   | ObjcClass QualifiedCppName.t
@@ -90,10 +106,14 @@ and name =
 [@@deriving compare]
 and template_spec_info =
   | NoTemplate
-  | Template (QualifiedCppName.t, list (option t))
+  | Template (list (option t))
 [@@deriving compare];
 
-let module Name: {
+
+/** Create Typ.t from given desc. if [default] is passed then use its value to set other fields such as quals */
+let mk: default::t? => quals::type_quals? => desc => t;
+
+module Name: {
 
   /** Named types. */
   type t = name [@@deriving compare];
@@ -116,12 +136,13 @@ let module Name: {
 
   /** qualified name of the type, may return nonsense for Java classes */
   let qual_name: t => QualifiedCppName.t;
-  let module C: {
+  let unqualified_name: t => QualifiedCppName.t;
+  module C: {
     let from_string: string => t;
     let from_qual_name: QualifiedCppName.t => t;
     let union_from_qual_name: QualifiedCppName.t => t;
   };
-  let module Java: {
+  module Java: {
 
     /** Create a typename from a Java classname in the form "package.class" */
     let from_string: string => t;
@@ -135,7 +156,7 @@ let module Name: {
     let java_io_serializable: t;
     let java_lang_cloneable: t;
   };
-  let module Cpp: {
+  module Cpp: {
 
     /** Create a typename from a C++ classname */
     let from_qual_name: template_spec_info => QualifiedCppName.t => t;
@@ -143,7 +164,7 @@ let module Name: {
     /** [is_class name] holds if [name] names a C++ class */
     let is_class: t => bool;
   };
-  let module Objc: {
+  module Objc: {
 
     /** Create a typename from a Objc classname */
     let from_string: string => t;
@@ -153,26 +174,26 @@ let module Name: {
     /** [is_class name] holds if [name] names a Objc class */
     let is_class: t => bool;
   };
-  let module Set: Caml.Set.S with type elt = t;
+  module Set: Caml.Set.S with type elt = t;
 };
 
 
 /** Equality for types. */
 let equal: t => t => bool;
 
+let equal_desc: desc => desc => bool;
+
+let equal_quals: type_quals => type_quals => bool;
+
 
 /** Sets of types. */
-let module Set: Caml.Set.S with type elt = t;
+module Set: Caml.Set.S with type elt = t;
 
 
 /** Maps with type keys. */
-let module Map: Caml.Map.S with type key = t;
+module Map: Caml.Map.S with type key = t;
 
-let module Tbl: Caml.Hashtbl.S with type key = t;
-
-
-/** type comparison that treats T* [] and T** as the same type. Needed for C/C++ */
-let array_sensitive_compare: t => t => int;
+module Tbl: Caml.Hashtbl.S with type key = t;
 
 
 /** Pretty print a type with all the details. */
@@ -225,7 +246,7 @@ let unsome: string => option t => t;
 
 type typ = t;
 
-let module Procname: {
+module Procname: {
 
   /** Module for Procedure Names. */
 
@@ -264,16 +285,16 @@ let module Procname: {
     | ObjCInternalMethod;
 
   /** Hash tables with proc names as keys. */
-  let module Hash: Caml.Hashtbl.S with type key = t;
+  module Hash: Caml.Hashtbl.S with type key = t;
 
   /** Maps from proc names. */
-  let module Map: Caml.Map.S with type key = t;
+  module Map: PrettyPrintable.PPMap with type key = t;
 
   /** Sets of proc names. */
-  let module Set: Caml.Set.S with type elt = t;
+  module Set: PrettyPrintable.PPSet with type elt = t;
 
   /** Create a C procedure name from plain and mangled name. */
-  let c: QualifiedCppName.t => string => template_spec_info => c;
+  let c: QualifiedCppName.t => string => template_spec_info => is_generic_model::bool => c;
 
   /** Empty block name. */
   let empty_block: t;
@@ -328,7 +349,13 @@ let module Procname: {
   let mangled_objc_block: string => t;
 
   /** Create an objc procedure name from a class_name and method_name. */
-  let objc_cpp: Name.t => string => objc_cpp_method_kind => template_spec_info => objc_cpp;
+  let objc_cpp:
+    Name.t =>
+    string =>
+    objc_cpp_method_kind =>
+    template_spec_info =>
+    is_generic_model::bool =>
+    objc_cpp;
   let get_default_objc_class_method: Name.t => t;
 
   /** Get the class name of a Objective-C/C++ procedure name. */
@@ -446,19 +473,19 @@ let module Procname: {
 /** Return the return type of [pname_java]. */
 let java_proc_return_typ: Procname.java => t;
 
-let module Struct: {
+module Struct: {
   type field = (Fieldname.t, typ, Annot.Item.t) [@@deriving compare];
   type fields = list field;
 
   /** Type for a structured value. */
-  type t = private {
-    fields: fields, /** non-static fields */
-    statics: fields, /** static fields */
-    supers: list Name.t, /** supers */
-    methods: list Procname.t, /** methods defined */
-    annots: Annot.Item.t, /** annotations */
-    specialization: template_spec_info /** template specialization */
-  };
+  type t =
+    pri {
+      fields, /** non-static fields */
+      statics: fields, /** static fields */
+      supers: list Name.t, /** supers */
+      methods: list Procname.t, /** methods defined */
+      annots: Annot.Item.t /** annotations */
+    };
   type lookup = Name.t => option t;
 
   /** Pretty print a struct type. */
@@ -472,7 +499,6 @@ let module Struct: {
     methods::list Procname.t? =>
     supers::list Name.t? =>
     annots::Annot.Item.t? =>
-    specialization::template_spec_info? =>
     unit =>
     t;
 

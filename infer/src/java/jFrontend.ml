@@ -22,28 +22,35 @@ let add_edges
   let pc_nb = Array.length method_body_nodes in
   let last_pc = pc_nb - 1 in
   let is_last pc = Int.equal pc last_pc in
-  let rec get_body_nodes pc =
+  let rec get_body_nodes_ pc visited =
     let current_nodes = method_body_nodes.(pc) in
     match current_nodes with
-    | JTrans.Skip when (is_last pc) && not (JContext.is_goto_jump context pc) ->
-        exit_nodes
-    | JTrans.Skip -> direct_successors pc
+    | JTrans.Skip when (is_last pc) && not (JContext.is_goto_jump context pc) -> exit_nodes
+    | JTrans.Skip -> direct_successors pc (Int.Set.add visited pc)
     | JTrans.Instr node -> [node]
     | JTrans.Prune (node_true, node_false) -> [node_true; node_false]
     | JTrans.Loop (join_node, _, _) -> [join_node]
-  and direct_successors pc =
+  and direct_successors pc visited =
     if is_last pc && not (JContext.is_goto_jump context pc) then
       exit_nodes
     else
       match JContext.get_goto_jump context pc with
-      | JContext.Next -> get_body_nodes (pc + 1)
+      | JContext.Next ->
+          let next_pc = pc + 1 in
+          if Int.Set.mem visited next_pc
+          then []
+          else get_body_nodes_ next_pc visited
+      | JContext.Jump goto_pc when Int.Set.mem visited goto_pc ->
+          [] (* loop in goto *)
       | JContext.Jump goto_pc ->
-          if Int.equal pc goto_pc then [] (* loop in goto *)
-          else get_body_nodes goto_pc
-      | JContext.Exit -> exit_nodes in
+          get_body_nodes_ goto_pc visited
+      | JContext.Exit ->
+          exit_nodes in
+  let get_body_nodes pc =
+    get_body_nodes_ pc Int.Set.empty in
   let get_succ_nodes node pc =
     match JContext.get_if_jump context node with
-    | None -> direct_successors pc
+    | None -> direct_successors pc Int.Set.empty
     | Some jump_pc -> get_body_nodes jump_pc in
   let get_exn_nodes =
     if super_call then (fun _ -> exit_nodes)
@@ -64,7 +71,7 @@ let add_edges
         connect node_false pc in
   let first_nodes =
     (* deals with the case of an empty array *)
-    direct_successors (-1) in
+    direct_successors (-1) Int.Set.empty in
 
   (* the exceptions edges here are going directly to the exit node *)
   Procdesc.node_set_succs_exn context.procdesc start_node first_nodes exit_nodes;
@@ -146,9 +153,9 @@ let create_icfg source_file linereader program icfg cn node =
         begin
           match m with
           | Javalib.AbstractMethod am ->
-              ignore (JTrans.create_am_procdesc program icfg am proc_name)
+              ignore (JTrans.create_am_procdesc source_file program icfg am proc_name)
           | Javalib.ConcreteMethod cm when JTrans.is_java_native cm ->
-              ignore (JTrans.create_native_procdesc program icfg cm proc_name)
+              ignore (JTrans.create_native_procdesc source_file program icfg cm proc_name)
           | Javalib.ConcreteMethod cm ->
               add_cmethod source_file program linereader icfg cm proc_name
         end;
@@ -190,7 +197,7 @@ let compute_source_icfg
     linereader classes program tenv
     source_basename package_opt source_file =
   let icfg =
-    { JContext.cg = Cg.create (Some source_file);
+    { JContext.cg = Cg.create source_file;
       JContext.cfg = Cfg.create_cfg ();
       JContext.tenv = tenv } in
   let select test procedure cn node =
@@ -210,7 +217,7 @@ let compute_source_icfg
 
 let compute_class_icfg source_file linereader program tenv node =
   let icfg =
-    { JContext.cg = Cg.create (Some source_file);
+    { JContext.cg = Cg.create source_file;
       JContext.cfg = Cfg.create_cfg ();
       JContext.tenv = tenv } in
   begin

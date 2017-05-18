@@ -8,7 +8,7 @@
  */
 open! IStd;
 
-let module CLOpt = CommandLineOption;
+module CLOpt = CommandLineOption;
 
 
 /** enable debug mode (to get more data saved to disk for future inspections) */
@@ -17,11 +17,16 @@ let debug_mode = Config.debug_mode || Config.frontend_stats || Config.frontend_d
 let buffer_len = 262143;
 
 let catch_biniou_buffer_errors f x =>
-  try (f x) {
-  | Invalid_argument "Bi_inbuf.refill_from_channel" =>
-    Logging.err "WARNING: biniou buffer too short, skipping the file@\n";
-    assert false
-  };
+  (
+    try (f x) {
+    /* suppress warning: allow this one case because we're just reraising the error with another
+       error message so it doesn't really matter if this eventually fails */
+    | Invalid_argument "Bi_inbuf.refill_from_channel" =>
+      Logging.err "WARNING: biniou buffer too short, skipping the file@\n";
+      assert false
+    }
+  )
+  [@warning "-52"];
 
 /* This function reads the json file in fname, validates it, and encoded in the AST data structure
    defined in Clang_ast_t.  */
@@ -35,7 +40,7 @@ let validate_decl_from_channel chan =>
 
 let register_perf_stats_report source_file => {
   let stats_dir = Filename.concat Config.results_dir Config.frontend_stats_dir_name;
-  let abbrev_source_file = SourceFile.encoding source_file;
+  let abbrev_source_file = DB.source_file_encoding source_file;
   let stats_file = Config.perf_stats_prefix ^ "_" ^ abbrev_source_file ^ ".json";
   Utils.create_dir Config.results_dir;
   Utils.create_dir stats_dir;
@@ -44,7 +49,7 @@ let register_perf_stats_report source_file => {
 
 let init_global_state_for_capture_and_linters source_file => {
   Logging.set_log_file_identifier
-    CLOpt.(Infer Clang) (Some (Filename.basename (SourceFile.to_abs_path source_file)));
+    CLOpt.Clang (Some (Filename.basename (SourceFile.to_abs_path source_file)));
   register_perf_stats_report source_file;
   Config.curr_language := Config.Clang;
   DB.Results_dir.init source_file;
@@ -67,7 +72,7 @@ let run_clang_frontend ast_source => {
     switch ast_decl {
     | Clang_ast_t.TranslationUnitDecl (_, _, _, info) =>
       Config.arc_mode := info.Clang_ast_t.tudi_arc_enabled;
-      let source_file = info.Clang_ast_t.tudi_input_path;
+      let source_file = SourceFile.from_abs_path info.Clang_ast_t.tudi_input_path;
       init_global_state_for_capture_and_linters source_file;
       let lang =
         switch info.Clang_ast_t.tudi_input_kind {
@@ -86,7 +91,8 @@ let run_clang_frontend ast_source => {
     | `Pipe _ =>
       Format.fprintf fmt "stdin of %a" SourceFile.pp trans_unit_ctx.CFrontend_config.source_file
     };
-  let (decl_index, stmt_index, type_index, ivar_to_property_index) = Clang_ast_main.index_node_pointers ast_decl;
+  let (decl_index, stmt_index, type_index, ivar_to_property_index) =
+    Clang_ast_main.index_node_pointers ast_decl;
   CFrontend_config.pointer_decl_index := decl_index;
   CFrontend_config.pointer_stmt_index := stmt_index;
   CFrontend_config.pointer_type_index := type_index;
@@ -133,7 +139,7 @@ let run_plugin_and_frontend source_path frontend clang_args => {
   if debug_mode {
     /* -cc1 clang commands always set -o explicitly */
     let basename = source_path ^ ".ast";
-    /* Emit the clang command with the extra args piped to InferClang */
+    /* Emit the clang command with the extra args piped to infer-as-clang */
     let frontend_script_fname = Printf.sprintf "%s.sh" basename;
     let debug_script_out = open_out frontend_script_fname;
     let debug_script_fmt = Format.formatter_of_out_channel debug_script_out;
@@ -155,11 +161,11 @@ let cc1_capture clang_cmd => {
     let root = Unix.getcwd ();
     let orig_argv = ClangCommand.get_orig_argv clang_cmd;
     /* the source file is always the last argument of the original -cc1 clang command */
-    Utils.filename_to_absolute root::root orig_argv.(Array.length orig_argv - 1)
+    Utils.filename_to_absolute ::root orig_argv.(Array.length orig_argv - 1)
   };
   Logging.out "@\n*** Beginning capture of file %s ***@\n" source_path;
   if (
-    Config.equal_analyzer Config.analyzer Config.Compile ||
+    Config.equal_analyzer Config.analyzer Config.CompileOnly ||
     CLocation.is_file_blacklisted source_path
   ) {
     Logging.out "@\n Skip the analysis of source file %s@\n@\n" source_path;
@@ -173,7 +179,7 @@ let cc1_capture clang_cmd => {
         source_path (fun chan_in => run_and_validate_clang_frontend (`Pipe chan_in)) clang_cmd
     };
     /* reset logging to stop capturing log output into the source file's log */
-    Logging.set_log_file_identifier CLOpt.(Infer Clang) None;
+    Logging.set_log_file_identifier CLOpt.Capture None;
     ()
   }
 };

@@ -9,13 +9,13 @@
  */
 open! IStd;
 
-let module Hashtbl = Caml.Hashtbl;
+module Hashtbl = Caml.Hashtbl;
 
 
 /** The Smallfoot Intermediate Language: Types */
-let module L = Logging;
+module L = Logging;
 
-let module F = Format;
+module F = Format;
 
 
 /** Kinds of integers */
@@ -79,19 +79,6 @@ type fkind =
   | FLongDouble /** [long double] */
 [@@deriving compare];
 
-
-/** comparison for fkind */
-let fkind_compare k1 k2 =>
-  switch (k1, k2) {
-  | (FFloat, FFloat) => 0
-  | (FFloat, _) => (-1)
-  | (_, FFloat) => 1
-  | (FDouble, FDouble) => 0
-  | (FDouble, _) => (-1)
-  | (_, FDouble) => 1
-  | (FLongDouble, FLongDouble) => 0
-  };
-
 let fkind_to_string =
   fun
   | FFloat => "float"
@@ -118,21 +105,19 @@ let ptr_kind_string =
   | Pk_objc_unsafe_unretained => "__unsafe_unretained *"
   | Pk_objc_autoreleasing => "__autoreleasing *";
 
-
-/** statically determined length of an array type, if any */
-type static_length = option IntLit.t [@@deriving compare];
-
-let module T = {
+module T = {
+  type type_quals = {is_const: bool, is_restrict: bool, is_volatile: bool} [@@deriving compare];
 
   /** types for sil (structured) expressions */
-  type t =
+  type t = {desc, quals: type_quals} [@@deriving compare]
+  and desc =
     | Tint ikind /** integer type */
     | Tfloat fkind /** float type */
     | Tvoid /** void type */
     | Tfun bool /** function type with noreturn attribute */
     | Tptr t ptr_kind /** pointer type */
     | Tstruct name /** structured value type name */
-    | Tarray t static_length /** array type with statically fixed length */
+    | Tarray t (option IntLit.t) (option IntLit.t) /** array type with statically fixed length and stride */
   [@@deriving compare]
   and name =
     | CStruct QualifiedCppName.t
@@ -144,146 +129,104 @@ let module T = {
   [@@deriving compare]
   and template_spec_info =
     | NoTemplate
-    | Template (QualifiedCppName.t, list (option t))
+    | Template (list (option t))
   [@@deriving compare];
+  let equal_desc = [%compare.equal : desc];
+  let equal_quals = [%compare.equal : type_quals];
   let equal = [%compare.equal : t];
   let hash = Hashtbl.hash;
 };
 
 include T;
 
-let module Name = {
-  type t = name [@@deriving compare];
-  let equal = [%compare.equal : t];
-  let name =
-    fun
-    | CStruct name
-    | CUnion name
-    | CppClass name _
-    | ObjcClass name
-    | ObjcProtocol name => QualifiedCppName.to_qual_string name
-    | JavaClass name => Mangled.to_string name;
-  let qual_name =
-    fun
-    | CStruct name
-    | CUnion name
-    | CppClass name _
-    | ObjcClass name
-    | ObjcProtocol name => name
-    | JavaClass _ => QualifiedCppName.empty;
-  let to_string tname => {
-    let prefix =
-      fun
-      | CStruct _ => "struct"
-      | CUnion _ => "union"
-      | CppClass _ _
-      | JavaClass _
-      | ObjcClass _ => "class"
-      | ObjcProtocol _ => "protocol";
-    prefix tname ^ " " ^ name tname
+let mk_type_quals ::default=? ::is_const=? ::is_restrict=? ::is_volatile=? () => {
+  let default_ = {is_const: false, is_restrict: false, is_volatile: false};
+  let mk_aux
+      ::default=default_
+      ::is_const=default.is_const
+      ::is_restrict=default.is_restrict
+      ::is_volatile=default.is_volatile
+      () => {
+    is_const,
+    is_restrict,
+    is_volatile
   };
-  let pp f typename => F.fprintf f "%s" (to_string typename);
-  let is_class =
-    fun
-    | CppClass _ _
-    | JavaClass _
-    | ObjcClass _ => true
-    | _ => false;
-  let is_same_type t1 t2 =>
-    switch (t1, t2) {
-    | (CStruct _, CStruct _)
-    | (CUnion _, CUnion _)
-    | (CppClass _ _, CppClass _ _)
-    | (JavaClass _, JavaClass _)
-    | (ObjcClass _, ObjcClass _)
-    | (ObjcProtocol _, ObjcProtocol _) => true
-    | _ => false
-    };
-  let module C = {
-    let from_qual_name qual_name => CStruct qual_name;
-    let from_string name_str => QualifiedCppName.of_qual_string name_str |> from_qual_name;
-    let union_from_qual_name qual_name => CUnion qual_name;
-  };
-  let module Java = {
-    let from_string name_str => JavaClass (Mangled.from_string name_str);
-    let from_package_class package_name class_name =>
-      if (String.equal package_name "") {
-        from_string class_name
-      } else {
-        from_string (package_name ^ "." ^ class_name)
-      };
-    let is_class =
-      fun
-      | JavaClass _ => true
-      | _ => false;
-    let java_lang_object = from_string "java.lang.Object";
-    let java_io_serializable = from_string "java.io.Serializable";
-    let java_lang_cloneable = from_string "java.lang.Cloneable";
-  };
-  let module Cpp = {
-    let from_qual_name template_spec_info qual_name => CppClass qual_name template_spec_info;
-    let is_class =
-      fun
-      | CppClass _ => true
-      | _ => false;
-  };
-  let module Objc = {
-    let from_qual_name qual_name => ObjcClass qual_name;
-    let from_string name_str => QualifiedCppName.of_qual_string name_str |> from_qual_name;
-    let protocol_from_qual_name qual_name => ObjcProtocol qual_name;
-    let is_class =
-      fun
-      | ObjcClass _ => true
-      | _ => false;
-  };
-  let module Set = Caml.Set.Make {
-    type nonrec t = t;
-    let compare = compare;
-  };
+  mk_aux ::?default ::?is_const ::?is_restrict ::?is_volatile ()
 };
 
+let is_const {is_const} => is_const;
 
-/** {2 Sets and maps of types} */
-let module Set = Caml.Set.Make T;
+let is_restrict {is_restrict} => is_restrict;
 
-let module Map = Caml.Map.Make T;
+let is_volatile {is_volatile} => is_volatile;
 
-let module Tbl = Hashtbl.Make T;
+let mk ::default=? ::quals=? desc :t => {
+  let default_ = {desc, quals: mk_type_quals ()};
+  let mk_aux ::default=default_ ::quals=default.quals desc => {desc, quals};
+  mk_aux ::?default ::?quals desc
+};
 
-
-/** type comparison that treats T* [] and T** as the same type. Needed for C/C++ */
-let array_sensitive_compare t1 t2 =>
-  switch (t1, t2) {
-  | (Tptr (Tptr ptr_typ _) _, Tarray (Tptr array_typ _) _) => compare ptr_typ array_typ
-  | (Tarray (Tptr array_typ _) _, Tptr (Tptr ptr_typ _) _) => compare array_typ ptr_typ
-  | _ => compare t1 t2
+let escape pe =>
+  if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
+    Escape.escape_xml
+  } else {
+    ident
   };
 
 
 /** Pretty print a type with all the details, using the C syntax. */
-let rec pp_full pe f =>
-  fun
-  | Tstruct tname =>
-    if (Pp.equal_print_kind pe.Pp.kind Pp.HTML) {
-      F.fprintf f "%s" (Name.to_string tname |> Escape.escape_xml)
-    } else {
-      F.fprintf f "%s" (Name.to_string tname)
+let rec pp_full pe f typ => {
+  let pp_quals f {quals} => {
+    if (is_const quals) {
+      F.fprintf f " const "
+    };
+    if (is_restrict quals) {
+      F.fprintf f " __restrict "
+    };
+    if (is_volatile quals) {
+      F.fprintf f " volatile "
     }
-  | Tint ik => F.fprintf f "%s" (ikind_to_string ik)
-  | Tfloat fk => F.fprintf f "%s" (fkind_to_string fk)
-  | Tvoid => F.fprintf f "void"
-  | Tfun false => F.fprintf f "_fn_"
-  | Tfun true => F.fprintf f "_fn_noreturn_"
-  | Tptr ((Tarray _ | Tfun _) as typ) pk =>
-    F.fprintf f "%a(%s)" (pp_full pe) typ (ptr_kind_string pk)
-  | Tptr typ pk => F.fprintf f "%a%s" (pp_full pe) typ (ptr_kind_string pk)
-  | Tarray typ static_len => {
-      let pp_array_static_len fmt => (
+  };
+  let pp_desc f {desc} =>
+    switch desc {
+    | Tstruct tname => F.fprintf f "%a" (pp_name_c_syntax pe) tname
+    | Tint ik => F.fprintf f "%s" (ikind_to_string ik)
+    | Tfloat fk => F.fprintf f "%s" (fkind_to_string fk)
+    | Tvoid => F.fprintf f "void"
+    | Tfun false => F.fprintf f "_fn_"
+    | Tfun true => F.fprintf f "_fn_noreturn_"
+    | Tptr ({desc: Tarray _ | Tfun _} as typ) pk =>
+      F.fprintf f "%a(%s)" (pp_full pe) typ (ptr_kind_string pk |> escape pe)
+    | Tptr typ pk => F.fprintf f "%a%s" (pp_full pe) typ (ptr_kind_string pk |> escape pe)
+    | Tarray typ static_len static_stride =>
+      let pp_int_opt fmt => (
         fun
-        | Some static_len => IntLit.pp fmt static_len
+        | Some x => IntLit.pp fmt x
         | None => F.fprintf fmt "_"
       );
-      F.fprintf f "%a[%a]" (pp_full pe) typ pp_array_static_len static_len
+      F.fprintf f "%a[%a*%a]" (pp_full pe) typ pp_int_opt static_len pp_int_opt static_stride
+    };
+  F.fprintf f "%a%a" pp_desc typ pp_quals typ
+}
+and pp_name_c_syntax pe f =>
+  fun
+  | CStruct name
+  | CUnion name
+  | ObjcClass name
+  | ObjcProtocol name => F.fprintf f "%a" QualifiedCppName.pp name
+  | CppClass name template_spec =>
+    F.fprintf f "%a%a" QualifiedCppName.pp name (pp_template_spec_info pe) template_spec
+  | JavaClass name => F.fprintf f "%a" Mangled.pp name
+and pp_template_spec_info pe f =>
+  fun
+  | NoTemplate => ()
+  | Template args => {
+      let pp_arg_opt f => (
+        fun
+        | Some typ => F.fprintf f "%a" (pp_full pe) typ
+        | None => F.fprintf f "_"
+      );
+      F.fprintf f "%s%a%s" (escape pe "<") (Pp.comma_seq pp_arg_opt) args (escape pe ">")
     };
 
 
@@ -300,6 +243,117 @@ let to_string typ => {
   F.asprintf "%t" pp
 };
 
+module Name = {
+  type t = name [@@deriving compare];
+  let equal = [%compare.equal : t];
+  let qual_name =
+    fun
+    | CStruct name
+    | CUnion name
+    | ObjcClass name
+    | ObjcProtocol name => name
+    | CppClass name templ_args => {
+        let template_suffix = F.asprintf "%a" (pp_template_spec_info Pp.text) templ_args;
+        QualifiedCppName.append_template_args_to_last name args::template_suffix
+      }
+    | JavaClass _ => QualifiedCppName.empty;
+  let unqualified_name =
+    fun
+    | CStruct name
+    | CUnion name
+    | ObjcClass name
+    | ObjcProtocol name => name
+    | CppClass name _ => name
+    | JavaClass _ => QualifiedCppName.empty;
+  let name n =>
+    switch n {
+    | CStruct _
+    | CUnion _
+    | CppClass _ _
+    | ObjcClass _
+    | ObjcProtocol _ => qual_name n |> QualifiedCppName.to_qual_string
+    | JavaClass name => Mangled.to_string name
+    };
+  let pp fmt tname => {
+    let prefix =
+      fun
+      | CStruct _ => "struct"
+      | CUnion _ => "union"
+      | CppClass _ _
+      | JavaClass _
+      | ObjcClass _ => "class"
+      | ObjcProtocol _ => "protocol";
+    F.fprintf fmt "%s %a" (prefix tname) (pp_name_c_syntax Pp.text) tname
+  };
+  let to_string = F.asprintf "%a" pp;
+  let is_class =
+    fun
+    | CppClass _ _
+    | JavaClass _
+    | ObjcClass _ => true
+    | _ => false;
+  let is_same_type t1 t2 =>
+    switch (t1, t2) {
+    | (CStruct _, CStruct _)
+    | (CUnion _, CUnion _)
+    | (CppClass _ _, CppClass _ _)
+    | (JavaClass _, JavaClass _)
+    | (ObjcClass _, ObjcClass _)
+    | (ObjcProtocol _, ObjcProtocol _) => true
+    | _ => false
+    };
+  module C = {
+    let from_qual_name qual_name => CStruct qual_name;
+    let from_string name_str => QualifiedCppName.of_qual_string name_str |> from_qual_name;
+    let union_from_qual_name qual_name => CUnion qual_name;
+  };
+  module Java = {
+    let from_string name_str => JavaClass (Mangled.from_string name_str);
+    let from_package_class package_name class_name =>
+      if (String.equal package_name "") {
+        from_string class_name
+      } else {
+        from_string (package_name ^ "." ^ class_name)
+      };
+    let is_class =
+      fun
+      | JavaClass _ => true
+      | _ => false;
+    let java_lang_object = from_string "java.lang.Object";
+    let java_io_serializable = from_string "java.io.Serializable";
+    let java_lang_cloneable = from_string "java.lang.Cloneable";
+  };
+  module Cpp = {
+    let from_qual_name template_spec_info qual_name => CppClass qual_name template_spec_info;
+    let is_class =
+      fun
+      | CppClass _ => true
+      | _ => false;
+  };
+  module Objc = {
+    let from_qual_name qual_name => ObjcClass qual_name;
+    let from_string name_str => QualifiedCppName.of_qual_string name_str |> from_qual_name;
+    let protocol_from_qual_name qual_name => ObjcProtocol qual_name;
+    let is_class =
+      fun
+      | ObjcClass _ => true
+      | _ => false;
+  };
+  module Set =
+    Caml.Set.Make {
+      type nonrec t = t;
+      let compare = compare;
+    };
+};
+
+
+/** {2 Sets and maps of types} */
+module Set = Caml.Set.Make T;
+
+module Map = Caml.Map.Make T;
+
+module Tbl = Hashtbl.Make T;
+
 
 /** dump a type with all the details. */
 let d_full (t: t) => L.add_print_action (L.PTtyp_full, Obj.repr t);
@@ -308,10 +362,11 @@ let d_full (t: t) => L.add_print_action (L.PTtyp_full, Obj.repr t);
 /** dump a list of types. */
 let d_list (tl: list t) => L.add_print_action (L.PTtyp_list, Obj.repr tl);
 
-let name =
-  fun
+let name typ =>
+  switch typ.desc {
   | Tstruct name => Some name
-  | _ => None;
+  | _ => None
+  };
 
 let unsome s =>
   fun
@@ -323,21 +378,23 @@ let unsome s =>
 
 
 /** turn a *T into a T. fails if [typ] is not a pointer type */
-let strip_ptr =
-  fun
+let strip_ptr typ =>
+  switch typ.desc {
   | Tptr t _ => t
-  | _ => assert false;
+  | _ => assert false
+  };
 
 
 /** If an array type, return the type of the element.
     If not, return the default type if given, otherwise raise an exception */
-let array_elem default_opt =>
-  fun
-  | Tarray t_el _ => t_el
-  | _ => unsome "array_elem" default_opt;
+let array_elem default_opt typ =>
+  switch typ.desc {
+  | Tarray t_el _ _ => t_el
+  | _ => unsome "array_elem" default_opt
+  };
 
 let is_class_of_kind check_fun typ =>
-  switch typ {
+  switch typ.desc {
   | Tstruct tname => check_fun tname
   | _ => false
   };
@@ -349,13 +406,13 @@ let is_cpp_class = is_class_of_kind Name.Cpp.is_class;
 let is_java_class = is_class_of_kind Name.Java.is_class;
 
 let rec is_array_of_cpp_class typ =>
-  switch typ {
-  | Tarray typ _ => is_array_of_cpp_class typ
+  switch typ.desc {
+  | Tarray typ _ _ => is_array_of_cpp_class typ
   | _ => is_cpp_class typ
   };
 
 let is_pointer_to_cpp_class typ =>
-  switch typ {
+  switch typ.desc {
   | Tptr t _ => is_cpp_class t
   | _ => false
   };
@@ -372,27 +429,27 @@ let is_block_type typ => has_block_prefix (to_string typ);
 
 
 /** Java types by name */
-let rec java_from_string =
+let rec java_from_string: string => t =
   fun
   | ""
-  | "void" => Tvoid
-  | "int" => Tint IInt
-  | "byte" => Tint IShort
-  | "short" => Tint IShort
-  | "boolean" => Tint IBool
-  | "char" => Tint IChar
-  | "long" => Tint ILong
-  | "float" => Tfloat FFloat
-  | "double" => Tfloat FDouble
+  | "void" => mk Tvoid
+  | "int" => mk (Tint IInt)
+  | "byte" => mk (Tint IShort)
+  | "short" => mk (Tint IShort)
+  | "boolean" => mk (Tint IBool)
+  | "char" => mk (Tint IChar)
+  | "long" => mk (Tint ILong)
+  | "float" => mk (Tfloat FFloat)
+  | "double" => mk (Tfloat FDouble)
   | typ_str when String.contains typ_str '[' => {
       let stripped_typ = String.sub typ_str pos::0 len::(String.length typ_str - 2);
-      Tptr (Tarray (java_from_string stripped_typ) None) Pk_pointer
+      mk (Tptr (mk (Tarray (java_from_string stripped_typ) None None)) Pk_pointer)
     }
-  | typ_str => Tstruct (Name.Java.from_string typ_str);
+  | typ_str => mk (Tstruct (Name.Java.from_string typ_str));
 
-type typ = t [@@deriving compare];
+type typ = t;
 
-let module Procname = {
+module Procname = {
   /* e.g. ("", "int") for primitive types or ("java.io", "PrintWriter") for objects */
   type java_type = (option string, string);
   /* compare in inverse order */
@@ -415,7 +472,12 @@ let module Procname = {
   [@@deriving compare];
 
   /** Type of c procedure names. */
-  type c = {name: QualifiedCppName.t, mangled: option string, template_args: template_spec_info}
+  type c = {
+    name: QualifiedCppName.t,
+    mangled: option string,
+    template_args: template_spec_info,
+    is_generic_model: bool
+  }
   [@@deriving compare];
   type objc_cpp_method_kind =
     | CPPMethod (option string) /** with mangling */
@@ -430,7 +492,8 @@ let module Procname = {
     method_name: string,
     class_name: Name.t,
     kind: objc_cpp_method_kind,
-    template_args: template_spec_info
+    template_args: template_spec_info,
+    is_generic_model: bool
   }
   [@@deriving compare];
 
@@ -500,13 +563,19 @@ let module Procname = {
     | None => (None, package_classname)
     };
   let split_typename typename => split_classname (Name.name typename);
-  let c (name: QualifiedCppName.t) (mangled: string) (template_args: template_spec_info) => {
+  let c name mangled template_args ::is_generic_model => {
     name,
     mangled: Some mangled,
-    template_args
+    template_args,
+    is_generic_model
   };
   let from_string_c_fun (name: string) =>
-    C {name: QualifiedCppName.of_qual_string name, mangled: None, template_args: NoTemplate};
+    C {
+      name: QualifiedCppName.of_qual_string name,
+      mangled: None,
+      template_args: NoTemplate,
+      is_generic_model: false
+    };
   let java class_name return_type method_name parameters kind => {
     class_name,
     return_type,
@@ -516,14 +585,16 @@ let module Procname = {
   };
 
   /** Create an objc procedure name from a class_name and method_name. */
-  let objc_cpp class_name method_name kind template_args => {
+  let objc_cpp class_name method_name kind template_args ::is_generic_model => {
     class_name,
     method_name,
     kind,
-    template_args
+    template_args,
+    is_generic_model
   };
   let get_default_objc_class_method objc_class => {
-    let objc_cpp = objc_cpp objc_class "__find_class_" ObjCInternalMethod NoTemplate;
+    let objc_cpp =
+      objc_cpp objc_class "__find_class_" ObjCInternalMethod NoTemplate is_generic_model::false;
     ObjC_Cpp objc_cpp
   };
 
@@ -620,7 +691,7 @@ let module Procname = {
     | _ => false;
 
   /** Prints a string of a java procname with the given level of verbosity */
-  let java_to_string withclass::withclass=false (j: java) verbosity =>
+  let java_to_string ::withclass=false (j: java) verbosity =>
     switch verbosity {
     | Verbose
     | Non_verbose =>
@@ -867,9 +938,9 @@ let module Procname = {
     };
 
   /** Convenient representation of a procname for external tools (e.g. eclipse plugin) */
-  let to_simplified_string withclass::withclass=false p =>
+  let to_simplified_string ::withclass=false p =>
     switch p {
-    | Java j => java_to_string withclass::withclass j Simple
+    | Java j => java_to_string ::withclass j Simple
     | C {name, mangled} => to_readable_string (name, mangled) false ^ "()"
     | ObjC_Cpp osig => c_method_to_string osig Simple
     | Block _ => "block"
@@ -881,19 +952,24 @@ let module Procname = {
 
   /** hash function for procname */
   let hash_pname = Hashtbl.hash;
-  let module Hash = Hashtbl.Make {
-    type nonrec t = t;
-    let equal = equal;
-    let hash = hash_pname;
-  };
-  let module Map = Caml.Map.Make {
-    type nonrec t = t;
-    let compare = compare;
-  };
-  let module Set = Caml.Set.Make {
-    type nonrec t = t;
-    let compare = compare;
-  };
+  module Hash =
+    Hashtbl.Make {
+      type nonrec t = t;
+      let equal = equal;
+      let hash = hash_pname;
+    };
+  module Map =
+    PrettyPrintable.MakePPMap {
+      type nonrec t = t;
+      let compare = compare;
+      let pp = pp;
+    };
+  module Set =
+    PrettyPrintable.MakePPSet {
+      type nonrec t = t;
+      let compare = compare;
+      let pp = pp;
+    };
 
   /** Pretty print a set of proc names */
   let pp_set fmt set => Set.iter (fun pname => F.fprintf fmt "%a " pp pname) set;
@@ -908,7 +984,7 @@ let module Procname = {
     };
 
   /** Convert a proc name to a filename */
-  let to_filename pname => {
+  let to_concrete_filename pname => {
     /* filenames for clang procs are REVERSED qualifiers with '#' as separator */
     let get_qual_name_str pname =>
       get_qualifiers pname |> QualifiedCppName.to_rev_list |> String.concat sep::"#";
@@ -920,30 +996,44 @@ let module Procname = {
         get_qual_name_str pname ^ "#" ^ c_method_kind_verbose_str objc_cpp.kind
       | _ => to_unique_id pname
       };
-    Escape.escape_filename @@ SourceFile.append_crc_cutoff proc_id
+    Escape.escape_filename @@ DB.append_crc_cutoff proc_id
   };
+  let to_generic_filename pname => {
+    let proc_id =
+      get_qualifiers pname |> QualifiedCppName.strip_template_args |> QualifiedCppName.to_rev_list |>
+      String.concat sep::"#";
+    Escape.escape_filename @@ DB.append_crc_cutoff proc_id
+  };
+  let to_filename pname =>
+    switch pname {
+    | C {is_generic_model}
+    | ObjC_Cpp {is_generic_model} when Bool.equal is_generic_model true =>
+      to_generic_filename pname
+    | _ => to_concrete_filename pname
+    };
 };
 
 
 /** Return the return type of [pname_java]. */
-let java_proc_return_typ pname_java =>
-  switch (java_from_string (Procname.java_get_return_type pname_java)) {
-  | Tstruct _ as typ => Tptr typ Pk_pointer
-  | typ => typ
-  };
+let java_proc_return_typ pname_java :t => {
+  let typ = java_from_string (Procname.java_get_return_type pname_java);
+  switch typ.desc {
+  | Tstruct _ => mk (Tptr typ Pk_pointer)
+  | _ => typ
+  }
+};
 
-let module Struct = {
+module Struct = {
   type field = (Fieldname.t, T.t, Annot.Item.t) [@@deriving compare];
   type fields = list field;
 
   /** Type for a structured value. */
   type t = {
-    fields: fields, /** non-static fields */
+    fields, /** non-static fields */
     statics: fields, /** static fields */
     supers: list Name.t, /** superclasses */
     methods: list Procname.t, /** methods defined */
-    annots: Annot.Item.t, /** annotations */
-    specialization: template_spec_info /** template specialization */
+    annots: Annot.Item.t /** annotations */
   };
   type lookup = Name.t => option t;
   let pp pe name f {fields, supers, methods, annots} =>
@@ -970,59 +1060,34 @@ let module Struct = {
     } else {
       F.fprintf f "%a" Name.pp name
     };
-  let internal_mk_struct
-      default::default=?
-      fields::fields=?
-      statics::statics=?
-      methods::methods=?
-      supers::supers=?
-      annots::annots=?
-      specialization::specialization=?
-      () => {
+  let internal_mk_struct ::default=? ::fields=? ::statics=? ::methods=? ::supers=? ::annots=? () => {
+    let default_ = {fields: [], statics: [], methods: [], supers: [], annots: Annot.Item.empty};
     let mk_struct_
-        default::
-          default={
-            fields: [],
-            statics: [],
-            methods: [],
-            supers: [],
-            annots: Annot.Item.empty,
-            specialization: NoTemplate
-          }
-        fields::fields=default.fields
-        statics::statics=default.statics
-        methods::methods=default.methods
-        supers::supers=default.supers
-        annots::annots=default.annots
-        specialization::specialization=default.specialization
+        ::default=default_
+        ::fields=default.fields
+        ::statics=default.statics
+        ::methods=default.methods
+        ::supers=default.supers
+        ::annots=default.annots
         () => {
       fields,
       statics,
       methods,
       supers,
-      annots,
-      specialization
+      annots
     };
-    mk_struct_
-      default::?default
-      fields::?fields
-      statics::?statics
-      methods::?methods
-      supers::?supers
-      annots::?annots
-      specialization::?specialization
-      ()
+    mk_struct_ ::?default ::?fields ::?statics ::?methods ::?supers ::?annots ()
   };
 
   /** the element typ of the final extensible array in the given typ, if any */
-  let rec get_extensible_array_element_typ lookup::lookup (typ: T.t) =>
-    switch typ {
-    | Tarray typ _ => Some typ
+  let rec get_extensible_array_element_typ ::lookup (typ: T.t) =>
+    switch typ.desc {
+    | Tarray typ _ _ => Some typ
     | Tstruct name =>
       switch (lookup name) {
       | Some {fields} =>
         switch (List.last fields) {
-        | Some (_, fld_typ, _) => get_extensible_array_element_typ lookup::lookup fld_typ
+        | Some (_, fld_typ, _) => get_extensible_array_element_typ ::lookup fld_typ
         | None => None
         }
       | None => None
@@ -1031,21 +1096,21 @@ let module Struct = {
     };
 
   /** If a struct type with field f, return the type of f. If not, return the default */
-  let fld_typ lookup::lookup default::default fn (typ: T.t) =>
-    switch typ {
+  let fld_typ ::lookup ::default fn (typ: T.t) =>
+    switch typ.desc {
     | Tstruct name =>
       switch (lookup name) {
       | Some {fields} =>
         List.find f::(fun (f, _, _) => Fieldname.equal f fn) fields |>
-        Option.value_map f::snd3 default::default
+        Option.value_map f::snd3 ::default
       | None => default
       }
     | _ => default
     };
-  let get_field_type_and_annotation lookup::lookup fn (typ: T.t) =>
-    switch typ {
+  let get_field_type_and_annotation ::lookup fn (typ: T.t) =>
+    switch typ.desc {
     | Tstruct name
-    | Tptr (Tstruct name) _ =>
+    | Tptr {desc: Tstruct name} _ =>
       switch (lookup name) {
       | Some {fields, statics} =>
         List.find_map
@@ -1057,7 +1122,7 @@ let module Struct = {
   let objc_ref_counter_annot = [({Annot.class_name: "ref_counter", parameters: []}, false)];
 
   /** Field used for objective-c reference counting */
-  let objc_ref_counter_field = (Fieldname.hidden, T.Tint IInt, objc_ref_counter_annot);
+  let objc_ref_counter_field = (Fieldname.hidden, mk (T.Tint IInt), objc_ref_counter_annot);
   let is_objc_ref_counter_field (fld, _, a) =>
     Fieldname.is_hidden fld && Annot.Item.equal a objc_ref_counter_annot;
 };

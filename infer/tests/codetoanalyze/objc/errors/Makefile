@@ -32,12 +32,14 @@ SOURCES_DEFAULT = \
   npe/NPD_core_foundation.m \
   npe/Npe_with_equal_names.m \
   npe/block.m \
+	npe/ivar_blocks.m \
   npe/skip_method_with_nil_object.m \
 	npe/Nsstring_length_no_npe.m \
 	npe/No_null_from_array.m \
   procdescs/MethodCall.m \
   property/main.c \
   resource_leaks/ResourceLeakExample.m \
+	resource_leaks/Dispatch_sources.m \
   shared/block/block-it.m \
   shared/block/dispatch.m \
   shared/category_procdesc/EOCPerson.m \
@@ -133,10 +135,10 @@ infer-out/report.json: $(CLANG_DEPS) $(SOURCES_DEFAULT)
 	$(QUIET)$(call check_no_duplicates,infer-out/duplicates.txt)
 
 issues.exp.test: infer-out-all/report.json infer-out-arc/report.json infer-out/report.json
-	$(QUIET)$(INFERPRINT_BIN) -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.all \
+	$(QUIET)$(INFER_BIN) report -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.all \
 	  --from-json-report infer-out-all/report.json
-	$(QUIET)$(INFERPRINT_BIN) -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.arc \
+	$(QUIET)$(INFER_BIN) report -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.arc \
 	  --from-json-report infer-out-arc/report.json
-	$(QUIET)$(INFERPRINT_BIN) -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.default \
+	$(QUIET)$(INFER_BIN) report -q -a $(ANALYZER) $(INFERPRINT_OPTIONS) $@.default \
 	  --from-json-report infer-out/report.json
 	$(QUIET)cat $@.all $@.arc $@.default > $@

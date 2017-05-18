@@ -8,9 +8,9 @@
  */
 open! IStd;
 
-let module F = Format;
+module F = Format;
 
-let module L = Logging;
+module L = Logging;
 
 
 /** Location in the original source file */
@@ -27,10 +27,9 @@ let equal = [%compare.equal : t];
 /** Dump a location */
 let d (loc: t) => L.add_print_action (L.PTloc, Obj.repr loc);
 
+let none file => {line: (-1), col: (-1), file};
 
-/** Dummy location */
-let dummy = {line: (-1), col: (-1), file: SourceFile.empty};
-
+let dummy = none (SourceFile.invalid __FILE__);
 
 /** Pretty print a location */
 let pp f (loc: t) => F.fprintf f "[line %d]" loc.line;

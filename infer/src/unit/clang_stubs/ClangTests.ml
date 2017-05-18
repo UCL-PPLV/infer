@@ -9,4 +9,4 @@
 
 open! IStd
 
-let tests = OUnitTest.TestList []
+let tests = [OUnitTest.TestList []]

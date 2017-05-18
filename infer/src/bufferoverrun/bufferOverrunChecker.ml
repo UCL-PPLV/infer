@@ -35,78 +35,107 @@ struct
 
   type extras = Typ.Procname.t -> Procdesc.t option
 
+  let set_uninitialized (typ : Typ.t) loc mem = match typ.desc with
+    | Tint _ | Tfloat _ -> Dom.Mem.weak_update_heap loc Dom.Val.top_itv mem
+    | _ -> mem
+
   (* NOTE: heuristic *)
-  let get_malloc_info : Exp.t -> Typ.t * Exp.t
+  let get_malloc_info : Exp.t -> Typ.t * Int.t option * Exp.t
     = function
-      | Exp.BinOp (Binop.Mult, Exp.Sizeof (typ, _, _), size)
-      | Exp.BinOp (Binop.Mult, size, Exp.Sizeof (typ, _, _)) -> (typ, size)
-      | Exp.Sizeof (typ, _, _) -> (typ, Exp.one)
-      | x -> (Typ.Tint Typ.IChar, x)
+      | Exp.BinOp (Binop.Mult, Exp.Sizeof {typ; nbytes}, length)
+      | Exp.BinOp (Binop.Mult, length, Exp.Sizeof {typ; nbytes}) -> (typ, nbytes, length)
+      | Exp.Sizeof {typ; nbytes} -> (typ, nbytes, Exp.one)
+      | x -> (Typ.mk (Typ.Tint Typ.IChar), Some 1, x)
 
   let model_malloc
     : Typ.Procname.t -> (Ident.t * Typ.t) option -> (Exp.t * Typ.t) list -> CFG.node
-      -> Dom.Mem.t -> Dom.Mem.t
+      -> Dom.Mem.astate -> Dom.Mem.astate
     = fun pname ret params node mem ->
       match ret with
       | Some (id, _) ->
-          let (typ, size) = get_malloc_info (List.hd_exn params |> fst) in
-          let size = Sem.eval size mem (CFG.loc node) |> Dom.Val.get_itv in
-          let v = Sem.eval_array_alloc pname node typ Itv.zero size 0 1 in
-          Dom.Mem.add_stack (Loc.of_id id) v mem
+          let (typ, stride, length0) = get_malloc_info (List.hd_exn params |> fst) in
+          let length = Sem.eval length0 mem (CFG.loc node) |> Dom.Val.get_itv in
+          let v = Sem.eval_array_alloc pname node typ ?stride Itv.zero length 0 1 in
+          mem
+          |> Dom.Mem.add_stack (Loc.of_id id) v
+          |> set_uninitialized typ (Dom.Val.get_array_locs v)
       | _ -> mem
 
   let model_realloc
     : Typ.Procname.t -> (Ident.t * Typ.t) option -> (Exp.t * Typ.t) list -> CFG.node
-      -> Dom.Mem.t -> Dom.Mem.t
+      -> Dom.Mem.astate -> Dom.Mem.astate
     = fun pname ret params node mem ->
       model_malloc pname ret (List.tl_exn params) node mem
 
-  let model_natual_itv : (Ident.t * Typ.t) option -> Dom.Mem.t -> Dom.Mem.t
+  let model_fgetc : (Ident.t * Typ.t) option -> Dom.Mem.astate -> Dom.Mem.astate
+    = fun ret mem ->
+      match ret with
+      | Some (id, _) ->
+          let itv = Itv.make (Itv.Bound.of_int (-1)) Itv.Bound.PInf in
+          Dom.Mem.add_stack (Loc.of_id id) (Dom.Val.of_itv itv) mem
+      | _ -> mem
+
+  let model_natual_itv : (Ident.t * Typ.t) option -> Dom.Mem.astate -> Dom.Mem.astate
     = fun ret mem ->
       match ret with
       | Some (id, _) -> Dom.Mem.add_stack (Loc.of_id id) Dom.Val.nat_itv mem
       | _ -> mem
 
-  let model_unknown_itv : (Ident.t * Typ.t) option -> Dom.Mem.t -> Dom.Mem.t
+  let model_unknown_itv : (Ident.t * Typ.t) option -> Dom.Mem.astate -> Dom.Mem.astate
     = fun ret mem ->
       match ret with
         Some (id, _) -> Dom.Mem.add_stack (Loc.of_id id) Dom.Val.top_itv mem
       | None -> mem
 
   let model_infer_print
-    : (Exp.t * Typ.t) list -> Dom.Mem.t -> Location.t -> Dom.Mem.t
+    : (Exp.t * Typ.t) list -> Dom.Mem.astate -> Location.t -> Dom.Mem.astate
     = fun params mem loc ->
       match params with
       | (e, _) :: _ ->
-          (* TODO: only print when debug mode? *)
-          F.fprintf F.err_formatter "@[<v>=== Infer Print === at %a@,"
-            Location.pp loc;
-          Dom.Val.pp F.err_formatter (Sem.eval e mem loc);
-          F.fprintf F.err_formatter "@]";
+          if Config.bo_debug >= 1 then
+            L.err "@[<v>=== Infer Print === at %a@,%a@]%!"
+              Location.pp loc
+              Dom.Val.pp (Sem.eval e mem loc);
           mem
       | _ -> mem
 
+  let model_infer_set_array_length pname node params mem loc =
+    match params with
+    | (Exp.Lvar array_pvar, {Typ.desc=Typ.Tarray (typ, _, stride0)})
+      :: (length_exp, _) :: [] ->
+        let length = Sem.eval length_exp mem loc |> Dom.Val.get_itv in
+        let stride = Option.map ~f:IntLit.to_int stride0 in
+        let v = Sem.eval_array_alloc pname node typ ?stride Itv.zero length 0 1 in
+        mem
+        |> Dom.Mem.add_stack (Loc.of_pvar array_pvar) v
+        |> set_uninitialized typ (Dom.Val.get_array_locs v)
+    | _ :: _ :: [] ->
+        failwithf "Unexpected type of arguments for __set_array_length()"
+    | _ ->
+        failwithf "Unexpected number of arguments for __set_array_length()"
+
   let handle_unknown_call
     : Typ.Procname.t -> (Ident.t * Typ.t) option -> Typ.Procname.t
-      -> (Exp.t * Typ.t) list -> CFG.node -> Dom.Mem.t -> Location.t
-      -> Dom.Mem.t
+      -> (Exp.t * Typ.t) list -> CFG.node -> Dom.Mem.astate -> Location.t
+      -> Dom.Mem.astate
     = fun pname ret callee_pname params node mem loc ->
       match Typ.Procname.get_method callee_pname with
       | "malloc"
       | "__new_array" -> model_malloc pname ret params node mem
       | "realloc" -> model_realloc pname ret params node mem
-      | "strlen"
-      | "fgetc" -> model_natual_itv ret mem
+      | "strlen" -> model_natual_itv ret mem
+      | "fgetc" -> model_fgetc ret mem
       | "infer_print" -> model_infer_print params mem loc
+      | "__set_array_length" -> model_infer_set_array_length pname node params mem loc
       | _ -> model_unknown_itv ret mem
 
   let rec declare_array
-    : Typ.Procname.t -> CFG.node -> Loc.t -> Typ.t -> IntLit.t -> inst_num:int
-    -> dimension:int -> Dom.Mem.astate -> Dom.Mem.astate
-    = fun pname node loc typ len ~inst_num ~dimension mem ->
-      let size = IntLit.to_int len |> Itv.of_int in
+    : Typ.Procname.t -> CFG.node -> Loc.t -> Typ.t -> length:IntLit.t option -> ?stride:int
+    -> inst_num:int -> dimension:int -> Dom.Mem.astate -> Dom.Mem.astate
+    = fun pname node loc typ ~length ?stride ~inst_num ~dimension mem ->
+      let size = Option.value_map ~default:Itv.top ~f:Itv.of_int_lit length in
       let arr =
-        Sem.eval_array_alloc pname node typ Itv.zero size inst_num dimension
+        Sem.eval_array_alloc pname node typ Itv.zero size ?stride inst_num dimension
       in
       let mem =
         if Int.equal dimension 1
@@ -116,10 +145,10 @@ struct
       let loc =
         Loc.of_allocsite (Sem.get_allocsite pname node inst_num dimension)
       in
-      match typ with
-      | Typ.Tarray (typ, Some len) ->
-          declare_array pname node loc typ len ~inst_num
-            ~dimension:(dimension + 1) mem
+      match typ.Typ.desc with
+      | Typ.Tarray (typ, length, stride) ->
+          declare_array pname node loc typ ~length ?stride:(Option.map ~f:IntLit.to_int stride)
+            ~inst_num ~dimension:(dimension + 1) mem
       | _ -> mem
 
   let declare_symbolic_array
@@ -140,10 +169,10 @@ struct
       in
       let decl_fld (mem, sym_num) (fn, typ, _) =
         let loc =
-          mem |> Dom.Mem.find_heap loc |> Dom.Val.get_all_locs |> PowLoc.choose
+          mem |> Dom.Mem.find_heap loc |> Dom.Val.get_array_locs |> PowLoc.choose
         in
         let field = Loc.append_field loc fn in
-        match typ with
+        match typ.Typ.desc with
         | Typ.Tint _
         | Typ.Tfloat _ ->
             let v = Dom.Val.make_sym pname sym_num in
@@ -155,9 +184,12 @@ struct
               Sem.eval_array_alloc pname node typ offset size inst_num dimension
             in
             (Dom.Mem.add_heap field v mem, sym_num + 4)
-        | _ -> (mem, sym_num)
+        | _ ->
+            if Config.bo_debug >= 3 then
+              L.err "decl_fld of unhandled type: %a@." (Typ.pp Pp.text) typ;
+            (mem, sym_num)
       in
-      match typ with
+      match typ.Typ.desc with
       | Typ.Tstruct typename ->
           (match Tenv.lookup tenv typename with
            | Some str ->
@@ -166,11 +198,11 @@ struct
       | _ -> (mem, sym_num + 6)
 
   let declare_symbolic_parameter
-    : Procdesc.t -> Tenv.t -> CFG.node -> int -> Dom.Mem.t -> Dom.Mem.t
+    : Procdesc.t -> Tenv.t -> CFG.node -> int -> Dom.Mem.astate -> Dom.Mem.astate
     = fun pdesc tenv node inst_num mem ->
       let pname = Procdesc.get_proc_name pdesc in
       let add_formal (mem, inst_num, sym_num) (pvar, typ) =
-        match typ with
+        match typ.Typ.desc with
         | Typ.Tint _ ->
             let v = Dom.Val.make_sym pname sym_num in
             let mem = Dom.Mem.add_heap (Loc.of_pvar pvar) v mem in
@@ -181,14 +213,17 @@ struct
                 ~inst_num ~sym_num ~dimension:1 mem
             in
             (mem, inst_num + 1, sym_num)
-        | _ -> (mem, inst_num, sym_num) (* TODO: add other cases if necessary *)
+        | _ ->
+            if Config.bo_debug >= 3 then
+              L.err "declare_symbolic_parameter of unhandled type: %a@." (Typ.pp Pp.text) typ;
+            (mem, inst_num, sym_num) (* TODO: add other cases if necessary *)
       in
       List.fold ~f:add_formal ~init:(mem, inst_num, 0) (Sem.get_formals pdesc)
       |> fst3
 
   let instantiate_ret
     : Tenv.t -> Procdesc.t option -> Typ.Procname.t -> (Exp.t * Typ.t) list
-      -> Dom.Mem.t -> Dom.Summary.t -> Location.t -> Dom.Val.astate
+      -> Dom.Mem.astate -> Dom.Summary.t -> Location.t -> Dom.Val.astate
     = fun tenv callee_pdesc callee_pname params caller_mem summary loc ->
       let callee_entry_mem = Dom.Summary.get_input summary in
       let callee_exit_mem = Dom.Summary.get_output summary in
@@ -201,34 +236,32 @@ struct
           let ret_val = Dom.Mem.find_heap ret_loc callee_exit_mem in
           Dom.Val.subst ret_val subst_map
           |> Dom.Val.normalize    (* normalize bottom *)
-      | _ -> Dom.Val.bot
+      | _ -> Dom.Val.top_itv
 
-  let print_debug_info : Sil.instr -> Dom.Mem.t -> Dom.Mem.t -> unit
+  let print_debug_info : Sil.instr -> Dom.Mem.astate -> Dom.Mem.astate -> unit
     = fun instr pre post ->
       if Config.bo_debug >= 2 then
         begin
-          F.fprintf F.err_formatter "@.@.================================@.";
-          F.fprintf F.err_formatter "@[<v 2>Pre-state : @,";
-          Dom.Mem.pp F.err_formatter pre;
-          F.fprintf F.err_formatter "@]@.@.";
-          Sil.pp_instr Pp.text F.err_formatter instr;
-          F.fprintf F.err_formatter "@.@.";
-          F.fprintf F.err_formatter "@[<v 2>Post-state : @,";
-          Dom.Mem.pp F.err_formatter post;
-          F.fprintf F.err_formatter "@]@.";
-          F.fprintf F.err_formatter "================================@.@."
+          L.err "@\n@\n================================@\n";
+          L.err "@[<v 2>Pre-state : @,%a" Dom.Mem.pp pre;
+          L.err "@]@\n@\n%a" (Sil.pp_instr Pp.text) instr;
+          L.err "@\n@\n";
+          L.err "@[<v 2>Post-state : @,%a" Dom.Mem.pp post;
+          L.err "@]@\n";
+          L.err "================================@\n@."
         end
 
   let exec_instr
-    : Dom.Mem.t -> extras ProcData.t -> CFG.node -> Sil.instr -> Dom.Mem.astate
+    : Dom.Mem.astate -> extras ProcData.t -> CFG.node -> Sil.instr -> Dom.Mem.astate
     = fun mem { pdesc; tenv; extras } node instr ->
       let pname = Procdesc.get_proc_name pdesc in
       let try_decl_arr (mem, inst_num) (pvar, typ) =
-        match typ with
-        | Typ.Tarray (typ, Some len) ->
-            let loc = Loc.of_var (Var.of_pvar pvar) in
+        match typ.Typ.desc with
+        | Typ.Tarray (typ, length, stride0) ->
+            let loc = Loc.of_pvar pvar in
+            let stride = Option.map ~f:IntLit.to_int stride0 in
             let mem =
-              declare_array pname node loc typ len ~inst_num ~dimension:1 mem
+              declare_array pname node loc typ ~length ?stride ~inst_num ~dimension:1 mem
             in
             (mem, inst_num + 1)
         | _ -> (mem, inst_num)
@@ -308,10 +341,10 @@ struct
           let offset = ArrayBlk.offsetof arr in
           let idx = (if is_plus then Itv.plus else Itv.minus) offset idx in
           (if Config.bo_debug >= 2 then
-             (F.fprintf F.err_formatter "@[<v 2>Add condition :@,";
-              F.fprintf F.err_formatter "array: %a@," ArrayBlk.pp arr;
-              F.fprintf F.err_formatter "  idx: %a@," Itv.pp idx;
-              F.fprintf F.err_formatter "@]@."));
+             (L.err "@[<v 2>Add condition :@,";
+              L.err "array: %a@," ArrayBlk.pp arr;
+              L.err "  idx: %a@," Itv.pp idx;
+              L.err "@]@."));
           if size <> Itv.bot && idx <> Itv.bot then
             Dom.ConditionSet.add_bo_safety pname loc site ~size ~idx cond_set
           else cond_set
@@ -319,7 +352,7 @@ struct
 
   let instantiate_cond
     : Tenv.t -> Typ.Procname.t -> Procdesc.t option -> (Exp.t * Typ.t) list
-      -> Dom.Mem.t -> Summary.payload -> Location.t -> Dom.ConditionSet.t
+      -> Dom.Mem.astate -> Summary.payload -> Location.t -> Dom.ConditionSet.t
     = fun tenv caller_pname callee_pdesc params caller_mem summary loc ->
       let callee_entry_mem = Dom.Summary.get_input summary in
       let callee_cond = Dom.Summary.get_cond_set summary in
@@ -332,22 +365,19 @@ struct
           Dom.ConditionSet.subst callee_cond subst_map caller_pname pname loc
       | _ -> callee_cond
 
-  let print_debug_info : Sil.instr -> Dom.Mem.t -> Dom.ConditionSet.t -> unit
+  let print_debug_info : Sil.instr -> Dom.Mem.astate -> Dom.ConditionSet.t -> unit
     = fun instr pre cond_set ->
       if Config.bo_debug >= 2 then
-        (F.fprintf F.err_formatter "@.@.================================@.";
-         F.fprintf F.err_formatter "@[<v 2>Pre-state : @,";
-         Dom.Mem.pp F.err_formatter pre;
-         F.fprintf F.err_formatter "@]@.@.";
-         Sil.pp_instr Pp.text F.err_formatter instr;
-         F.fprintf F.err_formatter "@[<v 2>@.@.";
-         Dom.ConditionSet.pp F.err_formatter cond_set;
-         F.fprintf F.err_formatter "@]@.";
-         F.fprintf F.err_formatter "================================@.@.")
+        (L.err "@\n@\n================================@\n";
+         L.err "@[<v 2>Pre-state : @,%a" Dom.Mem.pp pre;
+         L.err "@]@\n@\n%a" (Sil.pp_instr Pp.text) instr;
+         L.err "@[<v 2>@\n@\n%a" Dom.ConditionSet.pp cond_set;
+         L.err "@]@\n";
+         L.err "================================@\n@.")
 
   let collect_instr
-    : extras ProcData.t -> CFG.node -> Dom.ConditionSet.t * Dom.Mem.t
-      -> Sil.instr -> Dom.ConditionSet.t * Dom.Mem.t
+    : extras ProcData.t -> CFG.node -> Dom.ConditionSet.t * Dom.Mem.astate
+      -> Sil.instr -> Dom.ConditionSet.t * Dom.Mem.astate
     = fun ({ pdesc; tenv; extras } as pdata) node (cond_set, mem) instr ->
       let pname = Procdesc.get_proc_name pdesc in
       let cond_set =
@@ -370,7 +400,7 @@ struct
       (cond_set, mem)
 
   let collect_instrs
-    : extras ProcData.t -> CFG.node -> Sil.instr list -> Dom.Mem.t
+    : extras ProcData.t -> CFG.node -> Sil.instr list -> Dom.Mem.astate
       -> Dom.ConditionSet.t -> Dom.ConditionSet.t
     = fun pdata node instrs mem cond_set ->
       List.fold ~f:(collect_instr pdata node) ~init:(cond_set, mem) instrs
@@ -419,7 +449,7 @@ let compute_post
   = fun { pdesc; tenv; extras = get_pdesc } ->
     let cfg = CFG.from_pdesc pdesc in
     let pdata = ProcData.make pdesc tenv get_pdesc in
-    let inv_map = Analyzer.exec_pdesc ~initial:Dom.Mem.bot pdata in
+    let inv_map = Analyzer.exec_pdesc ~initial:Dom.Mem.init pdata in
     let entry_mem =
       let entry_id = CFG.id (CFG.start_node cfg) in
       Analyzer.extract_post entry_id inv_map
@@ -437,10 +467,9 @@ let compute_post
 
 let print_summary : Typ.Procname.t -> Dom.Summary.t -> unit
   = fun proc_name s ->
-    F.fprintf F.err_formatter "@.@[<v 2>Summary of %a :@,"
-      Typ.Procname.pp proc_name;
-    Dom.Summary.pp_summary F.err_formatter s;
-    F.fprintf F.err_formatter "@]@."
+    L.err "@\n@[<v 2>Summary of %a :@,%a@]@."
+      Typ.Procname.pp proc_name
+      Dom.Summary.pp_summary s
 
 let checker : Callbacks.proc_callback_args -> Specs.summary
   = fun ({ summary } as callback) ->

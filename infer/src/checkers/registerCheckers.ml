@@ -14,32 +14,31 @@ open! IStd
 module L = Logging
 module F = Format
 
+let enabled_by_default =
+  (* True when no checker is explicitely enabled from the command line *)
+  let open Config in
+  not (biabduction || bufferoverrun || checkers_repeated_calls || crashcontext
+       || eradicate || quandary || siof || threadsafety)
+
 (** Flags to activate checkers. *)
 let active_procedure_checkers () =
 
   let java_checkers =
     let l =
       [
-        Checkers.callback_check_access, false;
-        Checkers.callback_monitor_nullcheck, false;
-        Checkers.callback_test_state , false;
-        Checkers.callback_checkVisibleForTesting, false;
-        Checkers.callback_check_write_to_parcel, false;
-        Checkers.callback_find_deserialization, false;
-        CheckTraceCallSequence.callback_check_trace_call_sequence, false;
-        Dataflow.callback_test_dataflow, false;
-        FragmentRetainsViewChecker.callback_fragment_retains_view, Config.checkers_enabled;
-        SqlChecker.callback_sql, false;
+        FragmentRetainsViewChecker.callback_fragment_retains_view, enabled_by_default
+                                                                   || Config.fragment_retains_view;
         Eradicate.callback_eradicate, Config.eradicate;
         BoundedCallTree.checker, Config.crashcontext;
-        JavaTaintAnalysis.checker, Config.quandary;
-        Checkers.callback_check_field_access, false;
-        ImmutableChecker.callback_check_immutable_cast, Config.checkers_enabled;
+        JavaTaintAnalysis.checker, Config.quandary || enabled_by_default;
+        ImmutableChecker.callback_check_immutable_cast, enabled_by_default
+                                                        || Config.immutable_cast;
         RepeatedCallsChecker.callback_check_repeated_calls, Config.checkers_repeated_calls;
-        PrintfArgs.callback_printf_args, Config.checkers_enabled;
-        AnnotationReachability.checker, Config.checkers_enabled;
+        PrintfArgs.callback_printf_args, enabled_by_default || Config.printf_args;
+        AnnotationReachability.checker, enabled_by_default || Config.annotation_reachability;
         BufferOverrunChecker.checker, Config.bufferoverrun;
-        ThreadSafety.analyze_procedure, Config.threadsafety || Config.checkers_enabled || Config.permsafety;
+        ThreadSafety.analyze_procedure, enabled_by_default || Config.threadsafety;
+        Interproc.analyze_procedure, Config.biabduction;
       ] in
     (* make sure SimpleChecker.ml is not dead code *)
     if false then (let module SC = SimpleChecker.Make in ());
@@ -47,22 +46,19 @@ let active_procedure_checkers () =
   let c_cpp_checkers =
     let l =
       [
-        Checkers.callback_print_c_method_calls, false;
-        CheckDeadCode.callback_check_dead_code, false;
-        Checkers.callback_print_access_to_globals, false;
         ClangTaintAnalysis.checker, Config.quandary;
-        Siof.checker, Config.checkers_enabled;
+        Siof.checker, enabled_by_default || Config.siof;
+        ThreadSafety.analyze_procedure, Config.threadsafety;
         BufferOverrunChecker.checker, Config.bufferoverrun;
+        Interproc.analyze_procedure, Config.biabduction;
       ] in
     List.map ~f:(fun (x, y) -> (x, y, Some Config.Clang)) l in
 
   java_checkers @ c_cpp_checkers
 
 let active_cluster_checkers () =
-  [(Checkers.callback_check_cluster_access, false, Some Config.Java);
-   (Perms.file_analysis, Config.permsafety, Some Config.Java);
-   (ThreadSafety.file_analysis, Config.threadsafety || Config.checkers_enabled, Some Config.Java);
-  ]
+  [ (Perms.file_analysis, enabled_by_default, Some Config.Java);
+    (ThreadSafety.file_analysis, enabled_by_default || Config.threadsafety, Some Config.Java)]
 
 let register () =
   let register registry (callback, active, language_opt) =

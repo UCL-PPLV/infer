@@ -116,13 +116,15 @@ let spec_rename_vars pname spec =
 
 (** Find and number the specs for [proc_name],
     after renaming their vars, and also return the parameters *)
-let spec_find_rename trace_call (proc_name : Typ.Procname.t)
+let spec_find_rename trace_call summary
   : (int * Prop.exposed Specs.spec) list * Pvar.t list =
+  let proc_name = Specs.get_proc_name summary in
   try
     let count = ref 0 in
     let f spec =
       incr count; (!count, spec_rename_vars proc_name spec) in
-    let specs, formals = Specs.get_specs_formals proc_name in
+    let specs = Specs.get_specs_from_payload summary in
+    let formals = Specs.get_formals summary in
     if List.is_empty specs then
       begin
         trace_call Specs.CallStats.CR_not_found;
@@ -470,7 +472,7 @@ let texp_star tenv texp1 texp2 =
           | 0 -> ftal_sub ftal1' ftal2'
           | _ -> ftal_sub ftal1 ftal2' end in
   let typ_star (t1: Typ.t) (t2: Typ.t) =
-    match t1, t2 with
+    match t1.desc, t2.desc with
     | Tstruct name1, Tstruct name2
       when Typ.Name.is_same_type name1 name2 -> (
         match Tenv.lookup tenv name1, Tenv.lookup tenv name2 with
@@ -482,8 +484,8 @@ let texp_star tenv texp1 texp2 =
     | _ ->
         t1 in
   match texp1, texp2 with
-  | Exp.Sizeof (t1, len1, st1), Exp.Sizeof (t2, _, st2) ->
-      Exp.Sizeof (typ_star t1 t2, len1, Subtype.join st1 st2)
+  | Exp.Sizeof ({typ=t1; subtype=st1} as sizeof1), Exp.Sizeof {typ=t2; subtype=st2} ->
+      Exp.Sizeof {sizeof1 with typ=typ_star t1 t2; subtype=Subtype.join st1 st2}
   | _ ->
       texp1
 
@@ -634,7 +636,7 @@ let prop_get_exn_name pname prop =
   let ret_pvar = Exp.Lvar (Pvar.get_ret_pvar pname) in
   let rec search_exn e = function
     | [] -> None
-    | Sil.Hpointsto (e1, _, Sizeof (Tstruct name, _, _)) :: _
+    | Sil.Hpointsto (e1, _, Sizeof {typ={desc=Tstruct name}}) :: _
       when Exp.equal e1 e ->
         Some name
     | _ :: tl -> search_exn e tl in
@@ -882,7 +884,7 @@ let mk_actual_precondition tenv prop actual_params formal_params =
     Prop.mk_ptsto tenv
       (Exp.Lvar formal_var)
       (Sil.Eexp (actual_e, Sil.inst_actual_precondition))
-      (Exp.Sizeof (actual_t, None, Subtype.exact)) in
+      (Exp.Sizeof {typ=actual_t; nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
   let instantiated_formals = List.map ~f:mk_instantiation formals_actuals in
   let actual_pre = Prop.prop_sigma_star prop instantiated_formals in
   Prop.normalize tenv actual_pre
@@ -1286,15 +1288,14 @@ let exe_call_postprocess tenv ret_id trace_call callee_pname callee_attrs loc re
 
 (** Execute the function call and return the list of results with return value *)
 let exe_function_call
-    callee_attrs tenv ret_id caller_pdesc callee_pname loc actual_params prop path =
+    callee_summary tenv ret_id caller_pdesc callee_pname loc actual_params prop path =
+  let callee_attrs = Specs.get_attributes callee_summary in
   let caller_pname = Procdesc.get_proc_name caller_pdesc in
+  let caller_summary = Specs.get_summary_unsafe "exe_function_call" caller_pname in
   let trace_call res =
-    match Specs.get_summary caller_pname with
-    | None -> ()
-    | Some summary ->
-        Specs.CallStats.trace
-          summary.Specs.stats.Specs.call_stats callee_pname loc res !Config.footprint in
-  let spec_list, formal_params = spec_find_rename trace_call callee_pname in
+    Specs.CallStats.trace
+      caller_summary.Specs.stats.Specs.call_stats callee_pname loc res !Config.footprint in
+  let spec_list, formal_params = spec_find_rename trace_call callee_summary in
   let nspecs = List.length spec_list in
   L.d_strln
     ("Found " ^

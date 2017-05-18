@@ -14,46 +14,58 @@ module L = Logging
 
 module SourceKind = struct
   type t =
-    | PrivateData (** private user or device-specific data *)
-    | Intent
+    | Clipboard (** data read from the clipboard service *)
+    | Intent (** external Intent or a value read from one *)
     | Other (** for testing or uncategorized sources *)
+    | PrivateData (** private user or device-specific data *)
+    | UserControlledURI (** resource locator controller by user *)
     | Unknown
   [@@deriving compare]
 
   let unknown = Unknown
 
   let of_string = function
-    | "PrivateData" -> PrivateData
+    | "Clipboard" -> Clipboard
     | "Intent" -> Intent
+    | "PrivateData" -> PrivateData
+    | "UserControlledURI" -> UserControlledURI
     | _ -> Other
 
-  let external_sources = QuandaryConfig.Source.of_json Config.quandary_sources
+  let external_sources =
+    List.map
+      ~f:(fun { QuandaryConfig.Source.procedure; kind; } -> Str.regexp procedure, kind)
+      (QuandaryConfig.Source.of_json Config.quandary_sources)
 
-  let get pname tenv = match pname with
+  let get pname tenv =
+    let return = None in
+    match pname with
     | Typ.Procname.Java pname ->
         begin
           match Typ.Procname.java_get_class_name pname, Typ.Procname.java_get_method pname with
           | "android.location.Location",
             ("getAltitude" | "getBearing" | "getLatitude" | "getLongitude" | "getSpeed") ->
-              Some PrivateData
+              Some (PrivateData, return)
           | "android.telephony.TelephonyManager",
             ("getDeviceId" |
              "getLine1Number" |
              "getSimSerialNumber" |
              "getSubscriberId" |
              "getVoiceMailNumber") ->
-              Some PrivateData
+              Some (PrivateData, return)
           | "com.facebook.infer.builtins.InferTaint", "inferSecretSource" ->
-              Some Other
+              Some (Other, return)
           | class_name, method_name ->
               let taint_matching_supertype typename _ =
                 match Typ.Name.name typename, method_name with
                 | "android.app.Activity", "getIntent" ->
-                    Some Intent
+                    Some (Intent, return)
                 | "android.content.Intent", "getStringExtra" ->
-                    Some Intent
+                    Some (Intent, return)
                 | "android.content.SharedPreferences", "getString" ->
-                    Some PrivateData
+                    Some (PrivateData, return)
+                | ("android.content.ClipboardManager" | "android.text.ClipboardManager"),
+                  ("getPrimaryClip" | "getText") ->
+                    Some (Clipboard, return)
                 | _ ->
                     None in
               let kind_opt =
@@ -68,9 +80,9 @@ module SourceKind = struct
                     (* check the list of externally specified sources *)
                     let procedure = class_name ^ "." ^ method_name in
                     List.find_map
-                      ~f:(fun (source_spec : QuandaryConfig.Source.t) ->
-                          if Str.string_match source_spec.procedure procedure 0
-                          then Some (of_string source_spec.kind)
+                      ~f:(fun (procedure_regex, kind) ->
+                          if Str.string_match procedure_regex procedure 0
+                          then Some (of_string kind, return)
                           else None)
                       external_sources
               end
@@ -83,8 +95,8 @@ module SourceKind = struct
       name, typ, None in
     let taint_formals_with_types type_strs kind formals =
       let taint_formal_with_types ((formal_name, formal_typ) as formal) =
-        let matches_classname = match formal_typ with
-          | Typ.Tptr (Tstruct typename, _) ->
+        let matches_classname = match formal_typ.Typ.desc with
+          | Tptr ({desc=Tstruct typename}, _) ->
               List.mem ~equal:String.equal type_strs (Typ.Name.name typename)
           | _ ->
               false in
@@ -99,7 +111,8 @@ module SourceKind = struct
     match Procdesc.get_proc_name pdesc with
     | Typ.Procname.Java java_pname ->
         begin
-          match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
+          match Typ.Procname.java_get_class_name java_pname,
+                Typ.Procname.java_get_method java_pname with
           | "codetoanalyze.java.quandary.TaintedFormals", "taintedContextBad" ->
               taint_formals_with_types ["java.lang.Integer"; "java.lang.String"] Other formals
           | class_name, method_name ->
@@ -107,6 +120,42 @@ module SourceKind = struct
                 match Typ.Name.name typename, method_name with
                 | "android.app.Activity", ("onActivityResult" | "onNewIntent") ->
                     Some (taint_formals_with_types ["android.content.Intent"] Intent formals)
+                | "android.app.Service",
+                  ("onBind" |
+                   "onRebind" |
+                   "onStart" |
+                   "onStartCommand" |
+                   "onTaskRemoved" |
+                   "onUnbind") ->
+                    Some (taint_formals_with_types ["android.content.Intent"] Intent formals)
+                | "android.content.BroadcastReceiver", "onReceive" ->
+                    Some (taint_formals_with_types ["android.content.Intent"] Intent formals)
+                | "android.content.ContentProvider",
+                  ("bulkInsert" |
+                   "call" |
+                   "delete" |
+                   "insert" |
+                   "getType" |
+                   "openAssetFile" |
+                   "openFile" |
+                   "openPipeHelper" |
+                   "openTypedAssetFile" |
+                   "query" |
+                   "refresh" |
+                   "update") ->
+                    Some
+                      (taint_formals_with_types
+                         ["android.net.Uri"; "java.lang.String"] UserControlledURI formals)
+                | "android.webkit.WebViewClient",
+                  ("onLoadResource" | "shouldInterceptRequest" | "shouldOverrideUrlLoading") ->
+                    Some
+                      (taint_formals_with_types
+                         ["android.webkit.WebResourceRequest"; "java.lang.String"]
+                         UserControlledURI
+                         formals)
+                | "android.webkit.WebChromeClient",
+                  ("onJsAlert" | "onJsBeforeUnload" | "onJsConfirm" | "onJsPrompt") ->
+                    Some (taint_formals_with_types ["java.lang.String"] UserControlledURI formals)
                 | _ ->
                     None in
               begin
@@ -124,30 +173,42 @@ module SourceKind = struct
           "Non-Java procedure %a where only Java procedures are expected"
           Typ.Procname.pp procname
 
-  let pp fmt = function
-    | Intent -> F.fprintf fmt "Intent"
-    | PrivateData -> F.fprintf fmt "PrivateData"
-    | Other -> F.fprintf fmt "Other"
-    | Unknown -> F.fprintf fmt "Unknown"
+  let pp fmt kind =
+    F.fprintf fmt
+      (match kind with
+       | Clipboard -> "Clipboard"
+       | Intent -> "Intent"
+       | UserControlledURI -> "UserControlledURI"
+       | PrivateData -> "PrivateData"
+       | Other -> "Other"
+       | Unknown -> "Unknown")
 end
 
 module JavaSource = Source.Make(SourceKind)
 
 module SinkKind = struct
   type t =
-    | Intent (** sink that trusts an Intent *)
+    | CreateFile (** sink that creates a file *)
+    | CreateIntent (** sink that creates an Intent *)
     | JavaScript (** sink that passes its arguments to untrusted JS code *)
     | Logging (** sink that logs one or more of its arguments *)
+    | StartComponent (** sink that launches an Activity, Service, etc. *)
     | Other (** for testing or uncategorized sinks *)
   [@@deriving compare]
 
   let of_string = function
-    | "Intent" -> Intent
+    | "CreateFile" -> CreateFile
+    | "CreateIntent" -> CreateIntent
     | "JavaScript" -> JavaScript
     | "Logging" -> Logging
+    | "StartComponent" -> StartComponent
     | _ -> Other
 
-  let external_sinks = QuandaryConfig.Sink.of_json Config.quandary_sinks
+  let external_sinks =
+    List.map
+      ~f:(fun { QuandaryConfig.Sink.procedure; kind; index; } ->
+          Str.regexp procedure, kind, index)
+      (QuandaryConfig.Sink.of_json Config.quandary_sinks)
 
   let get pname actuals tenv =
     (* taint all the inputs of [pname]. for non-static procedures, taints the "this" parameter only
@@ -167,9 +228,14 @@ module SinkKind = struct
     match pname with
     | Typ.Procname.Java java_pname ->
         begin
-          match Typ.Procname.java_get_class_name java_pname, Typ.Procname.java_get_method java_pname with
+          match Typ.Procname.java_get_class_name java_pname,
+                Typ.Procname.java_get_method java_pname with
           | "android.util.Log", ("e" | "println" | "w" | "wtf") ->
               taint_all Logging ~report_reachable:true
+          | "java.io.File", "<init>"
+          | "java.nio.file.FileSystem", "getPath"
+          | "java.nio.file.Paths", "get" ->
+              taint_all CreateFile ~report_reachable:true
           | "com.facebook.infer.builtins.InferTaint", "inferSensitiveSink" ->
               [Other, 0, false]
           | class_name, method_name ->
@@ -177,11 +243,11 @@ module SinkKind = struct
                 match Typ.Name.name typename, method_name with
                 | "android.app.Activity",
                   ("startActivityFromChild" | "startActivityFromFragment") ->
-                    Some (taint_nth 1 Intent ~report_reachable:true)
+                    Some (taint_nth 1 StartComponent ~report_reachable:true)
                 | "android.app.Activity", "startIntentSenderForResult"  ->
-                    Some (taint_nth 2 Intent ~report_reachable:true)
+                    Some (taint_nth 2 StartComponent ~report_reachable:true)
                 | "android.app.Activity", "startIntentSenderFromChild"  ->
-                    Some (taint_nth 3 Intent ~report_reachable:true)
+                    Some (taint_nth 3 StartComponent ~report_reachable:true)
                 | "android.content.Context",
                   ("bindService" |
                    "sendBroadcast" |
@@ -199,9 +265,9 @@ module SinkKind = struct
                    "startNextMatchingActivity" |
                    "startService" |
                    "stopService") ->
-                    Some (taint_nth 0 Intent ~report_reachable:true)
+                    Some (taint_nth 0 StartComponent ~report_reachable:true)
                 | "android.content.Context", "startIntentSender" ->
-                    Some (taint_nth 1 Intent ~report_reachable:true)
+                    Some (taint_nth 1 StartComponent ~report_reachable:true)
                 | "android.content.Intent",
                   ("parseUri" |
                    "getIntent" |
@@ -212,33 +278,27 @@ module SinkKind = struct
                    "setDataAndType" |
                    "setDataAndTypeAndNormalize" |
                    "setPackage") ->
-                    Some (taint_nth 0 Intent ~report_reachable:true)
+                    Some (taint_nth 0 CreateIntent ~report_reachable:true)
                 | "android.content.Intent", "setClassName" ->
-                    Some (taint_all Intent ~report_reachable:true)
-                | "android.webkit.WebChromeClient",
-                  ("onJsAlert" | "onJsBeforeUnload" | "onJsConfirm" | "onJsPrompt") ->
-                    Some (taint_all JavaScript ~report_reachable:true)
+                    Some (taint_all CreateIntent ~report_reachable:true)
                 | "android.webkit.WebView",
-                  ("addJavascriptInterface" |
-                   "evaluateJavascript" |
+                  ("evaluateJavascript" |
                    "loadData" |
                    "loadDataWithBaseURL" |
                    "loadUrl" |
+                   "postUrl" |
                    "postWebMessage") ->
-                    Some (taint_all JavaScript ~report_reachable:true)
-                | "android.webkit.WebViewClient",
-                  ("onLoadResource" | "shouldInterceptRequest" | "shouldOverrideUrlLoading") ->
                     Some (taint_all JavaScript ~report_reachable:true)
                 | class_name, method_name ->
                     (* check the list of externally specified sinks *)
                     let procedure = class_name ^ "." ^ method_name in
                     List.find_map
-                      ~f:(fun (sink_spec : QuandaryConfig.Sink.t) ->
-                          if Str.string_match sink_spec.procedure procedure 0
+                      ~f:(fun (procedure_regex, kind, index) ->
+                          if Str.string_match procedure_regex procedure 0
                           then
-                            let kind = of_string sink_spec.kind in
+                            let kind = of_string kind in
                             try
-                              let n = int_of_string sink_spec.index in
+                              let n = int_of_string index in
                               Some (taint_nth n kind ~report_reachable:true)
                             with Failure _ ->
                               (* couldn't parse the index, just taint everything *)
@@ -260,11 +320,15 @@ module SinkKind = struct
     | pname when BuiltinDecl.is_declared pname -> []
     | pname -> failwithf "Non-Java procname %a in Java analysis@." Typ.Procname.pp pname
 
-  let pp fmt = function
-    | Intent -> F.fprintf fmt "Intent"
-    | JavaScript -> F.fprintf fmt "JavaScript"
-    | Logging -> F.fprintf fmt "Logging"
-    | Other -> F.fprintf fmt "Other"
+  let pp fmt kind =
+    F.fprintf fmt
+      (match kind with
+       | CreateFile -> "CreateFile"
+       | CreateIntent -> "CreateIntent"
+       | JavaScript -> "JavaScript"
+       | Logging -> "Logging"
+       | StartComponent -> "StartComponent"
+       | Other -> "Other")
 end
 
 module JavaSink = Sink.Make(SinkKind)
@@ -276,10 +340,19 @@ include
 
     let should_report source sink =
       match Source.kind source, Sink.kind sink with
-      | PrivateData, Logging
-      | Intent, Intent
-      | (Intent | PrivateData), JavaScript
-      | Other, _ | _, Other ->
+      | PrivateData, Logging (* logging private data issue *)
+      | Intent, StartComponent (* intent reuse issue *)
+      | Intent, CreateIntent (* intent configured with external values issue *)
+      | Intent, JavaScript (* external data flows into JS: remote code execution risk *)
+      | PrivateData, JavaScript (* leaking private data into JS *)
+      | UserControlledURI, (CreateIntent | StartComponent)
+      (* create intent/launch component from user-controlled URI *)
+      | UserControlledURI, CreateFile
+      (* create file from user-controller URI; potential path-traversal vulnerability *)
+      | Clipboard, (StartComponent | CreateIntent | JavaScript | CreateFile) ->
+          (* do something sensitive with user-controlled data from the clipboard *)
+          true
+      | Other, _ | _, Other -> (* for testing purposes, Other matches everything *)
           true
       | _ ->
           false

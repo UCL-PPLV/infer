@@ -11,9 +11,9 @@ open! IStd;
 
 
 /** Main module for the analysis after the capture phase */
-let module L = Logging;
+module L = Logging;
 
-let module F = Format;
+module F = Format;
 
 
 /** Create tasks to analyze an execution environment */
@@ -21,19 +21,11 @@ let analyze_exe_env_tasks cluster exe_env :Tasks.t => {
   L.log_progress_file ();
   Specs.clear_spec_tbl ();
   Random.self_init ();
-  if Config.checkers {
-    /* run the checkers only */
-    Tasks.create [
-      fun () => {
-        let call_graph = Exe_env.get_cg exe_env;
-        Callbacks.iterate_callbacks call_graph exe_env;
-        if Config.write_html {
-          Printer.write_all_html_files cluster
-        }
-      }
-    ]
-  } else {
-    /* run the full analysis */
+  let biabduction_only =
+    Config.equal_analyzer Config.analyzer Config.BiAbduction ||
+    Config.equal_analyzer Config.analyzer Config.Tracing;
+  if biabduction_only {
+    /* run the biabduction analysis only */
     Tasks.create
       (Interproc.do_analysis_closures exe_env)
       continuation::(
@@ -52,6 +44,17 @@ let analyze_exe_env_tasks cluster exe_env :Tasks.t => {
           None
         }
       )
+  } else {
+    /* run the registered checkers */
+    Tasks.create [
+      fun () => {
+        let call_graph = Exe_env.get_cg exe_env;
+        Callbacks.iterate_callbacks call_graph exe_env;
+        if Config.write_html {
+          Printer.write_all_html_files cluster
+        }
+      }
+    ]
   }
 };
 
@@ -136,7 +139,6 @@ let main makefile => {
   switch Config.cluster_cmdline {
   | Some fname => process_cluster_cmdline fname
   | None =>
-    print_stdout_legend ();
     if Config.allow_specs_cleanup {
       DB.Results_dir.clean_specs_dir ()
     };
@@ -145,41 +147,50 @@ let main makefile => {
     };
     let all_clusters = DB.find_source_dirs ();
     let clusters_to_analyze = List.filter f::cluster_should_be_analyzed all_clusters;
+    let n_clusters_to_analyze = List.length clusters_to_analyze;
     L.stdout
-      "Found %d (out of %d) source files to be analyzed in %s@."
-      (List.length clusters_to_analyze)
-      (List.length all_clusters)
+      "Found %d%s source file%s to analyze in %s@."
+      n_clusters_to_analyze
+      (
+        if (Config.reactive_mode || Option.is_some Ondemand.dirs_to_analyze) {
+          " (out of " ^ string_of_int (List.length all_clusters) ^ ")"
+        } else {
+          ""
+        }
+      )
+      (
+        if (Int.equal n_clusters_to_analyze 1) {
+          ""
+        } else {
+          "s"
+        }
+      )
       Config.results_dir;
-    if (makefile != "" || Config.per_procedure_parallelism) {
-      let is_java () =>
-        List.exists
-          f::(
-            fun cl => SourceFile.string_crc_has_extension ext::"java" (DB.source_dir_to_string cl)
-          )
-          all_clusters;
-      if (not Config.per_procedure_parallelism) {
-        ClusterMakefile.create_cluster_makefile clusters_to_analyze makefile
-      } else {
-        /* per-procedure parallelism */
-        if (is_java ()) {
-          /* Java uses ZipLib which is incompatible with forking */
-          L.stderr "Error: option --per-procedure-parallelism not supported with Java@.";
-          exit 1
-        };
-        L.stdout "per-procedure parallelism jobs:%d@." Config.jobs;
-        if (makefile != "") {
-          ClusterMakefile.create_cluster_makefile [] makefile
-        };
-        /* Prepare tasks one cluster at a time while executing in parallel */
-        let runner = Tasks.Runner.create jobs::Config.jobs;
-        let cluster_start_tasks i cluster => {
-          let tasks = analyze_cluster_tasks i cluster;
-          let aggregate_tasks = Tasks.aggregate size::1 tasks;
-          Tasks.Runner.start runner tasks::aggregate_tasks
-        };
-        List.iteri f::cluster_start_tasks clusters_to_analyze;
-        Tasks.Runner.complete runner
-      }
+    let is_java () =>
+      List.exists
+        f::(fun cl => DB.string_crc_has_extension ext::"java" (DB.source_dir_to_string cl))
+        all_clusters;
+    print_stdout_legend ();
+    if (Config.per_procedure_parallelism && not (is_java ())) {
+      /* Java uses ZipLib which is incompatible with forking */
+      /* per-procedure parallelism */
+      L.out "Per-procedure parallelism jobs: %d@." Config.jobs;
+      if (makefile != "") {
+        ClusterMakefile.create_cluster_makefile [] makefile
+      };
+      /* Prepare tasks one cluster at a time while executing in parallel */
+      let runner = Tasks.Runner.create jobs::Config.jobs;
+      let cluster_start_tasks i cluster => {
+        let tasks = analyze_cluster_tasks i cluster;
+        let aggregate_tasks = Tasks.aggregate size::Config.procedures_per_process tasks;
+        Tasks.Runner.start runner tasks::aggregate_tasks
+      };
+      List.iteri f::cluster_start_tasks clusters_to_analyze;
+      Tasks.Runner.complete runner
+    } else if (
+      makefile != ""
+    ) {
+      ClusterMakefile.create_cluster_makefile clusters_to_analyze makefile
     } else {
       /* This branch is reached when -j 1 is used */
       List.iteri f::analyze_cluster clusters_to_analyze;
@@ -187,4 +198,18 @@ let main makefile => {
     };
     output_json_makefile_stats clusters_to_analyze
   }
+};
+
+let register_perf_stats_report () => {
+  let stats_dir = Filename.concat Config.results_dir Config.backend_stats_dir_name;
+  let cluster =
+    switch Config.cluster_cmdline {
+    | Some cl => "_" ^ cl
+    | None => ""
+    };
+  let stats_base = Config.perf_stats_prefix ^ Filename.basename cluster ^ ".json";
+  let stats_file = Filename.concat stats_dir stats_base;
+  Utils.create_dir Config.results_dir;
+  Utils.create_dir stats_dir;
+  PerfStats.register_report_at_exit stats_file
 };

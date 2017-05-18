@@ -32,20 +32,20 @@ analyze: $(CURRENT_REPORT) $(PREVIOUS_REPORT)
 
 $(DIFFERENTIAL_REPORT): $(CURRENT_REPORT) $(PREVIOUS_REPORT)
 	$(QUIET)$(call silent_on_success,Computing results difference in $(TEST_REL_DIR),\
-	  $(INFER_BIN) -o $(INFER_OUT) --project-root $(CURDIR) --diff \
+	  $(INFER_BIN) -o $(INFER_OUT) --project-root $(CURDIR) reportdiff \
 		--report-current $(CURRENT_REPORT) --report-previous $(PREVIOUS_REPORT) \
 		$(DIFFERENTIAL_ARGS))
 
-$(EXPECTED_TEST_OUTPUT): $(DIFFERENTIAL_REPORT) $(INFERPRINT_BIN)
-	$(QUIET)$(INFERPRINT_BIN) \
+$(EXPECTED_TEST_OUTPUT): $(DIFFERENTIAL_REPORT) $(INFER_BIN)
+	$(QUIET)$(INFER_BIN) report \
 		--issues-fields $(INFERPRINT_ISSUES_FIELDS) \
 		--from-json-report $(INFER_OUT)/differential/introduced.json \
 		--issues-tests introduced.exp.test
-	$(QUIET)$(INFERPRINT_BIN) \
+	$(QUIET)$(INFER_BIN) report \
 		--issues-fields $(INFERPRINT_ISSUES_FIELDS) \
 		--from-json-report $(INFER_OUT)/differential/fixed.json \
 		--issues-tests fixed.exp.test
-	$(QUIET)$(INFERPRINT_BIN) \
+	$(QUIET)$(INFER_BIN) report \
 		--issues-fields $(INFERPRINT_ISSUES_FIELDS) \
 		--from-json-report $(INFER_OUT)/differential/preexisting.json \
 		--issues-tests preexisting.exp.test

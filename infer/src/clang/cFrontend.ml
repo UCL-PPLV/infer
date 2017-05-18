@@ -23,7 +23,7 @@ let compute_icfg trans_unit_ctx tenv ast =
   | Clang_ast_t.TranslationUnitDecl(_, decl_list, _, _) ->
       CFrontend_config.global_translation_unit_decls := decl_list;
       Logging.out_debug "@\n Start creating icfg@\n";
-      let cg = Cg.create (Some trans_unit_ctx.CFrontend_config.source_file) in
+      let cg = Cg.create trans_unit_ctx.CFrontend_config.source_file in
       let cfg = Cfg.create_cfg () in
       List.iter
         ~f:(CFrontend_declImpl.translate_one_declaration trans_unit_ctx tenv cg cfg `DeclTraversal)
@@ -55,6 +55,7 @@ let do_source_file translation_unit_context ast =
      changes here, it should be changed there as well*)
   let cfg_file = DB.source_dir_get_internal_file source_dir ".cfg" in
   let cg_file = DB.source_dir_get_internal_file source_dir ".cg" in
+  NullabilityPreanalysis.analysis cfg tenv;
   Cg.store_to_file cg_file call_graph;
   Cfg.store_cfg_to_file ~source_file cfg_file cfg;
   CGeneral_utils.sort_fields_tenv tenv;
@@ -66,7 +67,7 @@ let do_source_file translation_unit_context ast =
   || Config.frontend_tests
   || Option.is_some Config.icfg_dotty_outfile then
     (Dotty.print_icfg_dotty source_file cfg;
-     Cg.save_call_graph_dotty source_file Specs.get_specs call_graph);
+     Cg.save_call_graph_dotty source_file call_graph);
   Logging.out_debug "%a" Cfg.pp_proc_signatures cfg;
   (* NOTE: nothing should be written to source_dir after this *)
   DB.mark_file_updated (DB.source_dir_to_string source_dir)

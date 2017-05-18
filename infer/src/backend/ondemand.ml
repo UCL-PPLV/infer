@@ -27,7 +27,7 @@ let dirs_to_analyze =
       changed_files String.Set.empty in
   Option.map ~f:process_changed_files SourceFile.changed_files_set
 
-type analyze_ondemand = SourceFile.t -> Specs.summary -> Procdesc.t -> Specs.summary
+type analyze_ondemand = Specs.summary -> Procdesc.t -> Specs.summary
 
 type get_proc_desc = Typ.Procname.t -> Procdesc.t option
 
@@ -47,11 +47,17 @@ let unset_callbacks () =
 
 let nesting = ref 0
 
+let is_active, add_active, remove_active =
+  let currently_analyzed = ref Typ.Procname.Set.empty in
+  let is_active proc_name =
+    Typ.Procname.Set.mem proc_name !currently_analyzed
+  and add_active proc_name =
+    currently_analyzed := Typ.Procname.Set.add proc_name !currently_analyzed
+  and remove_active proc_name =
+    currently_analyzed := Typ.Procname.Set.remove proc_name !currently_analyzed in
+  (is_active, add_active, remove_active)
+
 let should_be_analyzed proc_name proc_attributes =
-  let currently_analyzed () =
-    match Specs.get_summary proc_name with
-    | None -> false
-    | Some summary -> Specs.is_active summary in
   let already_analyzed () =
     match Specs.get_summary proc_name with
     | Some summary ->
@@ -59,11 +65,11 @@ let should_be_analyzed proc_name proc_attributes =
     | None ->
         false in
   proc_attributes.ProcAttributes.is_defined && (* we have the implementation *)
-  not (currently_analyzed ()) && (* avoid infinite loops *)
+  not (is_active proc_name) && (* avoid infinite loops *)
   not (already_analyzed ()) (* avoid re-analysis of the same procedure *)
 
 let procedure_should_be_analyzed proc_name =
-  match AttributesTable.load_attributes ~cache:true proc_name with
+  match Specs.proc_resolve_attributes proc_name with
   | Some proc_attributes when Config.reactive_capture && not proc_attributes.is_defined ->
       (* try to capture procedure first *)
       let defined_proc_attributes = OndemandCapture.try_capture proc_attributes in
@@ -129,30 +135,15 @@ let run_proc_analysis ~propagate_exceptions analyze_proc curr_pdesc callee_pdesc
 
   let preprocess () =
     incr nesting;
-    let attributes_opt =
-      Specs.proc_resolve_attributes callee_pname in
-    let source =
-      Option.value_map
-        ~f:(fun (attributes : ProcAttributes.t) ->
-            let attribute_pname = attributes.proc_name in
-            if not (Typ.Procname.equal callee_pname attribute_pname) then
-              failwith ("ERROR: "^(Typ.Procname.to_string callee_pname)
-                        ^" not equal to "^(Typ.Procname.to_string attribute_pname));
-            attributes.loc.file)
-        ~default:SourceFile.empty
-        attributes_opt in
-    let callee_pdesc_option =
-      if Config.dynamic_dispatch = `Lazy
-      then Some callee_pdesc
-      else None in
-    let initial_summary = Specs.reset_summary callee_pname attributes_opt callee_pdesc_option in
-    Specs.set_status callee_pname Specs.Active;
-    source, initial_summary in
+    let initial_summary = Specs.reset_summary callee_pdesc in
+    add_active callee_pname;
+    initial_summary in
 
-  let postprocess source summary =
+  let postprocess summary =
     decr nesting;
     Specs.store_summary summary;
-    Printer.write_proc_html source callee_pdesc;
+    remove_active callee_pname;
+    Printer.write_proc_html callee_pdesc;
     log_elapsed_time ();
     summary in
 
@@ -163,15 +154,16 @@ let run_proc_analysis ~propagate_exceptions analyze_proc curr_pdesc callee_pdesc
       { summary.Specs.payload with Specs.preposts = Some []; } in
     let new_summary = { summary with Specs.stats; payload } in
     Specs.store_summary new_summary;
+    remove_active callee_pname;
     log_elapsed_time ();
     new_summary in
 
   let old_state = save_global_state () in
-  let source, initial_summary = preprocess () in
+  let initial_summary = preprocess () in
   try
     let summary =
-      analyze_proc source initial_summary callee_pdesc
-      |> postprocess source in
+      analyze_proc initial_summary callee_pdesc
+      |> postprocess in
     restore_global_state old_state;
     summary
   with exn ->
@@ -227,7 +219,7 @@ let analyze_proc_name ~propagate_exceptions curr_pdesc callee_pname : Specs.summ
           match callbacks.get_proc_desc callee_pname with
           | Some callee_pdesc ->
               analyze_proc_desc ~propagate_exceptions curr_pdesc callee_pdesc
-          | None -> None
+          | None -> Specs.get_summary callee_pname
         end
       else
         Specs.get_summary callee_pname

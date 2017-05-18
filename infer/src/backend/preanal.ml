@@ -30,7 +30,7 @@ let add_dispatch_calls pdesc cg tenv =
         when call_flags_is_dispatch call_flags ->
           (* the frontend should not populate the list of targets *)
           assert (List.is_empty call_flags.CallFlags.cf_targets);
-          let receiver_typ_no_ptr = match receiver_typ with
+          let receiver_typ_no_ptr = match receiver_typ.Typ.desc with
             | Typ.Tptr (typ', _) ->
                 typ'
             | _ ->
@@ -170,26 +170,6 @@ module NullifyAnalysis =
     (Scheduler.ReversePostorder (ProcCfg.Exceptional))
     (NullifyTransferFunctions)
 
-(** remove dead stores whose lhs is a frontend-created temporary variable. these dead stores are
-    created by copy-propagation *)
-let remove_dead_frontend_stores pdesc liveness_inv_map =
-  let is_live var instr_id liveness_inv_map =
-    match LivenessAnalysis.extract_pre instr_id liveness_inv_map with
-    | Some pre -> VarDomain.mem var pre
-    | None -> true in
-  let is_used_store (instr, instr_id_opt) =
-    match instr, instr_id_opt with
-    | Sil.Load (id, _, _, _), Some instr_id when not (Ident.is_none id) ->
-        is_live (Var.of_id id) instr_id liveness_inv_map
-    | _ -> true in
-  let node_remove_dead_stores node =
-    let instr_nodes = BackwardCfg.instr_ids node in
-    let instr_nodes' = IList.filter_changed is_used_store instr_nodes in
-    if not (phys_equal instr_nodes' instr_nodes)
-    then
-      Procdesc.Node.replace_instrs node (List.rev_map ~f:fst instr_nodes') in
-  Procdesc.iter_nodes node_remove_dead_stores pdesc
-
 let add_nullify_instrs pdesc tenv liveness_inv_map =
   let address_taken_vars =
     if Typ.Procname.is_java (Procdesc.get_proc_name pdesc)
@@ -203,7 +183,8 @@ let add_nullify_instrs pdesc tenv liveness_inv_map =
   let nullify_proc_cfg = ProcCfg.Exceptional.from_pdesc pdesc in
   let nullify_proc_data = ProcData.make pdesc tenv liveness_inv_map in
   let initial = VarDomain.empty, VarDomain.empty in
-  let nullify_inv_map = NullifyAnalysis.exec_cfg nullify_proc_cfg nullify_proc_data ~initial in
+  let nullify_inv_map =
+    NullifyAnalysis.exec_cfg nullify_proc_cfg nullify_proc_data ~initial ~debug:false in
 
   (* only nullify pvars that are local; don't nullify those that can escape *)
   let is_local pvar =
@@ -255,7 +236,8 @@ module CopyProp =
 let do_copy_propagation pdesc tenv =
   let proc_cfg = ExceptionalOneInstrPerNodeCfg.from_pdesc pdesc in
   let initial = CopyPropagation.Domain.empty in
-  let copy_prop_inv_map = CopyProp.exec_cfg proc_cfg (ProcData.make_default pdesc tenv) ~initial in
+  let copy_prop_inv_map =
+    CopyProp.exec_cfg proc_cfg (ProcData.make_default pdesc tenv) ~initial ~debug:false in
   (* [var_map] represents a chain of variable. copies v_0 -> v_1 ... -> v_n. starting from some
      ident v_j, we want to walk backward through the chain to find the lowest v_i that is also an
      ident. *)
@@ -301,7 +283,11 @@ let do_liveness pdesc tenv =
   let liveness_proc_cfg = BackwardCfg.from_pdesc pdesc in
   let initial = Liveness.Domain.empty in
   let liveness_inv_map =
-    LivenessAnalysis.exec_cfg liveness_proc_cfg (ProcData.make_default pdesc tenv) ~initial in
+    LivenessAnalysis.exec_cfg
+      liveness_proc_cfg
+      (ProcData.make_default pdesc tenv)
+      ~initial
+      ~debug:false in
   if Config.copy_propagation then do_copy_propagation pdesc tenv;
   add_nullify_instrs pdesc tenv liveness_inv_map;
   Procdesc.signal_did_preanalysis pdesc

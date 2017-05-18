@@ -15,14 +15,14 @@ AC_PREREQ([2.63])
 # - opam
 # - docker/Dockerfile
 AC_INIT([Infer],
-        [0.10.0],
+        [0.12.0],
         [https://github.com/facebook/infer/issues/])
 
 AC_CONFIG_SRCDIR([infer/src/IR/Sil.re])
 
 # WARNING: keep in sync with above
 INFER_MAJOR=0
-INFER_MINOR=10
+INFER_MINOR=12
 INFER_PATCH=0
 
 AC_SUBST([INFER_MAJOR])
@@ -38,6 +38,8 @@ AC_SUBST([IS_RELEASE_TREE])
 AC_CHECK_FILE([.facebook], [is_facebook_tree=yes], [is_facebook_tree=no])
 IS_FACEBOOK_TREE=$is_facebook_tree
 AC_SUBST([IS_FACEBOOK_TREE])
+
+AC_ARG_VAR([PATH], [the shell's $PATH list of directories to search for executables])
 
 # to compile the facebook-clang-plugins
 AC_ARG_VAR([CLANG_PREFIX], [directory where clang is installed (defaults=$PWD/facebook-clang-plugins/clang/install)])
@@ -168,7 +170,7 @@ fi
 AC_PROG_OCAML
 AC_ASSERT_PROG([ocamlc], [$OCAMLC])
 # check the version of OCaml
-AC_ASSERT_OCAML_MIN_VERSION([4.02.3])
+AC_ASSERT_OCAML_MIN_VERSION([4.04.0])
 AC_ASSERT_PROG([ocamlopt], [$OCAMLOPT])
 AC_ASSERT_PROG([ocamlbuild], [$OCAMLBUILD])
 AC_PROG_FINDLIB
@@ -241,8 +243,8 @@ AC_SUBST([ENABLE_OCAML_BINANNOT])
 # We use Buck to run the Infer tests
 AC_MSG_CHECKING([which version of Buck to use])
 buckversion_file=.buckversion
-oss_buck_version=763cbab643f2d5773fc1a1676301d7de86aef265
-fb_buck_version=7c0f2f731244fdb23d58b69520efd0cbad3e8f3a
+oss_buck_version=c8c96ad4f2664c9636865e162513c530823f6d5b
+fb_buck_version=a5e9b874a2ee0607cefa87367577583e187a83a4
 AS_IF([test x"$is_facebook_tree" = x"yes"],
   [buck_version=$fb_buck_version],
   [buck_version=$oss_buck_version])
@@ -290,10 +292,7 @@ AC_CHECK_PYTHON_MODULE([$PYTHON27], [lxml])
 
 AC_PATH_TOOL([XCPRETTY], [xcpretty], [no])
 
-BREW=no
-if which brew > /dev/null; then
-  BREW="$(which brew)"
-fi
+AC_PATH_TOOL([BREW], [brew], [no])
 
 # warn about broken pkg-config version for brew users
 if test "$BREW" != "no"; then
@@ -314,6 +313,8 @@ if test "$BREW" != "no"; then
     fi
   fi
 fi
+
+AC_CHECK_INFER_MAN_LAST_MODIFIED()
 
 AC_CONFIG_FILES([
   Makefile.autoconf

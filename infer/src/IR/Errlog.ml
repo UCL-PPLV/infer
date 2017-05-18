@@ -13,19 +13,52 @@ module Hashtbl = Caml.Hashtbl
 module L = Logging
 module F = Format
 
+type node_tag =
+  | Condition of bool
+  | Exception of Typ.name
+  | Procedure_start of Typ.Procname.t
+  | Procedure_end of Typ.Procname.t
+
 (** Element of a loc trace *)
 type loc_trace_elem = {
   lt_level : int; (** nesting level of procedure calls *)
   lt_loc : Location.t; (** source location at the current step in the trace *)
   lt_description : string; (** description of the current step in the trace *)
-  lt_node_tags : (string * string) list (** tags describing the node at the current location *)
+  lt_node_tags : node_tag list (** tags describing the node at the current location *)
 }
+
+let pp_loc_trace_elem fmt { lt_level; lt_loc; } =
+  F.fprintf fmt "%d %a" lt_level Location.pp lt_loc
+
+let pp_loc_trace fmt l =
+  PrettyPrintable.pp_collection ~pp_item:pp_loc_trace_elem fmt l
+
+let contains_exception loc_trace_elem =
+  let pred nt =
+    match nt with
+    | Exception _ -> true
+    | Condition _ | Procedure_start _ | Procedure_end _ -> false in
+  List.exists ~f:pred loc_trace_elem.lt_node_tags
 
 let make_trace_element lt_level lt_loc lt_description lt_node_tags =
   { lt_level; lt_loc; lt_description; lt_node_tags }
 
 (** Trace of locations *)
 type loc_trace = loc_trace_elem list
+
+let compute_local_exception_line loc_trace =
+  let compute_local_exception_line state step =
+    match state with
+    | `Stop _ -> state
+    | `Continue (last_known_step_at_level_zero_opt, line_opt) ->
+        let last_known_step_at_level_zero_opt' =
+          if Int.equal step.lt_level 0 then Some step
+          else last_known_step_at_level_zero_opt in
+        match last_known_step_at_level_zero_opt' with
+        | Some step_zero when contains_exception step ->
+            `Stop (last_known_step_at_level_zero_opt', Some step_zero.lt_loc.line)
+        | _ -> `Continue (last_known_step_at_level_zero_opt', line_opt) in
+  snd (List_.fold_until ~init:(`Continue (None, None)) ~f:compute_local_exception_line loc_trace)
 
 type node_id_key = {
   node_id : int;
@@ -98,11 +131,6 @@ type iter_fun = err_key -> err_data -> unit
 
 (** Apply f to nodes and error names *)
 let iter (f: iter_fun) (err_log: t) =
-  ErrLogHash.iter (fun err_key set ->
-      ErrDataSet.iter (fun err_data -> f err_key err_data) set)
-    err_log
-
-let iter_filter (f: iter_fun) (err_log: t) =
   ErrLogHash.iter (fun err_key set ->
       ErrDataSet.iter (fun err_data -> f err_key err_data) set)
     err_log

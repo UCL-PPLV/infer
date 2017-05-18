@@ -15,6 +15,7 @@ let count_newlines (path: string): int =
   In_channel.with_file path ~f
 
 type t =
+  | Invalid of string (* ML function of origin *)
   | Absolute of string
   | RelativeProjectRoot of string (* relative to project root *)
   | RelativeInferModel of string (* relative to infer models *)
@@ -50,10 +51,10 @@ let from_abs_path fname =
       | None -> Absolute fname_real (* fname_real is absolute already *)
     )
 
-let curr_encoding = `Enc_crc
 
 let to_string fname =
   match fname with
+  | Invalid origin -> "DUMMY from " ^ origin
   | RelativeInferModel path -> "INFER_MODEL/" ^ path
   | RelativeProjectRoot path
   | Absolute path -> path
@@ -64,6 +65,8 @@ let pp fmt fname =
 (* Checking if the path exists may be needed only in some cases, hence the flag check_exists *)
 let to_abs_path fname =
   match fname with
+  | Invalid origin ->
+      invalid_arg ("cannot be called with Invalid source file originating in " ^ origin)
   | RelativeProjectRoot path -> Filename.concat Config.project_root path
   | RelativeInferModel path -> Filename.concat Config.models_src_dir path
   | Absolute path -> path
@@ -77,51 +80,15 @@ let to_rel_path fname =
   | RelativeProjectRoot path -> path
   | _ -> to_abs_path fname
 
-let cutoff_length = 100
-let crc_token = '.'
+let invalid origin = Invalid origin
 
-let append_crc_cutoff ?(key="") name =
-  let name_up_to_cutoff =
-    if String.length name <= cutoff_length
-    then name
-    else String.sub name ~pos:0 ~len:cutoff_length in
-  let crc_str =
-    let name_for_crc = name ^ key in
-    Utils.string_crc_hex32 name_for_crc in
-  name_up_to_cutoff ^ Char.to_string crc_token ^ crc_str
+let is_invalid = function
+  | Invalid _ -> true
+  | _ -> false
 
-(* Lengh of .crc part: 32 characters of digest, plus 1 character of crc_token *)
-let dot_crc_len = 1 + 32
-
-let strip_crc str =
-  Core.Std.String.slice str 0 (- dot_crc_len)
-
-let string_crc_has_extension ~ext name_crc =
-  let name = strip_crc name_crc in
-  match Filename.split_extension name with
-  | (_, Some ext') -> String.equal ext ext'
-  | (_, None) -> false
-
-(** string encoding of a source file (including path) as a single filename *)
-let encoding source_file =
-  let prefix = match source_file with
-    | RelativeProjectRoot _ -> "P"
-    | RelativeInferModel _ -> "MOD"
-    | Absolute _ -> "ABS" in
-  let source_file_s = to_string source_file in
-  match curr_encoding with
-  | `Enc_base ->
-      Filename.basename source_file_s
-  | `Enc_path_with_underscores ->
-      prefix ^ Escape.escape_path source_file_s
-  | `Enc_crc ->
-      let base = Filename.basename source_file_s in
-      let dir = prefix ^ Filename.dirname source_file_s in
-      append_crc_cutoff ~key:dir base
-
-let empty = Absolute ""
 
 let is_infer_model source_file = match source_file with
+  | Invalid origin -> invalid_arg ("cannot be called with Invalid source file from " ^ origin)
   | RelativeProjectRoot _ | Absolute _ -> false
   | RelativeInferModel _ -> true
 
@@ -133,6 +100,7 @@ let is_cpp_model file =
   | _ -> false
 
 let is_under_project_root = function
+  | Invalid origin -> invalid_arg ("cannot be called with Invalid source file from " ^ origin)
   | RelativeProjectRoot _ -> true
   | Absolute _ | RelativeInferModel _ -> false
 

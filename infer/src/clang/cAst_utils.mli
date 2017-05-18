@@ -11,14 +11,12 @@ open! IStd
 
 (** Functions for transformations of ast nodes *)
 
-val is_type_nonnull : Clang_ast_t.type_ptr -> bool
-
 val get_fresh_pointer : unit -> Clang_ast_t.pointer
 
 val get_invalid_pointer : unit -> Clang_ast_t.pointer
 
 val type_from_unary_expr_or_type_trait_expr_info :
-  Clang_ast_t.unary_expr_or_type_trait_expr_info -> Clang_ast_t.type_ptr option
+  Clang_ast_t.unary_expr_or_type_trait_expr_info -> Clang_ast_t.qual_type option
 
 val get_decl : Clang_ast_t.pointer -> Clang_ast_t.decl option
 
@@ -32,7 +30,7 @@ val get_decl_opt_with_decl_ref : Clang_ast_t.decl_ref option -> Clang_ast_t.decl
 
 val get_property_of_ivar : Clang_ast_t.pointer -> Clang_ast_t.decl option
 
-val update_sil_types_map : Clang_ast_t.type_ptr -> Typ.t -> unit
+val update_sil_types_map : Clang_ast_t.type_ptr -> Typ.desc -> unit
 
 val update_enum_map : Clang_ast_t.pointer -> Exp.t -> unit
 
@@ -60,14 +58,10 @@ val get_desugared_type : Clang_ast_t.type_ptr -> Clang_ast_t.c_type option
     (RecordType, ObjCInterfaceType and None for others *)
 val get_decl_from_typ_ptr : Clang_ast_t.type_ptr -> Clang_ast_t.decl option
 
-(** returns string representation of type_ptr
-    NOTE: this doesn't expand type, it only converts type_ptr to string *)
-val string_of_type_ptr : Clang_ast_t.type_ptr -> string
-
 val name_of_typedef_type_info : Clang_ast_t.typedef_type_info -> QualifiedCppName.t
 
-(** returns name of typedef if type_ptr points to Typedef, None otherwise *)
-val name_opt_of_typedef_type_ptr : Clang_ast_t.type_ptr -> QualifiedCppName.t option
+(** returns name of typedef if qual_type points to Typedef, None otherwise *)
+val name_opt_of_typedef_qual_type : Clang_ast_t.qual_type -> QualifiedCppName.t option
 
 val string_of_qual_type : Clang_ast_t.qual_type -> string
 
@@ -75,18 +69,20 @@ val make_name_decl : string -> Clang_ast_t.named_decl_info
 
 val make_qual_name_decl : string list -> string -> Clang_ast_t.named_decl_info
 
-type type_ptr_to_sil_type =  Tenv.t -> Clang_ast_t.type_ptr -> Typ.t
+type qual_type_to_sil_type = Tenv.t -> Clang_ast_t.qual_type -> Typ.t
 
-val add_type_from_decl_ref : type_ptr_to_sil_type -> Tenv.t -> Clang_ast_t.decl_ref option ->
+val qual_type_of_decl_ptr : Clang_ast_t.pointer -> Clang_ast_t.qual_type
+
+val add_type_from_decl_ref_opt : qual_type_to_sil_type -> Tenv.t -> Clang_ast_t.decl_ref option ->
   bool -> unit
 
-val add_type_from_decl_ref_list : type_ptr_to_sil_type -> Tenv.t -> Clang_ast_t.decl_ref list ->
+val add_type_from_decl_ref_list : qual_type_to_sil_type -> Tenv.t -> Clang_ast_t.decl_ref list ->
   unit
 
 val get_function_decl_with_body : Clang_ast_t.pointer -> Clang_ast_t.decl option
 
 val get_info_from_decl_ref : Clang_ast_t.decl_ref ->
-  Clang_ast_t.named_decl_info * Clang_ast_t.pointer * Clang_ast_t.type_ptr
+  Clang_ast_t.named_decl_info * Clang_ast_t.pointer * Clang_ast_t.qual_type
 
 val exists_eventually_st : ('a -> Clang_ast_t.stmt -> bool) -> 'a -> Clang_ast_t.stmt -> bool
 
@@ -95,8 +91,6 @@ val is_syntactically_global_var : Clang_ast_t.decl -> bool
 
 (** true if a declaration is a constexpr variable *)
 val is_const_expr_var : Clang_ast_t.decl -> bool
-
-val is_ptr_to_objc_class : Clang_ast_t.c_type option -> string -> bool
 
 val full_name_of_decl_opt : Clang_ast_t.decl option -> QualifiedCppName.t
 
@@ -135,13 +129,15 @@ val get_super_ObjCImplementationDecl :
 val is_objc_if_descendant :
   ?blacklist:string list -> Clang_ast_t.decl option -> string list -> bool
 
-val type_ptr_to_objc_interface : Clang_ast_types.t_ptr -> Clang_ast_t.decl option
+val qual_type_to_objc_interface : Clang_ast_t.qual_type -> Clang_ast_t.decl option
 
-val type_ptr_is_typedef_named : Clang_ast_types.t_ptr -> string -> bool
+val qual_type_is_typedef_named : Clang_ast_t.qual_type -> string -> bool
 
 (** A class method that returns an instance of the class is a factory method. *)
 val is_objc_factory_method : Clang_ast_t.decl -> Clang_ast_t.decl -> bool
 
 val name_of_decl_ref_opt : Clang_ast_t.decl_ref option -> string option
 
-val sil_annot_of_type : Clang_ast_types.t_ptr -> Annot.Item.t
+val sil_annot_of_type : Clang_ast_t.qual_type -> Annot.Item.t
+
+val type_of_decl : Clang_ast_t.decl -> Clang_ast_t.type_ptr option

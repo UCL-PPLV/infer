@@ -50,6 +50,9 @@ struct
   let empty : t
     = M.empty
 
+  let is_empty : t -> bool
+    = M.is_empty
+
   let add : Symbol.t -> int -> t -> t
     = M.add
 
@@ -210,7 +213,7 @@ let of_sym : SymLinear.t -> t
 let is_symbolic : t -> bool
   = function
     | MInf | PInf | Bot -> false
-    | Linear (_, se) -> SymLinear.cardinal se > 0
+    | Linear (_, se) -> not (SymLinear.is_empty se)
     | MinMax _ -> true
 
 let opt_lift : ('a -> 'b -> bool) -> 'a option -> 'b option -> bool
@@ -856,6 +859,8 @@ let ub : t -> Bound.t
 let of_int : int -> astate
   = fun n -> NonBottom (ItvPure.of_int n)
 
+let of_int_lit n = of_int (IntLit.to_int n)
+
 let is_bot : t -> bool
   = fun x -> equal x Bottom
 
@@ -875,6 +880,9 @@ let pos : t
 
 let nat : t
   = NonBottom ItvPure.nat
+
+let unknown_bool : t
+  = NonBottom ItvPure.unknown_bool
 
 let make : Bound.t -> Bound.t -> t
   = fun l u -> if Bound.lt u l then Bottom else NonBottom (ItvPure.make l u)

@@ -26,6 +26,12 @@ module type WithBottom = sig
   val empty : astate
 end
 
+module type WithTop = sig
+  include S
+
+  val top : astate
+end
+
 module BottomLifted (Domain : S) = struct
   type astate =
     | Bottom
@@ -63,6 +69,46 @@ module BottomLifted (Domain : S) = struct
   let pp fmt = function
     | Bottom -> F.fprintf fmt "_|_"
     | NonBottom astate -> Domain.pp fmt astate
+end
+
+module TopLifted (Domain: S) = struct
+  type astate =
+    | Top
+    | NonTop of Domain.astate
+
+  let top = Top
+
+  let (<=) ~lhs ~rhs =
+    if phys_equal lhs rhs
+    then true
+    else
+      match lhs, rhs with
+      | _, Top -> true
+      | Top, _ -> false
+      | NonTop lhs, NonTop rhs -> Domain.(<=) ~lhs ~rhs
+
+  let join astate1 astate2 =
+    if phys_equal astate1 astate2
+    then astate1
+    else
+      match astate1, astate2 with
+      | Top, _
+      | _, Top -> Top
+      | NonTop a1, NonTop a2 -> NonTop (Domain.join a1 a2)
+
+  let widen ~prev ~next ~num_iters =
+    if phys_equal prev next
+    then prev
+    else
+      match prev, next with
+      | Top, _
+      | _, Top -> Top
+      | NonTop prev, NonTop next -> NonTop (Domain.widen ~prev ~next ~num_iters)
+
+  let pp fmt = function
+    | Top -> F.fprintf fmt "T"
+    | NonTop astate -> Domain.pp fmt astate
+
 end
 
 module Pair (Domain1 : S) (Domain2 : S) = struct
@@ -215,6 +261,20 @@ module BooleanAnd = struct
   let (<=) ~lhs ~rhs = lhs || not rhs
 
   let join = (&&)
+
+  let widen ~prev ~next ~num_iters:_ =
+    join prev next
+
+  let pp fmt astate =
+    F.fprintf fmt "%b" astate
+end
+
+module BooleanOr = struct
+  type astate = bool
+
+  let (<=) ~lhs ~rhs = not lhs || rhs
+
+  let join = (||)
 
   let widen ~prev ~next ~num_iters:_ =
     join prev next

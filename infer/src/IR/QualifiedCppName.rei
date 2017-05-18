@@ -33,6 +33,17 @@ let append_qualifier: t => qual::string => t;
 let extract_last: t => option (string, t);
 
 
+/** returns qualified name without template arguments. For example:
+    input: std::shared_ptr<int>::shared_ptr<long>
+    output: std::shared_ptr::shared_ptr */
+let strip_template_args: t => t;
+
+
+/** append template arguments to the last qualifier. Fails if qualified name is empty or it already has
+    template args */
+let append_template_args_to_last: t => args::string => t;
+
+
 /** returns list of qualifers */
 let to_list: t => list string;
 
@@ -77,7 +88,7 @@ let pp: Format.formatter => t => unit;
                                                           qualifiers to match
        does not match: ["folly","someFunction<int>", "BAD"] - same as previous example
    */
-let module Match: {
+module Match: {
   type quals_matcher;
   let of_fuzzy_qual_names: list string => quals_matcher;
   let match_qualifiers: quals_matcher => t => bool;

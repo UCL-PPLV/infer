@@ -72,6 +72,10 @@ def prepare_build(args):
     logging.info('Setup Infer analysis mode for Buck: export INFER_ANALYSIS=1')
     os.environ['INFER_ANALYSIS'] = '1'
 
+    # disable the Buck daemon as changes in the Buck config
+    # may be missed otherwise
+    os.environ['NO_BUCKD'] = '1'
+
     # Create a script to be called by buck
     infer_script = None
     with tempfile.NamedTemporaryFile(delete=False,
@@ -230,7 +234,13 @@ class Wrapper:
         self.buck_args = buck_args
         self.normalized_targets = get_normalized_targets(
             buck_args.targets)
-        self.buck_cmd = base_cmd + self.normalized_targets
+        self.temp_files = []
+        # write targets to file to avoid passing too many command line args
+        with tempfile.NamedTemporaryFile(delete=False,
+                                         prefix='targets_') as targets_file:
+            targets_file.write('\n'.join(self.normalized_targets))
+            self.buck_cmd = base_cmd + ['@%s' % targets_file.name]
+            self.temp_files.append(targets_file.name)
         self.timer.stop('%d targets computed', len(self.normalized_targets))
 
     def _collect_results(self, start_time):
@@ -239,7 +249,6 @@ class Wrapper:
         self.timer.stop('Done')
 
     def run(self):
-        temp_files = []
         start_time = time.time()
         try:
             logging.info('Starting the analysis')
@@ -249,7 +258,7 @@ class Wrapper:
 
             self.timer.start('Preparing build ...')
             temp_files2, infer_script = prepare_build(self.infer_args)
-            temp_files += temp_files2
+            self.temp_files += temp_files2
             self.timer.stop('Build prepared')
 
             if len(self.normalized_targets) == 0:
@@ -276,4 +285,4 @@ class Wrapper:
                 return os.EX_OK
             raise e
         finally:
-            cleanup(temp_files)
+            cleanup(self.temp_files)

@@ -20,7 +20,7 @@ module MockTrace = Trace.Make(struct
 
         let get pname _ =
           if String.is_prefix ~prefix:"SOURCE" (Typ.Procname.to_string pname)
-          then Some (CallSite.make pname Location.dummy)
+          then Some (CallSite.make pname Location.dummy, None)
           else None
 
         let get_tainted_formals _ _ =
@@ -46,9 +46,11 @@ module MockTaintAnalysis = TaintAnalysis.Make(struct
     let of_summary_access_tree _ = assert false
     let to_summary_access_tree _ = assert false
     let handle_unknown_call _ _ _ _ = []
+    let is_taintable_type _ = true
   end)
 
-module TestInterpreter = AnalyzerTester.Make (ProcCfg.Normal) (MockTaintAnalysis.TransferFunctions)
+module TestInterpreter =
+  AnalyzerTester.Make (ProcCfg.Normal) (LowerHil.Make (MockTaintAnalysis.TransferFunctions))
 
 let tests =
   let open OUnit2 in
@@ -88,7 +90,7 @@ let tests =
            if not (MockTrace.is_empty t)
            then (ap, t) :: acc
            else acc)
-        astate.MockTaintAnalysis.Domain.access_tree
+        (fst astate)
         [] in
     PrettyPrintable.pp_collection ~pp_item fmt (List.rev trace_assocs) in
   let assign_to_source ret_str =
@@ -104,12 +106,12 @@ let tests =
     call_sink_with_exp (Exp.Var (ident_of_str actual_str)) in
   let assign_id_to_field root_str fld_str rhs_id_str =
     let rhs_exp = Exp.Var (ident_of_str rhs_id_str) in
-    make_store ~rhs_typ:Typ.Tvoid (Exp.Var (ident_of_str root_str)) fld_str ~rhs_exp in
+    make_store ~rhs_typ:(Typ.mk Tvoid) (Exp.Var (ident_of_str root_str)) fld_str ~rhs_exp in
   let read_field_to_id lhs_id_str root_str fld_str =
-    make_load_fld ~rhs_typ:Typ.Tvoid lhs_id_str fld_str (Exp.Var (ident_of_str root_str)) in
+    make_load_fld ~rhs_typ:(Typ.mk Tvoid) lhs_id_str fld_str (Exp.Var (ident_of_str root_str)) in
   let assert_empty = invariant "{  }" in
   (* hack: register an empty analyze_ondemand to prevent a crash because the callback is unset *)
-  let analyze_ondemand _ summary _ = summary in
+  let analyze_ondemand summary _ = summary in
   let get_proc_desc _ = None in
   let callbacks =
     {
@@ -167,46 +169,6 @@ let tests =
       assign_id_to_field "base_id" "f" "non_source_id";
       invariant "{ ret_id$0 => (SOURCE -> ?) }";
     ];
-    "var id alias test",
-    [
-      assign_to_non_source "ret_id";
-      var_assign_id "var1" "ret_id";
-      assign_to_source "source_id";
-      assign_id_to_field "ret_id" "f" "source_id";
-      invariant "{ source_id$0 => (SOURCE -> ?), &var1.f => (SOURCE -> ?) }";
-      read_field_to_id "read_id" "ret_id" "f";
-      invariant "{ source_id$0 => (SOURCE -> ?), &var1.f => (SOURCE -> ?) }";
-      var_assign_id "var2" "read_id";
-      invariant
-        "{ source_id$0 => (SOURCE -> ?), &var1.f => (SOURCE -> ?), &var2 => (SOURCE -> ?) }";
-    ];
-    "field id alias test1",
-    [
-      assign_to_non_source "ret_id";
-      assign_to_source "source_id";
-      assign_id_to_field "ret_id" "g" "source_id";
-      assign_to_non_source "var_id";
-      var_assign_id "var" "var_id";
-      assign_id_to_field "var_id" "f" "ret_id";
-      invariant
-        "{ ret_id$0.g => (SOURCE -> ?), source_id$0 => (SOURCE -> ?), &var.f.g => (SOURCE -> ?) }";
-    ];
-    "field id alias test2",
-    [
-      assign_to_non_source "ret_id";
-      read_field_to_id "g_id" "ret_id" "g";
-      var_assign_id "var1" "g_id";
-      assign_to_source "source_id";
-      invariant "{ source_id$0 => (SOURCE -> ?) }";
-      assign_id_to_field "g_id" "f" "source_id";
-      invariant "{ source_id$0 => (SOURCE -> ?), &var1.g.f => (SOURCE -> ?) }";
-      id_assign_var "var_id" "var1";
-      read_field_to_id "var_g_id" "var_id" "g";
-      read_field_to_id "var_g_f_id" "var_g_id" "f";
-      var_assign_id "var2" "var_g_f_id";
-      invariant
-        "{ source_id$0 => (SOURCE -> ?), &var1.g.f => (SOURCE -> ?), &var2 => (SOURCE -> ?) }";
-    ];
     "sink without source not tracked",
     [
       assign_to_non_source "ret_id";
@@ -256,13 +218,13 @@ let tests =
     "source -> sink via cast",
     [
       assign_to_source "ret_id";
-      cast_id_to_id "cast_id" Typ.Tvoid "ret_id";
+      cast_id_to_id "cast_id" (Typ.mk Tvoid) "ret_id";
       call_sink "cast_id";
       invariant "{ ret_id$0 => (SOURCE -> SINK) }";
     ];
 
   ] |> TestInterpreter.create_tests
       ~pp_opt:pp_sparse
-      FormalMap.empty
-      ~initial:MockTaintAnalysis.Domain.empty in
+      { formal_map=FormalMap.empty; summary=Specs.dummy; }
+      ~initial:(MockTaintAnalysis.Domain.empty, IdAccessPathMapDomain.empty) in
   "taint_test_suite">:::test_list

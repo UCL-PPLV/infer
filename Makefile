@@ -8,11 +8,6 @@
 ROOT_DIR = .
 include $(ROOT_DIR)/Makefile.config
 
-ifeq ($(IS_FACEBOOK_TREE),yes)
-# With this makefile, all targets will default to have right env variables pointing to the sandbox
-  include $(ROOT_DIR)/facebook/Makefile.env
-endif
-
 ifeq ($(BUILD_C_ANALYZERS),yes)
 BUILD_SYSTEMS_TESTS += \
   assembly \
@@ -25,10 +20,6 @@ BUILD_SYSTEMS_TESTS += \
   clang_with_M_flag \
   clang_with_MD_flag \
   delete_results_dir \
-  differential_resolve_infer_eradicate_conflict \
-  differential_skip_anonymous_class_renamings \
-  differential_skip_duplicated_types_on_filenames \
-  differential_skip_duplicated_types_on_filenames_with_renamings \
   fail_on_issue \
   j1 \
   linters \
@@ -39,11 +30,15 @@ BUILD_SYSTEMS_TESTS += \
   utf8_in_procname \
   waf \
 
+DIRECT_TESTS += \
+  c_bufferoverrun c_errors c_frontend \
+  cpp_bufferoverrun cpp_errors cpp_frontend cpp_quandary cpp_siof \
+
 ifneq ($(BUCK),no)
 BUILD_SYSTEMS_TESTS += buck-clang-db
 endif
 ifneq ($(CMAKE),no)
-BUILD_SYSTEMS_TESTS += clang_compilation_db cmake
+BUILD_SYSTEMS_TESTS += clang_compilation_db cmake inferconfig
 endif
 ifneq ($(NDKBUILD),no)
 BUILD_SYSTEMS_TESTS += ndk_build
@@ -53,6 +48,8 @@ BUILD_SYSTEMS_TESTS += results_xml
 endif
 ifneq ($(XCODE_SELECT),no)
 BUILD_SYSTEMS_TESTS += xcodebuild_no_xcpretty
+DIRECT_TESTS += \
+  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters objc_linters-for-test-only
 ifneq ($(XCPRETTY),no)
 BUILD_SYSTEMS_TESTS += xcodebuild
 endif
@@ -60,7 +57,18 @@ endif # XCODE_SELECT
 endif # BUILD_C_ANALYZERS
 
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
-BUILD_SYSTEMS_TESTS += gradle javac utf8_in_pwd
+BUILD_SYSTEMS_TESTS += \
+  differential_resolve_infer_eradicate_conflict \
+  differential_skip_anonymous_class_renamings \
+  differential_skip_duplicated_types_on_filenames \
+  differential_skip_duplicated_types_on_filenames_with_renamings \
+  gradle \
+  javac \
+  resource_leak_exception_lines \
+
+DIRECT_TESTS += \
+  java_checkers java_eradicate java_infer java_tracing java_quandary java_threadsafety \
+  java_crashcontext java_harness
 ifneq ($(ANT),no)
 BUILD_SYSTEMS_TESTS += ant
 endif
@@ -72,23 +80,14 @@ BUILD_SYSTEMS_TESTS += mvn
 endif
 endif
 
-ifeq ($(BUILD_C_ANALYZERS),yes)
-DIRECT_TESTS += \
-  c_errors c_frontend c_bufferoverrun cpp_checkers cpp_errors cpp_frontend cpp_quandary
-endif
-ifeq ($(BUILD_JAVA_ANALYZERS),yes)
-DIRECT_TESTS += \
-  java_checkers java_eradicate java_infer java_tracing java_quandary java_threadsafety \
-  java_crashcontext java_harness
-endif
-ifneq ($(XCODE_SELECT),no)
-DIRECT_TESTS += \
-  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters objc_linters-for-test-only
+ifeq ($(BUILD_C_ANALYZERS)+$(BUILD_JAVA_ANALYZERS),yes+yes)
+BUILD_SYSTEMS_TESTS += utf8_in_pwd
 endif
 
 .PHONY: all
 all: infer
 
+ifeq ($(IS_INFER_RELEASE),no)
 configure: configure.ac $(wildcard m4/*.m4)
 #	rerun ./autogen.sh in case of failure as the failure may be due to needing to rerun
 #	./configure
@@ -102,6 +101,7 @@ Makefile.autoconf: configure Makefile.autoconf.in
 	./configure $(shell ./config.status --config || true),\
 	./configure $(shell ./config.status --config || true))) || \
 	./configure $(shell ./config.status --config || true)
+endif
 
 .PHONY: fb-setup
 fb-setup:
@@ -136,14 +136,28 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 byte src_build test_build: clang_plugin
 endif
 
-.PHONY: infer
-infer: src_build
+$(INFER_COMMAND_MANUALS): src_build Makefile
+	$(QUIET)$(MKDIR_P) $(@D)
+	$(QUIET)$(INFER_BIN) $(patsubst infer-%.1,%,$(@F)) --help --help-format=groff > $@
+
+$(INFER_MANUAL): src_build Makefile
+	$(QUIET)$(MKDIR_P) $(@D)
+	$(QUIET)$(INFER_BIN) --help --help-format=groff > $@
+
+$(INFER_MANUALS_GZIPPED): %.gz: %
+	$(QUIET)$(REMOVE) $@
+	gzip $<
+
+infer_models: src_build
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	$(QUIET)$(call silent_on_success,Building Java annotations,\
 	$(MAKE) -C $(ANNOTATIONS_DIR))
 endif
 	$(QUIET)$(call silent_on_success,Building Infer models,\
 	$(MAKE) -C $(MODELS_DIR) all)
+
+.PHONY: infer
+infer: src_build $(INFER_MANUALS) infer_models
 
 .PHONY: clang_setup
 clang_setup:
@@ -290,7 +304,8 @@ toplevel: clang_plugin
 .PHONY: inferScriptMode_test
 inferScriptMode_test: test_build
 	$(QUIET)$(call silent_on_success,Testing infer OCaml REPL,\
-	 INFER_REPL_BINARY=ocaml $(SCRIPT_DIR)/infer_repl $(INFER_DIR)/tests/repl/infer_batch_script.ml)
+	INFER_REPL_BINARY=ocaml TOPLEVEL_DIR=$(BUILD_DIR)/test/infer $(SCRIPT_DIR)/infer_repl \
+	  $(INFER_DIR)/tests/repl/infer_batch_script.ml)
 
 .PHONY: checkCopyright
 checkCopyright:
@@ -304,12 +319,37 @@ ifeq ($(IS_FACEBOOK_TREE),yes)
 	$(MAKE) -C facebook validate)
 endif
 
+.PHONY: crash_if_not_all_analyzers_enabled
+crash_if_not_all_analyzers_enabled:
+ifneq ($(BUILD_C_ANALYZERS)+$(BUILD_JAVA_ANALYZERS),yes+yes)
+ifneq ($(BUILD_C_ANALYZERS),yes)
+	@echo '*** ERROR: Cannot run the full tests: the Clang analyzers are disabled.'
+	@echo '*** ERROR: You can run clang-only tests with:'
+	@echo '*** ERROR:'
+	@echo '*** ERROR:   make config_tests'
+	@echo '*** ERROR:'
+endif
+ifneq ($(BUILD_JAVA_ANALYZERS),yes)
+	@echo '*** ERROR: Cannot run the full tests: the Java analyzers are disabled.'
+	@echo '*** ERROR: You can run Java-only tests with:'
+	@echo '*** ERROR:'
+	@echo '*** ERROR:   make config_tests'
+	@echo '*** ERROR:'
+endif
+	@echo '*** ERROR: To run the full set of tests, please enable all the analyzers.'
+	@exit 1
+else
+	@:
+endif
 
-.PHONY: test
-test: test_build ocaml_unit_test endtoend_test inferTraceBugs_test inferScriptMode_test \
+.PHONY: config_tests
+config_tests: test_build ocaml_unit_test endtoend_test inferTraceBugs_test inferScriptMode_test \
       checkCopyright validate-skel
 	$(QUIET)$(call silent_on_success,Building Infer source dependency graph,\
 	$(MAKE) -C $(SRC_DIR) mod_dep.dot)
+
+.PHONY: test
+test: crash_if_not_all_analyzers_enabled config_tests
 ifeq (,$(findstring s,$(MAKEFLAGS)))
 	$(QUIET)echo "$(TERM_INFO)ALL TESTS PASSED$(TERM_RESET)"
 endif
@@ -324,15 +364,20 @@ test-replace: $(BUILD_SYSTEMS_TESTS:%=build_%_replace) $(DIRECT_TESTS:%=direct_%
 uninstall:
 	$(REMOVE_DIR) $(DESTDIR)$(libdir)/infer/
 	$(REMOVE) $(DESTDIR)$(bindir)/infer
+	$(REMOVE) $(INFER_COMMANDS:%=$(DESTDIR)$(bindir)/%)
+	$(REMOVE) $(foreach manual,$(INFER_MANUALS_GZIPPED),\
+	  $(DESTDIR)$(mandir)/man1/$(notdir $(manual)))
 
 .PHONY: test_clean
 test_clean: $(DIRECT_TESTS:%=direct_%_clean) $(BUILD_SYSTEMS_TESTS:%=build_%_clean)
 
 .PHONY: install
-install: infer
+install: infer $(INFER_MANUALS_GZIPPED)
 # create directory structure
 	test -d      $(DESTDIR)$(bindir) || \
 	  $(MKDIR_P) $(DESTDIR)$(bindir)
+	test -d      $(DESTDIR)$(mandir)/man1 || \
+	  $(MKDIR_P) $(DESTDIR)$(mandir)/man1
 	test -d      $(DESTDIR)$(libdir)/infer/ || \
 	  $(MKDIR_P) $(DESTDIR)$(libdir)/infer/
 ifeq ($(BUILD_C_ANALYZERS),yes)
@@ -354,10 +399,6 @@ endif
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	test -d      $(DESTDIR)$(libdir)/infer/infer/lib/java/ || \
 	  $(MKDIR_P) $(DESTDIR)$(libdir)/infer/infer/lib/java/
-endif
-ifneq ($(XCODE_SELECT),no)
-	test -d      $(DESTDIR)$(libdir)/infer/infer/lib/xcode_wrappers/ || \
-	  $(MKDIR_P) $(DESTDIR)$(libdir)/infer/infer/lib/xcode_wrappers/
 endif
 	test -d      $(DESTDIR)$(libdir)/infer/infer/annotations/ || \
 	  $(MKDIR_P) $(DESTDIR)$(libdir)/infer/infer/annotations/
@@ -384,12 +425,12 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 	$(QUIET)for i in $$(find infer/lib/clang_wrappers/*); do \
 	  $(INSTALL_PROGRAM) -C $$i $(DESTDIR)$(libdir)/infer/$$i; \
 	done
-#	  only for files that point to InferClang
+#	  only for files that point to infer
 	(cd $(DESTDIR)$(libdir)/infer/infer/lib/wrappers/ && \
 	 $(foreach cc,$(shell find $(LIB_DIR)/wrappers -type l), \
-	  [ $(cc) -ef $(INFERCLANG_BIN) ] && \
+	  [ $(cc) -ef $(INFER_BIN) ] && \
 	  $(REMOVE) $(notdir $(cc)) && \
-	  $(LN_S) ../../bin/InferClang $(notdir $(cc));))
+	  $(LN_S) ../../bin/infer $(notdir $(cc));))
 	$(QUIET)for i in $$(find infer/lib/specs/*); do \
 	  $(INSTALL_DATA) -C $$i $(DESTDIR)$(libdir)/infer/$$i; \
 	done
@@ -398,14 +439,6 @@ ifeq ($(BUILD_C_ANALYZERS),yes)
 	done
 	$(INSTALL_DATA) -C          infer/lib/linter_rules/linters.al \
 	  $(DESTDIR)$(libdir)/infer/infer/lib/linter_rules/linters.al
-	$(INSTALL_PROGRAM) -C $(INFERCLANG_BIN) $(DESTDIR)$(libdir)/infer/infer/bin/
-	(cd $(DESTDIR)$(libdir)/infer/infer/bin/ && \
-	 $(LN_S) -f InferClang InferClang++)
-endif
-ifneq ($(XCODE_SELECT),no)
-	$(QUIET)for i in $$(find infer/lib/xcode_wrappers/*); do \
-	  $(INSTALL_PROGRAM) -C $$i $(DESTDIR)$(libdir)/infer/$$i; \
-	done
 endif
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 	$(INSTALL_DATA) -C          infer/annotations/annotations.jar \
@@ -426,14 +459,23 @@ endif
 	$(INSTALL_PROGRAM) -C       infer/lib/python/report.py \
 	  $(DESTDIR)$(libdir)/infer/infer/lib/python/report.py
 	$(INSTALL_PROGRAM) -C $(INFER_BIN) $(DESTDIR)$(libdir)/infer/infer/bin/
-	$(INSTALL_PROGRAM) -C $(INFERANALYZE_BIN) $(DESTDIR)$(libdir)/infer/infer/bin/
-	$(INSTALL_PROGRAM) -C $(INFERPRINT_BIN) $(DESTDIR)$(libdir)/infer/infer/bin/
 	(cd $(DESTDIR)$(bindir)/ && \
 	 $(REMOVE) infer && \
 	 $(LN_S) $(libdir_relative_to_bindir)/infer/infer/bin/infer infer)
+	for alias in $(INFER_COMMANDS); do \
+	  (cd $(DESTDIR)$(bindir)/ && \
+	   $(REMOVE) $$alias && \
+	   $(LN_S) infer $$alias); done
+	for alias in $(INFER_COMMANDS); do \
+	  (cd $(DESTDIR)$(libdir)/infer/infer/bin && \
+	   $(REMOVE) $$alias && \
+	   $(LN_S) infer $$alias); done
 	(cd $(DESTDIR)$(bindir)/ && \
 	 $(REMOVE) inferTraceBugs && \
 	 $(LN_S) $(libdir_relative_to_bindir)/infer/infer/lib/python/inferTraceBugs inferTraceBugs)
+	$(QUIET)for i in $(MAN_DIR)/man1/*; do \
+	  $(INSTALL_DATA) -C $$i $(DESTDIR)$(mandir)/man1/$$(basename $$i); \
+	done
 
 ifeq ($(IS_FACEBOOK_TREE),yes)
 	$(QUIET)$(MAKE) -C facebook install
@@ -455,7 +497,7 @@ ifeq ($(IS_FACEBOOK_TREE),yes)
 endif
 	$(QUIET)$(MAKE) -C $(DEPENDENCIES_DIR)/ocamldot clean
 	find $(INFER_DIR)/tests \( -name '*.o' -o -name '*.o.sh' \) -delete
-	$(REMOVE_DIR) _build_logs
+	$(QUIET)$(REMOVE_DIR) _build_logs $(MAN_DIR)
 
 .PHONY: conf-clean
 conf-clean: clean

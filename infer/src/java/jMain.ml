@@ -18,7 +18,7 @@ module L = Logging
 
 let register_perf_stats_report source_file =
   let stats_dir = Filename.concat Config.results_dir Config.frontend_stats_dir_name in
-  let abbrev_source_file = SourceFile.encoding source_file in
+  let abbrev_source_file = DB.source_file_encoding source_file in
   let stats_file = Config.perf_stats_prefix ^ "_" ^ abbrev_source_file ^ ".json" in
   Utils.create_dir Config.results_dir ;
   Utils.create_dir stats_dir ;
@@ -43,7 +43,7 @@ let store_icfg source_file tenv cg cfg =
   if Config.debug_mode || Config.frontend_tests then
     begin
       Dotty.print_icfg_dotty source_file cfg;
-      Cg.save_call_graph_dotty source_file Specs.get_specs cg
+      Cg.save_call_graph_dotty source_file cg
     end;
   (* NOTE: nothing should be written to source_dir after this *)
   DB.mark_file_updated (DB.source_dir_to_string source_dir)

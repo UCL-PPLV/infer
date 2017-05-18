@@ -52,15 +52,21 @@ val directory_fold : ('a -> string -> 'a) -> 'a -> string -> 'a
 (** Functional iter function over all the file of a directory *)
 val directory_iter : (string -> unit) -> string -> unit
 
-val read_optional_json_file : string -> (Yojson.Basic.json, string) Result.t
+(** Returns true if a given directory is empty. The directory is assumed to exist. *)
+val dir_is_empty : string -> bool
 
-val with_file : string -> f:(out_channel -> 'a) -> 'a
+val read_json_file : string -> (Yojson.Basic.json, string) Result.t
+
+val with_file_in : string -> f:(In_channel.t -> 'a) -> 'a
+val with_file_out : string -> f:(Out_channel.t -> 'a) -> 'a
 
 val write_json_to_file : string -> Yojson.Basic.json -> unit
 
 val consume_in : in_channel -> unit
 
-val with_process_in: string -> (in_channel -> 'a) -> ('a * Unix.Exit_or_signal.t)
+val with_process_in : string -> (in_channel -> 'a) -> ('a * Unix.Exit_or_signal.t)
+
+val shell_escape_command : string list -> string
 
 (** create a directory if it does not exist already *)
 val create_dir : string -> unit

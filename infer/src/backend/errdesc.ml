@@ -17,7 +17,11 @@ module F = Format
 module DExp = DecompiledExp
 
 let vector_matcher = QualifiedCppName.Match.of_fuzzy_qual_names ["std::vector"]
-let mutex_matcher = QualifiedCppName.Match.of_fuzzy_qual_names ["std::mutex"]
+let mutex_matcher = QualifiedCppName.Match.of_fuzzy_qual_names [
+    "std::__infer_mutex_model";
+    "std::mutex";
+    "std::timed_mutex";
+  ]
 
 let is_one_of_classes = QualifiedCppName.Match.match_qualifiers
 
@@ -212,7 +216,6 @@ let rec find_boolean_assignment node pvar true_branch : Procdesc.Node.t option =
 (** Find the Load instruction used to declare normal variable [id],
     and return the expression dereferenced to initialize [id] *)
 let rec _find_normal_variable_load tenv (seen : Exp.Set.t) node id : DExp.t option =
-  let is_infer = not (Config.checkers || Config.eradicate) in
   let find_declaration node = function
     | Sil.Load (id0, e, _, _) when Ident.equal id id0 ->
         if verbose
@@ -244,7 +247,7 @@ let rec _find_normal_variable_load tenv (seen : Exp.Set.t) node id : DExp.t opti
             List.map ~f:unNone args_dexpo in
         Some (DExp.Dretcall (fun_dexp, args_dexp, loc, call_flags))
     | Sil.Store (Exp.Lvar pvar, _, Exp.Var id0, _)
-      when is_infer && Ident.equal id id0 && not (Pvar.is_frontend_tmp pvar) ->
+      when Config.biabduction && Ident.equal id id0 && not (Pvar.is_frontend_tmp pvar) ->
         (* this case is a hack to make bucketing continue to work in the presence of copy
            propagation. previously, we would have code like:
            n1 = foo(); x = n1; n2 = x; n2.toString(), but copy-propagation will optimize this to:
@@ -407,9 +410,9 @@ and _exp_rv_dexp tenv (_seen : Exp.Set.t) node e : DExp.t option =
     | Exp.Cast (_, e1) ->
         if verbose then (L.d_str "exp_rv_dexp: Cast "; Sil.d_exp e; L.d_ln ());
         _exp_rv_dexp tenv seen node e1
-    | Exp.Sizeof (typ, len, sub) ->
+    | Exp.Sizeof {typ; dynamic_length; subtype} ->
         if verbose then (L.d_str "exp_rv_dexp: type "; Sil.d_exp e; L.d_ln ());
-        Some (DExp.Dsizeof (typ, Option.bind len (_exp_rv_dexp tenv seen node), sub))
+        Some (DExp.Dsizeof (typ, Option.bind dynamic_length (_exp_rv_dexp tenv seen node), subtype))
     | _ ->
         if verbose then (L.d_str "exp_rv_dexp: no match for  "; Sil.d_exp e; L.d_ln ());
         None
@@ -511,9 +514,9 @@ let explain_leak tenv hpred prop alloc_att_opt bucket =
     (Pvar.is_local pvar || Pvar.is_global pvar) &&
     not (Pvar.is_frontend_tmp pvar) &&
     match hpred_typ_opt, find_typ_without_ptr prop pvar with
-    | Some (Exp.Sizeof (t1, _, _)), Some (Exp.Sizeof (Typ.Tptr (t2, _), _, _)) ->
+    | Some (Exp.Sizeof {typ=t1}), Some (Exp.Sizeof {typ={Typ.desc=Tptr (t2, _)}}) ->
         Typ.equal t1 t2
-    | Some (Exp.Sizeof (Typ.Tint _, _, _)), Some (Exp.Sizeof (Typ.Tint _, _, _))
+    | Some (Exp.Sizeof {typ={Typ.desc=Tint _}}), Some (Exp.Sizeof {typ={Typ.desc=Tint _}})
       when is_file -> (* must be a file opened with "open" *)
         true
     | _ -> false in
@@ -581,7 +584,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
           (match lexp with
            | Exp.Lvar pv ->
                let typo = match texp with
-                 | Exp.Sizeof (Tstruct name, _, _) -> (
+                 | Exp.Sizeof {typ={Typ.desc=Tstruct name}} -> (
                      match Tenv.lookup tenv name with
                      | Some {fields} ->
                          List.find ~f:(fun (f', _, _) -> Fieldname.equal f' f) fields |>
@@ -607,7 +610,7 @@ let vpath_find tenv prop _exp : DExp.t option * Typ.t option =
           (match lexp with
            | Exp.Lvar pv when not (Pvar.is_frontend_tmp pv) ->
                let typo = match texp with
-                 | Exp.Sizeof (typ, _, _) -> Some typ
+                 | Exp.Sizeof {typ} -> Some typ
                  | _ -> None in
                Some (DExp.Dpvar pv), typo
            | Exp.Var id ->
@@ -839,7 +842,8 @@ let create_dereference_desc tenv
             Localise.desc_empty_vector_access (Some pname) (DExp.to_string this_dexp) loc
           else
             desc
-      | Some (DExp.Darrow (dexp, fieldname)) ->
+      | Some (DExp.Darrow (dexp, fieldname))
+      | Some (DExp.Ddot (dexp, fieldname)) ->
           if is_special_field mutex_matcher (Some "null_if_locked") fieldname then
             Localise.desc_double_lock None (DExp.to_string dexp) loc
           else if is_special_field vector_matcher (Some "beginPtr") fieldname then

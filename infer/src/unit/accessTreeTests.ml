@@ -13,11 +13,7 @@ module F = Format
 
 (* string set domain we use to ensure we're getting the expected traces *)
 module MockTraceDomain = struct
-  include AbstractDomain.FiniteSet
-      (PrettyPrintable.MakePPSet(struct
-         include String
-         let pp_element fmt s = Format.fprintf fmt "%s" s
-       end))
+  include AbstractDomain.FiniteSet (PrettyPrintable.MakePPSet (String))
 
   let top_str = "T"
 
@@ -70,7 +66,7 @@ let tests =
 
   let f = make_field_access "f" in
   let g = make_field_access "g" in
-  let array = make_array_access Typ.Tvoid in
+  let array = make_array_access (Typ.mk Tvoid) in
 
   let x = AccessPath.Exact (make_access_path "x" []) in
   let xF = AccessPath.Exact (make_access_path "x" ["f"]) in

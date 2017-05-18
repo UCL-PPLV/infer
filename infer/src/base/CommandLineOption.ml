@@ -16,18 +16,30 @@ module YBU = Yojson.Basic.Util
 
 let (=) = String.equal
 
-let terminal_width = lazy (
-  let open Ctypes in
-  let module T = IOCtl.Types(IOCtl_types) in
-  let winsize = make IOCtl.winsize in
-  let return =
-    ExternStubs.ioctl_stub_1_ioctl 0 T.Request.request_TIOCGWINSZ
-      (ExternStubs.CI.cptr (addr winsize)) in
-  if return >= 0 then
-    Ok (Unsigned.UShort.to_int (getf winsize IOCtl.ws_col))
-  else
-    Error return
-)
+let manpage_s_notes = "NOTES"
+
+let is_env_var_set v =
+  Option.value (Option.map (Sys.getenv v) ~f:((=) "1")) ~default:false
+
+(** The working directory of the initial invocation of infer, to which paths passed as command line
+    options are relative. *)
+let init_work_dir, is_originator =
+  match Sys.getenv "INFER_CWD" with
+  | Some dir ->
+      (dir, false)
+  | None ->
+      let real_cwd = Utils.realpath (Sys.getcwd ()) in
+      Unix.putenv ~key:"INFER_CWD" ~data:real_cwd;
+      (real_cwd, true)
+
+let strict_mode_env_var = "INFER_STRICT_MODE"
+
+let strict_mode = is_env_var_set strict_mode_env_var
+
+let warnf =
+  if strict_mode then failwithf
+  else if not is_originator then fun fmt -> F.ifprintf F.err_formatter fmt
+  else F.eprintf
 
 (** This is the subset of Arg.spec that we actually use. What's important is that all these specs
     call back functions. We use this to mark deprecated arguments. What's not important is that, eg,
@@ -47,68 +59,50 @@ let to_arg_spec = function
 let to_arg_spec_triple (x, spec, y) = (x, to_arg_spec spec, y)
 let to_arg_speclist = List.map ~f:to_arg_spec_triple
 
-let is_env_var_set v =
-  Option.value (Option.map (Sys.getenv v) ~f:((=) "1")) ~default:false
+(* NOTE: All variants must be also added to `all_parse_modes` below *)
+type parse_mode = InferCommand | Javac | NoParse [@@deriving compare]
+let equal_parse_mode = [%compare.equal : parse_mode]
 
-(** The working directory of the initial invocation of infer, to which paths passed as command line
-    options are relative. *)
-let init_work_dir, is_originator =
-  match Sys.getenv "INFER_CWD" with
-  | Some dir ->
-      (dir, false)
-  | None ->
-      let real_cwd = Utils.realpath (Sys.getcwd ()) in
-      Unix.putenv ~key:"INFER_CWD" ~data:real_cwd;
-      (real_cwd, true)
+let all_parse_modes = [InferCommand; Javac; NoParse]
 
-let strict_mode = is_env_var_set "INFER_STRICT_MODE"
+type anon_arg_action = {
+  parse_subcommands : bool;
+  parse_argfiles : bool;
+  on_unknown : [`Add | `Reject | `Skip];
+}
 
-let warnf =
-  if strict_mode then failwithf
-  else if not is_originator then fun fmt -> F.ifprintf F.err_formatter fmt
-  else F.eprintf
+let anon_arg_action_of_parse_mode parse_mode =
+  let parse_subcommands, parse_argfiles, on_unknown = match parse_mode with
+    | InferCommand -> true, true, `Reject
+    | Javac -> false, true, `Skip
+    | NoParse-> false, false, `Skip in
+  {parse_subcommands; parse_argfiles; on_unknown}
 
-type section =
-    Analysis | BufferOverrun | Checkers | Clang | Crashcontext | Driver | Java | Print | Quandary
+(* NOTE: All variants must be also added to `all_commands` below *)
+type command =
+  | Analyze | Capture | Clang | Compile | Report | ReportDiff | Run
 [@@deriving compare]
 
-let equal_section = [%compare.equal : section ]
-let all_sections =
-  [ Analysis; BufferOverrun; Checkers; Clang; Crashcontext; Driver; Java; Print; Quandary ]
+let equal_command = [%compare.equal : command]
 
-(* NOTE: All variants must be also added to `all_parse_tags` below *)
-type 'a parse = Differential | Infer of 'a | Javac | NoParse [@@deriving compare]
-
-type parse_mode = section list parse [@@deriving compare]
-
-type parse_action = section parse [@@deriving compare]
-
-let equal_parse_action = [%compare.equal : parse_action ]
-
-(* NOTE: All variants must be also added to `all_parse_tags` below *)
-type parse_tag = AllInferTags | OneTag of unit parse [@@deriving compare]
-
-let equal_parse_tag = [%compare.equal : parse_tag ]
-let all_parse_tags = [
-  AllInferTags; OneTag Differential; OneTag (Infer ()); OneTag Javac; OneTag NoParse
+let all_commands = [
+  Analyze; Capture; Clang; Compile; Report; ReportDiff; Run
 ]
 
-let to_parse_tag parse =
-  match parse with
-  | Differential -> OneTag Differential
-  | Infer _ -> OneTag (Infer ())
-  | Javac -> OneTag Javac
-  | NoParse -> OneTag NoParse
-
-let accept_unknown_args = function
-  | Infer Print | Javac | NoParse -> true
-  | Infer (Analysis | BufferOverrun | Checkers | Clang | Crashcontext | Driver | Java | Quandary)
-  | Differential -> false
+type command_doc = {
+  title : Cmdliner.Manpage.title;
+  manual_before_options : Cmdliner.Manpage.block list;
+  manual_options : [
+    | `Prepend of Cmdliner.Manpage.block list
+    | `Replace of Cmdliner.Manpage.block list
+  ];
+  manual_after_options : Cmdliner.Manpage.block list;
+}
 
 type desc = {
   long: string; short: string; meta: string; doc: string; spec: spec;
   (** how to go from an option in the json config file to a list of command-line options *)
-  decode_json: Yojson.Basic.json -> string list ;
+  decode_json: inferconfig_dir:string -> Yojson.Basic.json -> string list ;
 }
 
 let dashdash long =
@@ -116,27 +110,7 @@ let dashdash long =
   | "" | "--" -> long
   | _ -> "--" ^ long
 
-let short_meta {short; meta; spec} =
-  String.concat ~sep:" "
-    ((if short = "" then [] else ["| -" ^ short]) @
-     (match spec with
-      | Symbol (symbols, _) ->
-          ["{ " ^ (String.concat ~sep:" | " symbols) ^ " }" ^ meta]
-      | _ ->
-          if meta = "" then [] else ["<" ^ meta ^ ">"]))
-
-let left_length long short_meta =
-  (String.length (dashdash long)) + (String.length short_meta)
-
-let max_left_length limit current ({long; spec} as desc) =
-  let short_meta =
-    match spec with
-    | Symbol _ -> short_meta {desc with spec = Unit (fun () -> ())}
-    | _ -> short_meta desc in
-  let length = left_length long short_meta in
-  if length > limit then current else max current length
-
-let xdesc {long; short; spec; doc} =
+let xdesc {long; short; spec} =
   let key long short =
     match long, short with
     | "", "" -> ""
@@ -158,86 +132,8 @@ let xdesc {long; short; spec; doc} =
     | _ ->
         spec
   in
-  (key long short, xspec long spec, doc)
-
-let wrap_line indent_string wrap_length line =
-  let indent_length = String.length indent_string in
-  let word_sep = " " in
-  let words = Str.split (Str.regexp_string word_sep) line in
-  let add_word_to_paragraph (rev_lines, non_empty, line, line_length) word =
-    let word_length = String.length word in
-    let new_length = line_length + (String.length word_sep) + word_length in
-    let new_non_empty = non_empty || word <> "" in
-    if new_length > wrap_length && non_empty then
-      (line::rev_lines, true, indent_string ^ word, indent_length + word_length)
-    else
-      let sep = if Int.equal line_length indent_length then "" else word_sep in
-      let new_line = line ^ sep ^ word in
-      if new_length > wrap_length && new_non_empty then
-        (new_line::rev_lines, false, indent_string, indent_length)
-      else
-        (rev_lines, new_non_empty, new_line, String.length new_line) in
-  let (rev_lines, _, line, _) =
-    List.fold ~f:add_word_to_paragraph ~init:([], false, "", 0) words in
-  List.rev (line::rev_lines)
-
-let pad_and_xform doc_width left_width desc =
-  match desc with
-  | {doc = ""} ->
-      xdesc desc
-  | {long; doc} ->
-      let indent_doc doc =
-        (* 2 blank columns before option + 2 columns of gap between flag and doc *)
-        let left_indent = 4 + left_width in
-        (* align every line after the first one of [doc] *)
-        let doc = Str.global_replace (Str.regexp_string "\n")
-            ("\n" ^ String.make left_indent ' ') doc in
-        (* align the first line of [doc] *)
-        let short_meta = short_meta desc in
-        let gap = left_width - (left_length long short_meta) in
-        if gap < 0 then
-          short_meta ^ "\n" ^ (String.make left_indent ' ') ^ doc
-        else
-          short_meta ^ (String.make (gap + 1) ' ') ^ doc
-      in
-      let wrapped_lines =
-        let lines = Str.split (Str.regexp_string "\n") doc in
-        let wrap_line s =
-          if String.length s > doc_width then
-            wrap_line "" doc_width s
-          else [s] in
-        List.map ~f:wrap_line lines in
-      let doc = indent_doc (String.concat ~sep:"\n" (List.concat wrapped_lines)) in
-      xdesc {desc with doc}
-
-let align desc_list =
-  let min_term_width = 80 in
-  let cur_term_width =
-    match Lazy.force terminal_width with
-    | Ok width -> width
-    | Error _ -> min_term_width in
-  (* 2 blank columns before option + 2 columns of gap between flag and doc *)
-  let extra_space = 4 in
-  let min_left_width = 15 in
-  let max_left_width = 49 in
-  let doc_width term_width left_width = term_width - extra_space - left_width in
-  let term_width doc_width left_width = left_width + extra_space + doc_width in
-  let max_doc_width = 100 in
-  let max_term_width = term_width max_left_width max_doc_width in
-  (* how many columns to reserve for the option names
-     NOTE: this doesn't take into account "--help | -h" nor "--help-full", but fortunately these
-     have short names *)
-  let left_width =
-    let opt_left_width =
-      List.fold ~f:(max_left_length max_left_width) ~init:0 desc_list in
-    let (--) a b = float_of_int a -. float_of_int b in
-    let multiplier = (max_left_width -- min_left_width) /. (max_term_width -- min_term_width) in
-    (* at 80 columns use min_left_width then use extra columns until opt_left_width *)
-    let cols_after_min_width = float_of_int (max 0 (cur_term_width - min_term_width)) in
-    min (int_of_float (cols_after_min_width *. multiplier) + min_left_width) opt_left_width in
-  let doc_width = min max_doc_width (doc_width cur_term_width left_width) in
-  (List.map ~f:(pad_and_xform doc_width left_width) desc_list, (doc_width, left_width))
-
+  (* Arg doesn't need to know anything about documentation since we generate our own *)
+  (key long short, xspec long spec, "")
 
 let check_no_duplicates desc_list =
   let rec check_for_duplicates_ = function
@@ -251,35 +147,54 @@ let check_no_duplicates desc_list =
   check_for_duplicates_ (List.sort ~cmp:(fun (x, _, _) (y, _, _) -> String.compare x y) desc_list)
 
 
-let parse_tag_desc_lists = List.map ~f:(fun parse_tag -> (parse_tag, ref [])) all_parse_tags
+let parse_mode_desc_lists = List.map ~f:(fun parse_mode -> (parse_mode, ref [])) all_parse_modes
 
-let infer_section_desc_lists = List.map ~f:(fun section -> (section, ref [])) all_sections
+module SectionMap = Caml.Map.Make (struct
+    type t = String.t
+    (* this must be the reverse of the order in which we want the sections to appear in the
+       manual *)
+    let compare s1 s2 =
+      if String.equal s1 s2 then
+        (* this simplifies the next two cases *)
+        0
+      else if String.equal s1 Cmdliner.Manpage.s_options then
+        (* ensure OPTIONS section is last (hence first in the manual) *)
+        1
+      else if String.equal s2 Cmdliner.Manpage.s_options then
+        (* same as above *)
+        -1
+      else
+        (* reverse order *)
+        String.compare s2 s1
+  end)
+
+let help_sections_desc_lists =
+  List.map all_commands ~f:(fun command -> (command, ref SectionMap.empty))
+let visible_descs_list = ref []
+let hidden_descs_list = ref []
 
 (** add [desc] to the one relevant parse_tag_desc_lists for the purposes of parsing, and, in the
-    case of Infer, include [desc] in --help only for the relevant sections. *)
-let add parse_mode desc =
-  let add_to_tag tag =
-    let desc_list = List.Assoc.find_exn parse_tag_desc_lists tag in
-    desc_list := desc :: !desc_list in
-  (match parse_mode with
-   | Javac | NoParse -> ()
-   | Differential | Infer _ -> add_to_tag AllInferTags
-  );
-  add_to_tag (to_parse_tag parse_mode);
-  match parse_mode with
-  | Differential | Javac | NoParse -> ()
-  | Infer sections ->
-      List.iter infer_section_desc_lists ~f:(fun (section, desc_list) ->
-          let desc = if List.mem ~equal:equal_section sections section then
-              desc
-            else
-              {desc with meta = ""; doc = ""} in
-          desc_list := desc :: !desc_list)
+    case of InferCommand, include [desc] in --help only for the relevant sections. *)
+let add parse_mode sections desc =
+  let desc_list = List.Assoc.find_exn parse_mode_desc_lists parse_mode in
+  desc_list := desc :: !desc_list;
+  let add_to_section (command, section) =
+    let sections = List.Assoc.find_exn ~equal:equal_command help_sections_desc_lists command in
+    let prev_contents =
+      try SectionMap.find section !sections
+      with Not_found -> [] in
+    sections := SectionMap.add section (desc::prev_contents) !sections in
+  List.iter sections ~f:add_to_section;
+  if List.is_empty sections then
+    hidden_descs_list := desc :: !hidden_descs_list
+  else
+    visible_descs_list := desc :: !visible_descs_list;
+  ()
 
 let deprecate_desc parse_mode ~long ~short ~deprecated desc =
   let warn () = match parse_mode with
     | Javac | NoParse -> ()
-    | Differential | Infer _ ->
+    | InferCommand ->
         warnf "WARNING: '-%s' is deprecated. Use '--%s'%s instead.@."
           deprecated long (if short = "" then "" else Printf.sprintf " or '-%s'" short) in
   let warn_then_f f x = warn (); f x in
@@ -288,13 +203,13 @@ let deprecate_desc parse_mode ~long ~short ~deprecated desc =
     | String f -> String (warn_then_f f)
     | Symbol (symbols, f) -> Symbol (symbols, warn_then_f f)
     | Rest _ as spec -> spec in
-  let deprecated_decode_json j =
+  let deprecated_decode_json ~inferconfig_dir j =
     warnf "WARNING: in .inferconfig: '%s' is deprecated. Use '%s' instead.@." deprecated long;
-    desc.decode_json j in
+    desc.decode_json ~inferconfig_dir j in
   { long = ""; short = deprecated; meta = ""; doc = "";
     spec = deprecated_spec; decode_json = deprecated_decode_json }
 
-let mk ?(deprecated=[]) ?(parse_mode=Infer [])
+let mk ?(deprecated=[]) ?(parse_mode=InferCommand) ?(in_help=[])
     ~long ?short:short0 ~default ~meta doc ~default_to_string ~decode_json ~mk_setter ~mk_spec =
   let variable = ref default in
   let closure = mk_setter variable in
@@ -307,21 +222,20 @@ let mk ?(deprecated=[]) ?(parse_mode=Infer [])
   let doc =
     let default_string = default_to_string default in
     if default_string = "" then doc
-    else doc ^ " (default: " ^ default_string ^ ")" in
+    else
+      let doc_default_sep = if String.is_suffix ~suffix:"\n" doc then "" else " " in
+      doc ^ doc_default_sep ^ "(default: $(i," ^ Cmdliner.Manpage.escape default_string ^ "))" in
   let short = match short0 with Some c -> String.of_char c | None -> "" in
   let desc = {long; short=short; meta; doc; spec; decode_json} in
   (* add desc for long option, with documentation (which includes any short option) for exes *)
-  if long <> "" then add parse_mode desc ;
+  if long <> "" then add parse_mode in_help desc ;
   (* add desc for short option only for parsing, without documentation *)
-  let parse_mode_no_sections = match parse_mode with
-    | Infer _ -> Infer []
-    | Differential | Javac | NoParse -> parse_mode in
   if short <> "" then
-    add parse_mode_no_sections {desc with long = ""; meta = ""; doc = ""} ;
+    add parse_mode [] {desc with long = ""; meta = ""; doc = ""} ;
   (* add desc for deprecated options only for parsing, without documentation *)
   List.iter deprecated ~f:(fun deprecated ->
       deprecate_desc parse_mode ~long ~short:short ~deprecated desc
-      |> add parse_mode_no_sections) ;
+      |> add parse_mode []) ;
   variable
 
 (* begin parsing state *)
@@ -335,50 +249,55 @@ let arg_being_parsed : int ref = ref 0
 (* list of arg specifications currently being used by Arg.parse_argv_dynamic *)
 let curr_speclist : (Arg.key * Arg.spec * Arg.doc) list ref = ref []
 
-let unknown_args_action = ref `Reject
+let anon_arg_action = ref (anon_arg_action_of_parse_mode InferCommand)
+
+let subcommands = ref []
+let subcommand_actions = ref []
 
 let rev_anon_args = ref []
-let anon_fun arg = match !unknown_args_action with
-  | `Skip ->
-      ()
-  | `Add ->
-      rev_anon_args := arg::!rev_anon_args
-  | `Reject ->
-      raise (Arg.Bad ("unexpected anonymous argument: " ^ arg))
 
-(* keep track of the final parse action to drive the remainder of the program *)
-let final_parse_action = ref (Infer Driver)
+(* keep track of the current active command to drive the remainder of the program *)
+let curr_command = ref None
 
 (* end parsing state *)
 
 type 'a t =
   ?deprecated:string list -> long:Arg.key -> ?short:char ->
-  ?parse_mode:parse_mode -> ?meta:string -> Arg.doc ->
+  ?parse_mode:parse_mode -> ?in_help:(command * string) list -> ?meta:string -> Arg.doc ->
   'a
 
-let string_json_decoder ~long json = [dashdash long; YBU.to_string json]
+let string_json_decoder ~long ~inferconfig_dir:_ json =
+  [dashdash long; YBU.to_string json]
 
-let list_json_decoder json_decoder json = List.concat (YBU.convert_each json_decoder json)
+let path_json_decoder ~long ~inferconfig_dir json =
+  let abs_path =
+    let path = YBU.to_string json in
+    if Filename.is_relative path then inferconfig_dir ^/ path
+    else path in
+  [dashdash long; abs_path]
 
-let mk_set var value ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let list_json_decoder json_decoder ~inferconfig_dir json =
+  List.concat (YBU.convert_each (json_decoder ~inferconfig_dir) json)
+
+let mk_set var value ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="") doc =
   let setter () = var := value in
   ignore(
-    mk ~deprecated ~long ?short ~default:() ?parse_mode ~meta doc
+    mk ~deprecated ~long ?short ~default:() ?parse_mode ?in_help ~meta doc
       ~default_to_string:(fun () -> "")
       ~decode_json:(string_json_decoder ~long)
       ~mk_setter:(fun _ _ -> setter ())
       ~mk_spec:(fun _ -> Unit setter) )
 
 let mk_option ?(default=None) ?(default_to_string=fun _ -> "") ~f
-    ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+    ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="string") doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string
     ~decode_json:(string_json_decoder ~long)
     ~mk_setter:(fun var str -> var := f str)
     ~mk_spec:(fun set -> String set)
 
 let mk_bool ?(deprecated_no=[]) ?(default=false) ?(f=fun b -> b)
-    ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+    ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="") doc =
   let nolong =
     let len = String.length long in
     if len > 3 && String.sub long ~pos:0 ~len:3 = "no-" then
@@ -393,8 +312,8 @@ let mk_bool ?(deprecated_no=[]) ?(default=false) ?(f=fun b -> b)
   in
   let doc long short =
     match short with
-    | Some short -> doc ^ " (Conversely: --" ^ long ^ " | -" ^ String.of_char short ^ ")"
-    | None       -> doc ^ " (Conversely: --" ^ long ^ ")"
+    | Some short -> doc ^ " (Conversely: $(b,--" ^ long ^ ") | $(b,-" ^ String.of_char short ^ "))"
+    | None       -> doc ^ " (Conversely: $(b,--" ^ long ^ "))"
   in
   let doc, nodoc =
     if not default then
@@ -404,318 +323,356 @@ let mk_bool ?(deprecated_no=[]) ?(default=false) ?(f=fun b -> b)
   let default_to_string _ = "" in
   let mk_spec set = Unit (fun () -> set "") in
   let var =
-    mk ~long ?short ~deprecated ~default ?parse_mode
+    mk ~long ?short ~deprecated ~default ?parse_mode ?in_help
       ~meta doc ~default_to_string ~mk_setter:(fun var _ -> var := f true)
-      ~decode_json:(fun json ->
+      ~decode_json:(fun ~inferconfig_dir:_ json ->
           [dashdash (if YBU.to_bool json then long else nolong)])
       ~mk_spec in
   ignore(
-    mk ~long:nolong ?short:noshort ~deprecated:deprecated_no ~default:(not default) ?parse_mode
+    mk ~long:nolong ?short:noshort ~deprecated:deprecated_no ~default:(not default)
+      ?parse_mode ?in_help
       ~meta nodoc ~default_to_string ~mk_setter:(fun _ _ -> var := f false)
-      ~decode_json:(fun json ->
+      ~decode_json:(fun ~inferconfig_dir:_ json ->
           [dashdash (if YBU.to_bool json then nolong else long)])
       ~mk_spec );
   var
 
 let mk_bool_group ?(deprecated_no=[]) ?(default=false)
-    ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc children no_children =
+    ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?meta doc children no_children =
   let f b =
     List.iter ~f:(fun child -> child := b) children ;
     List.iter ~f:(fun child -> child := not b) no_children ;
     b
   in
-  mk_bool ~deprecated ~deprecated_no ~default ~long ?short ~f ?parse_mode ~meta doc
+  mk_bool ~deprecated ~deprecated_no ~default ~long ?short ~f ?parse_mode ?in_help ?meta doc
 
-let mk_int ~default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+let mk_int ~default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="int") doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string:string_of_int
     ~mk_setter:(fun var str -> var := (int_of_string str))
     ~decode_json:(string_json_decoder ~long)
     ~mk_spec:(fun set -> String set)
 
-let mk_int_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let mk_int_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="int") doc =
   let default_to_string = function Some f -> string_of_int f | None -> "" in
   let f s = Some (int_of_string s) in
-  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ~meta doc
+  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ?in_help ~meta doc
 
-let mk_float ~default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+let mk_float ~default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="float") doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string:string_of_float
     ~mk_setter:(fun var str -> var := (float_of_string str))
     ~decode_json:(string_json_decoder ~long)
     ~mk_spec:(fun set -> String set)
 
-let mk_float_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let mk_float_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="float") doc =
   let default_to_string = function Some f -> string_of_float f | None -> "" in
   let f s = Some (float_of_string s) in
-  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ~meta doc
+  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ?in_help ~meta doc
 
-let mk_string ~default ?(f=fun s -> s) ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+let mk_string ~default ?(f=fun s -> s) ?(deprecated=[]) ~long ?short ?parse_mode ?in_help
+    ?(meta="string") doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string:(fun s -> s)
     ~mk_setter:(fun var str -> var := f str)
     ~decode_json:(string_json_decoder ~long)
     ~mk_spec:(fun set -> String set)
 
-let mk_string_opt ?default ?(f=fun s -> s) ?(deprecated=[]) ~long ?short ?parse_mode
-    ?(meta="") doc =
+let mk_string_opt ?default ?(f=fun s -> s) ?(deprecated=[]) ~long ?short ?parse_mode ?in_help
+    ?(meta="string") doc =
   let default_to_string = function Some s -> s | None -> "" in
   let f s = Some (f s) in
-  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ~meta doc
+  mk_option ~deprecated ~long ?short ~default ~default_to_string ~f ?parse_mode ?in_help ~meta doc
 
 let mk_string_list ?(default=[]) ?(f=fun s -> s)
-    ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+    ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="+string") doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string:(String.concat ~sep:", ")
     ~mk_setter:(fun var str -> var := (f str) :: !var)
     ~decode_json:(list_json_decoder (string_json_decoder ~long))
     ~mk_spec:(fun set -> String set)
 
+let normalize_path_in_args_being_parsed ?(f=Fn.id) ~is_anon_arg str =
+  if Filename.is_relative str then (
+    (* Replace relative paths with absolute ones on the fly in the args being parsed. This assumes
+       that [!arg_being_parsed] points at either [str] (if [is_anon_arg]) or at the option name
+       position in [!args_to_parse], as is the case e.g. when calling
+       [Arg.parse_argv_dynamic ~current:arg_being_parsed !args_to_parse ...]. *)
+    let root = Unix.getcwd () in
+    let abs_path = Utils.filename_to_absolute ~root str in
+    (!args_to_parse).(!arg_being_parsed + if is_anon_arg then 0 else 1) <- f abs_path;
+    abs_path
+  ) else
+    str
+
 let mk_path_helper ~setter ~default_to_string
-    ~default ~deprecated ~long ~short ~parse_mode ~meta ~decode_json doc =
-  let normalize_path_in_args_being_parsed str =
-    if Filename.is_relative str then (
-      (* Replace relative paths with absolute ones on the fly in the args being parsed. This assumes
-         that [!arg_being_parsed] points at the option name position in [!args_to_parse], as is the
-         case e.g. when calling
-         [Arg.parse_argv_dynamic ~current:arg_being_parsed !args_to_parse ...]. *)
-      let root = Unix.getcwd () in
-      let abs_path = Utils.filename_to_absolute ~root str in
-      (!args_to_parse).(!arg_being_parsed + 1) <- abs_path;
-      abs_path
-    ) else
-      str in
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+    ~default ~deprecated ~long ~short ~parse_mode ~in_help ~meta ~decode_json doc =
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~decode_json ~default_to_string
     ~mk_setter:(fun var str ->
-        let abs_path = normalize_path_in_args_being_parsed str in
+        let abs_path = normalize_path_in_args_being_parsed ~is_anon_arg:false str in
         setter var abs_path)
     ~mk_spec:(fun set -> String set)
 
-let mk_path ~default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="path") =
+let mk_path ~default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="path") =
   mk_path_helper
     ~setter:(fun var x -> var := x)
-    ~decode_json:(string_json_decoder ~long)
+    ~decode_json:(path_json_decoder ~long)
     ~default_to_string:(fun s -> s)
-    ~default ~deprecated ~long ~short ~parse_mode ~meta
+    ~default ~deprecated ~long ~short ~parse_mode ~in_help ~meta
 
-let mk_path_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="path") =
+let mk_path_opt ?default ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="path") =
   mk_path_helper
     ~setter:(fun var x -> var := Some x)
-    ~decode_json:(string_json_decoder ~long)
+    ~decode_json:(path_json_decoder ~long)
     ~default_to_string:(function Some s -> s | None -> "")
-    ~default ~deprecated ~long ~short ~parse_mode ~meta
+    ~default ~deprecated ~long ~short ~parse_mode ~in_help ~meta
 
-let mk_path_list ?(default=[]) ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="path") =
+let mk_path_list ?(default=[]) ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="+path") =
   mk_path_helper
     ~setter:(fun var x -> var := x :: !var)
-    ~decode_json:(list_json_decoder (string_json_decoder ~long))
+    ~decode_json:(list_json_decoder (path_json_decoder ~long))
     ~default_to_string:(String.concat ~sep:", ")
-    ~default ~deprecated ~long ~short ~parse_mode ~meta
+    ~default ~deprecated ~long ~short ~parse_mode ~in_help ~meta
 
-let mk_symbol ~default ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let mk_symbols_meta symbols =
+  let strings = List.map ~f:fst symbols in
+  Printf.sprintf "{ %s }" (String.concat ~sep:" | " strings)
+
+let mk_symbol ~default ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?meta doc =
   let strings = List.map ~f:fst symbols in
   let sym_to_str = List.map ~f:(fun (x,y) -> (y,x)) symbols in
   let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
   let to_string sym = List.Assoc.find_exn ~equal:eq sym_to_str sym in
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta doc
+  let meta = Option.value meta ~default:(mk_symbols_meta symbols) in
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help ~meta doc
     ~default_to_string:(fun s -> to_string s)
     ~mk_setter:(fun var str -> var := of_string str)
     ~decode_json:(string_json_decoder ~long)
     ~mk_spec:(fun set -> Symbol (strings, set))
 
-let mk_symbol_opt ~symbols ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let mk_symbol_opt ~symbols ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?meta doc =
   let strings = List.map ~f:fst symbols in
   let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
-  mk ~deprecated ~long ?short ~default:None ?parse_mode ~meta doc
+  let meta = Option.value meta ~default:(mk_symbols_meta symbols) in
+  mk ~deprecated ~long ?short ~default:None ?parse_mode ?in_help ~meta doc
     ~default_to_string:(fun _ -> "")
     ~mk_setter:(fun var str -> var := Some (of_string str))
     ~decode_json:(string_json_decoder ~long)
     ~mk_spec:(fun set -> Symbol (strings, set))
 
-let mk_symbol_seq ?(default=[]) ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode
-    ?(meta="") doc =
+let mk_symbol_seq ?(default=[]) ~symbols ~eq ?(deprecated=[]) ~long ?short ?parse_mode ?in_help
+    ?meta doc =
   let sym_to_str = List.map ~f:(fun (x,y) -> (y,x)) symbols in
   let of_string str = List.Assoc.find_exn ~equal:String.equal symbols str in
   let to_string sym = List.Assoc.find_exn ~equal:eq sym_to_str sym in
-  mk ~deprecated ~long ?short ~default ?parse_mode ~meta:(",-separated sequence" ^ meta) doc
+  let meta = Option.value meta ~default:(",-separated sequence of " ^ mk_symbols_meta symbols) in
+  mk ~deprecated ~long ?short ~default ?parse_mode ?in_help
+    ~meta doc
     ~default_to_string:(fun syms -> String.concat ~sep:" " (List.map ~f:to_string syms))
     ~mk_setter:(fun var str_seq ->
-        var := List.map ~f:of_string (Str.split (Str.regexp_string ",") str_seq))
-    ~decode_json:(fun json ->
+        var := List.map ~f:of_string (String.split ~on:',' str_seq))
+    ~decode_json:(fun ~inferconfig_dir:_ json ->
         [dashdash long;
          String.concat ~sep:"," (YBU.convert_each YBU.to_string json)])
     ~mk_spec:(fun set -> String set)
 
 let mk_set_from_json ~default ~default_to_string ~f
-    ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="json") doc =
-  mk ~deprecated ~long ?short ?parse_mode ~meta doc
+    ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="json") doc =
+  mk ~deprecated ~long ?short ?parse_mode ?in_help ~meta doc
     ~default ~default_to_string
     ~mk_setter:(fun var json -> var := f (Yojson.Basic.from_string json))
-    ~decode_json:(fun json -> [dashdash long; Yojson.Basic.to_string json])
+    ~decode_json:(fun ~inferconfig_dir:_ json -> [dashdash long; Yojson.Basic.to_string json])
     ~mk_spec:(fun set -> String set)
 
-let mk_json ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="json") doc =
-  mk ~deprecated ~long ?short ?parse_mode ~meta doc
+let mk_json ?(deprecated=[]) ~long ?short ?parse_mode ?in_help ?(meta="json") doc =
+  mk ~deprecated ~long ?short ?parse_mode ?in_help ~meta doc
     ~default:(`List []) ~default_to_string:Yojson.Basic.to_string
     ~mk_setter:(fun var json -> var := Yojson.Basic.from_string json)
-    ~decode_json:(fun json -> [dashdash long; Yojson.Basic.to_string json])
+    ~decode_json:(fun ~inferconfig_dir:_ json -> [dashdash long; Yojson.Basic.to_string json])
     ~mk_spec:(fun set -> String set)
 
 (** [mk_anon] always return the same ref. Anonymous arguments are only accepted if
     [parse_action_accept_unknown_args] is true. *)
 let mk_anon () = rev_anon_args
 
-let mk_rest ?(parse_mode=Infer []) doc =
+let mk_rest ?(parse_mode=InferCommand) ?(in_help=[]) doc =
   let rest = ref [] in
   let spec = Rest (fun arg -> rest := arg :: !rest) in
-  add parse_mode {long = "--"; short = ""; meta = ""; doc; spec; decode_json = fun _ -> []} ;
+  add parse_mode in_help {long = "--"; short = ""; meta = ""; doc; spec;
+                          decode_json = fun ~inferconfig_dir:_ _ -> []} ;
   rest
 
-let set_curr_speclist_for_parse_action ~incomplete ~usage ?(parse_all=false) parse_action =
-  let full_speclist = ref [] in
+let normalize_desc_list speclist =
+  let norm k =
+    let remove_no s =
+      let len = String.length k in
+      if len > 3 && String.sub s ~pos:0 ~len:3 = "no-"
+      then String.sub s ~pos:3 ~len:(len - 3)
+      else s in
+    let remove_weird_chars =
+      String.filter ~f:(function
+          | 'a'..'z' | '0'..'9' | '-' -> true
+          | _ -> false) in
+    remove_weird_chars @@ String.lowercase @@ remove_no k in
+  let compare_specs {long = x} {long = y} =
+    match x, y with
+    | "--", "--" -> 0
+    | "--", _ -> 1
+    | _, "--" -> -1
+    | _ ->
+        let lower_norm s = String.lowercase @@ norm s in
+        String.compare (lower_norm x) (lower_norm y) in
+  let sort speclist = List.sort ~cmp:compare_specs speclist in
+  sort speclist
 
+let mk_command_doc ~title ~section ~version ~date ~short_description ~synopsis ~description
+    ?options ?exit_status ?environment ?files ?notes ?bugs ?examples ~see_also
+    command_str =
+  let add_if section blocks = match blocks with
+    | None -> `Blocks []
+    | Some bs -> `Blocks (`S section :: bs) in
+  let manual_before_options = [
+    `S Cmdliner.Manpage.s_name;
+    (* the format of the following line is mandated by man(7) *)
+    `Pre (Printf.sprintf "%s - %s" command_str short_description);
+    `S Cmdliner.Manpage.s_synopsis;
+    `Blocks synopsis;
+    `S Cmdliner.Manpage.s_description;
+    `Blocks description;
+  ] in
+  let manual_options = Option.value ~default:(`Prepend []) options in
+  let manual_after_options = [
+    add_if Cmdliner.Manpage.s_exit_status exit_status;
+    add_if Cmdliner.Manpage.s_environment environment;
+    add_if Cmdliner.Manpage.s_files files;
+    add_if manpage_s_notes notes;
+    add_if Cmdliner.Manpage.s_bugs bugs;
+    add_if Cmdliner.Manpage.s_examples examples;
+    `S Cmdliner.Manpage.s_see_also;
+    `Blocks see_also;
+  ] in
+  let command_doc = {
+    title = command_str, section, date, version, title;
+    manual_before_options; manual_options; manual_after_options;
+  } in
+  command_doc
+
+let set_curr_speclist_for_parse_mode ~usage parse_mode =
   let curr_usage status =
     prerr_endline (String.concat_array ~sep:" " !args_to_parse) ;
-    Arg.usage !curr_speclist usage ;
-    exit status
-  and full_usage status =
-    Arg.usage (to_arg_speclist !full_speclist) usage ;
+    prerr_endline usage ;
     exit status
   in
   (* "-help" and "--help" are automatically recognized by Arg.parse, so we have to give them special
      treatment *)
-  let add_or_suppress_help (speclist, (doc_width,left_width)) =
+  let add_or_suppress_help speclist =
     let unknown opt =
       (opt, Unit (fun () -> raise (Arg.Bad ("unknown option '" ^ opt ^ "'"))), "") in
-    let mk_spec ~long ?(short="") spec doc =
-      pad_and_xform doc_width left_width { long; short; meta=""; spec; doc;
-                                           decode_json=fun _ -> raise (Arg.Bad long)} in
-    if incomplete then
-      speclist @ [
-        (unknown "--help") ;
-        (unknown "-help")
-      ]
-    else
-      speclist @ [
-        mk_spec ~long:"help" ~short:"h"
-          (Unit (fun () -> curr_usage 0))
-          "Display this list of options";
-        mk_spec ~long:"help-full"
-          (Unit (fun () -> full_usage 0))
-          "Display the full list of options, including internal and experimental options";
-        (unknown "-help")
-      ]
+    let has_opt opt = List.exists ~f:(fun (o, _, _) -> String.equal opt o) speclist in
+    let add_unknown opt = if not (has_opt opt) then List.cons (unknown opt) else Fn.id in
+    add_unknown "-help" @@ add_unknown "--help" @@ speclist
   in
-  let normalize speclist =
-    let norm k =
-      let remove_no s =
-        let len = String.length k in
-        if len > 3 && String.sub s ~pos:0 ~len:3 = "no-"
-        then String.sub s ~pos:3 ~len:(len - 3)
-        else s in
-      let remove_weird_chars = Str.global_replace (Str.regexp "[^a-z0-9-]") "" in
-      remove_weird_chars @@ String.lowercase @@ remove_no k in
-    let compare_specs {long = x} {long = y} =
-      match x, y with
-      | "--", "--" -> 0
-      | "--", _ -> 1
-      | _, "--" -> -1
-      | _ ->
-          let lower_norm s = String.lowercase @@ norm s in
-          String.compare (lower_norm x) (lower_norm y) in
-    let sort speclist = List.sort ~cmp:compare_specs speclist in
-    align (sort speclist)
-  in
-  let add_to_curr_speclist ?(add_help=false) ?header parse_action =
-    let mk_header_spec heading =
-      ("", Unit (fun () -> ()), "\n## " ^ heading ^ "\n") in
-    let exe_descs = match parse_all, parse_action with
-      | true, _ ->
-          List.Assoc.find_exn ~equal:equal_parse_tag parse_tag_desc_lists AllInferTags
-      | false, Infer section ->
-          List.Assoc.find_exn ~equal:equal_section infer_section_desc_lists section
-      | false, (Differential | Javac | NoParse) ->
-          to_parse_tag parse_action
-          |> List.Assoc.find_exn ~equal:equal_parse_tag parse_tag_desc_lists in
-    let (exe_speclist, widths) = normalize !exe_descs in
-    let exe_speclist = if add_help
-      then add_or_suppress_help (exe_speclist, widths)
-      else exe_speclist in
-    let exe_speclist = to_arg_speclist exe_speclist in
-    (* Return false if the same option appears in [speclist], unless [doc] is non-empty and the
-       documentation in [speclist] is empty. The goal is to keep only one instance of each option,
-       and that instance is the one that has a non-empty docstring if there is one. *)
-    let is_not_dup_with_doc speclist (opt, _, doc) =
-      opt = "" ||
-      List.for_all ~f:(fun (opt', _, doc') ->
-          (doc <> "" && doc' = "") || (not (String.equal opt opt'))) speclist in
-    let unique_exe_speclist = List.filter ~f:(is_not_dup_with_doc !curr_speclist) exe_speclist in
-    curr_speclist := List.filter ~f:(is_not_dup_with_doc unique_exe_speclist) !curr_speclist @
-                     (match header with
-                      | Some s -> (to_arg_spec_triple (mk_header_spec s)):: unique_exe_speclist
-                      | None -> unique_exe_speclist)
-  in
-  (* speclist includes args for current exe with docs, and all other args without docs, so
-     that all args can be parsed, but --help and parse failures only show external args for
-     current exe *)
-  (* reset the speclist between calls to this function *)
-  curr_speclist := [];
-  if equal_parse_action parse_action (Infer Driver) then (
-    add_to_curr_speclist ~add_help:true ~header:"Driver options" (Infer Driver);
-    add_to_curr_speclist ~header:"Checkers options" (Infer Checkers);
-    add_to_curr_speclist ~header:"Clang-specific options" (Infer Clang);
-    add_to_curr_speclist ~header:"Java-specific options" (Infer Java);
-    add_to_curr_speclist ~header:"Quandary checker options" (Infer Quandary)
-  ) else
-    add_to_curr_speclist ~add_help:true parse_action
-  ;
-  assert( check_no_duplicates !curr_speclist )
-  ;
   let full_desc_list =
-    let parse_tag = if parse_all then AllInferTags else to_parse_tag parse_action in
-    List.Assoc.find_exn ~equal:equal_parse_tag parse_tag_desc_lists parse_tag in
-  full_speclist := add_or_suppress_help (normalize !full_desc_list)
-  ;
+    List.Assoc.find_exn ~equal:equal_parse_mode parse_mode_desc_lists parse_mode in
+  curr_speclist := normalize_desc_list !full_desc_list
+                   |> List.map ~f:xdesc
+                   |> add_or_suppress_help
+                   |> to_arg_speclist;
+  assert( check_no_duplicates !curr_speclist );
   curr_usage
 
+let select_parse_mode ~usage parse_mode =
+  let print_usage = set_curr_speclist_for_parse_mode ~usage parse_mode in
+  anon_arg_action := anon_arg_action_of_parse_mode parse_mode;
+  print_usage
 
-let select_parse_action ~incomplete ~usage ?parse_all action =
-  let usage = set_curr_speclist_for_parse_action ~incomplete ~usage ?parse_all action in
-  unknown_args_action := if accept_unknown_args action then `Add else `Reject;
-  final_parse_action := action;
-  usage
+let string_of_command command =
+  let (_, s, _) = List.Assoc.find_exn !subcommands ~equal:equal_command command in
+  s
 
-let mk_rest_actions ?(parse_mode=Infer []) doc ~usage decode_action =
+let mk_rest_actions ?(parse_mode=InferCommand) ?(in_help=[]) doc ~usage decode_action =
   let rest = ref [] in
   let spec = String (fun arg ->
       rest := List.rev (Array.to_list (Array.slice !args_to_parse (!arg_being_parsed + 1) 0)) ;
-      select_parse_action ~incomplete:false ~usage (decode_action arg) |> ignore;
-      (* stop accepting new anonymous arguments *)
-      unknown_args_action := `Skip) in
-  add parse_mode {long = "--"; short = ""; meta = ""; doc; spec; decode_json = fun _ -> []} ;
+      select_parse_mode ~usage (decode_action arg) |> ignore) in
+  add parse_mode in_help {long = "--"; short = ""; meta = ""; doc; spec;
+                          decode_json = fun ~inferconfig_dir:_ _ -> []} ;
   rest
 
-let mk_switch_parse_action
-    parse_action ~usage ?(deprecated=[]) ~long ?short ?parse_mode ?(meta="") doc =
+let mk_subcommand command ?on_unknown_arg:(on_unknown=`Reject) ?deprecated ~long ?(name=long)
+    ?parse_mode ?in_help command_doc =
   let switch () =
-    select_parse_action ~incomplete:false ~usage parse_action |> ignore in
+    curr_command := Some command;
+    anon_arg_action := {!anon_arg_action with on_unknown} in
   ignore(
-    mk ~deprecated ~long ?short ~default:() ?parse_mode ~meta doc
+    mk ?deprecated ~long ~default:() ?parse_mode ?in_help ~meta:""
+      (Printf.sprintf "activates the %s subcommand (see $(i,`infer %s --help`))" long long)
       ~default_to_string:(fun () -> "")
       ~decode_json:(string_json_decoder ~long)
       ~mk_setter:(fun _ _ -> switch ())
-      ~mk_spec:(fun _ -> Unit switch))
+      ~mk_spec:(fun _ -> Unit switch));
+  subcommands := (command, (command_doc, name, in_help))::!subcommands;
+  subcommand_actions := (name, switch)::!subcommand_actions
+
+(* drop well-balanced first and last characters in [s] that satisfy the [drop] predicate; for
+   instance, [lrstrip ~drop:(function | 'a' | 'x' -> true | _ -> false) "xaabax"] returns "ab" *)
+let rec lrstrip ~drop s =
+  let n = String.length s in
+  if n < 2 then s
+  else
+    let first = String.unsafe_get s 0 in
+    if Char.equal first (String.unsafe_get s (n-1)) && drop first then
+      lrstrip ~drop (String.slice s 1 (n-1))
+    else s
+
+let args_from_argfile arg =
+  let abs_fname =
+    let fname = String.slice arg 1 (String.length arg) in
+    normalize_path_in_args_being_parsed ~f:(fun s -> "@" ^ s) ~is_anon_arg:true fname in
+  match In_channel.read_lines abs_fname with
+  | lines ->
+      let strip = lrstrip ~drop:(function '"' | '\'' -> true | _ -> false) in
+      List.map ~f:strip lines
+  | exception e ->
+      raise (Arg.Bad ("Error reading argument file '" ^ abs_fname ^ "': " ^ Exn.to_string e))
+
+exception SubArguments of string list
+
+let anon_fun arg =
+  if !anon_arg_action.parse_argfiles
+  && String.is_prefix arg ~prefix:"@" then
+    (* stop parsing the current args and go look in that argfile *)
+    raise (SubArguments (args_from_argfile arg))
+  else if !anon_arg_action.parse_subcommands
+       && List.Assoc.mem !subcommand_actions ~equal:String.equal arg then
+    let command_switch = List.Assoc.find_exn !subcommand_actions ~equal:String.equal arg in
+    match !curr_command  with
+    | None ->
+        command_switch ()
+    | Some command ->
+        raise (Arg.Bad
+                 ("More than one subcommand specified: " ^ string_of_command command ^ ", " ^
+                  arg))
+  else match !anon_arg_action.on_unknown with
+    | `Add ->
+        rev_anon_args := arg::!rev_anon_args
+    | `Skip ->
+        ()
+    | `Reject ->
+        raise (Arg.Bad ("unexpected anonymous argument: " ^ arg))
+
 
 let decode_inferconfig_to_argv path =
-  let json = match Utils.read_optional_json_file path with
+  let json = match Utils.read_json_file path with
     | Ok json ->
         json
     | Error msg ->
         warnf "WARNING: Could not read or parse Infer config in %s:@\n%s@." path msg ;
         `Assoc [] in
-  let desc_list = List.Assoc.find_exn ~equal:equal_parse_tag parse_tag_desc_lists AllInferTags in
+  let desc_list = List.Assoc.find_exn ~equal:equal_parse_mode parse_mode_desc_lists InferCommand in
   let json_config = YBU.to_assoc json in
+  let inferconfig_dir = Filename.dirname path in
   let one_config_item result (key, json_val) =
     try
       let {decode_json} =
@@ -724,7 +681,7 @@ let decode_inferconfig_to_argv path =
               String.equal key long
               || (* for deprecated options *) String.equal key short)
           !desc_list in
-      decode_json json_val @ result
+      decode_json ~inferconfig_dir json_val @ result
     with
     | Not_found ->
         warnf "WARNING: while reading config file %s:@\nUnknown option %s@." path key ;
@@ -751,7 +708,7 @@ let encode_argv_to_env argv =
        ) argv)
 
 let decode_env_to_argv env =
-  Str.split (Str.regexp_string (String.make 1 env_var_sep)) env
+  String.split ~on:env_var_sep env |> List.filter ~f:(Fn.non String.is_empty)
 
 (** [prefix_before_rest (prefix @ ["--" :: rest])] is [prefix] where "--" is not in [prefix]. *)
 let rev_prefix_before_rest args =
@@ -769,11 +726,15 @@ let extra_env_args = ref []
 let extend_env_args args =
   extra_env_args := List.rev_append args !extra_env_args
 
-let parse_args ~incomplete ~usage ?parse_all action args =
+let parse_args ~usage initial_action ?initial_command args =
   let exe_name = Sys.executable_name in
   args_to_parse := Array.of_list (exe_name :: args);
   arg_being_parsed := 0;
-  let curr_usage = select_parse_action ~incomplete ~usage ?parse_all action in
+  let curr_usage = select_parse_mode ~usage initial_action in
+  Option.iter initial_command ~f:(fun command ->
+      let switch = List.Assoc.find_exn !subcommand_actions ~equal:String.equal
+          (string_of_command command) in
+      switch ());
   (* tests if msg indicates an unknown option, as opposed to a known option with bad argument *)
   let is_unknown msg = String.is_substring msg ~substring:": unknown option" in
   let rec parse_loop () =
@@ -781,21 +742,33 @@ let parse_args ~incomplete ~usage ?parse_all action args =
       Arg.parse_argv_dynamic ~current:arg_being_parsed !args_to_parse curr_speclist
         anon_fun usage
     with
-    | Arg.Bad _ when incomplete -> parse_loop ()
+    | SubArguments args ->
+        (* stop parsing the current arguments and parse [args] for a while *)
+        let saved_args = !args_to_parse in
+        let saved_current = !arg_being_parsed in
+        args_to_parse := Array.of_list (exe_name :: args);
+        arg_being_parsed := 0;
+        parse_loop ();
+        (* resume argument parsing *)
+        args_to_parse := saved_args;
+        arg_being_parsed := saved_current;
+        parse_loop ()
     | Arg.Bad usage_msg ->
-        if !unknown_args_action <> `Reject && is_unknown usage_msg then (
+        if !anon_arg_action.on_unknown <> `Reject && is_unknown usage_msg then (
           anon_fun !args_to_parse.(!arg_being_parsed);
           parse_loop ()
         ) else (
           Pervasives.prerr_string usage_msg;
           exit 2
         )
-    | Arg.Help usage_msg -> Pervasives.print_string usage_msg; exit 0
-  in
+    | Arg.Help _ ->
+        (* we handle --help by ourselves and error on -help, so Arg has no way to raise Help
+           anymore *)
+        assert false in
   parse_loop ();
   curr_usage
 
-let parse ?(incomplete=false) ?config_file ~usage action =
+let parse ?config_file ~usage action initial_command =
   let env_args = decode_env_to_argv (Option.value (Sys.getenv args_env_var) ~default:"") in
   let inferconfig_args =
     Option.map ~f:decode_inferconfig_to_argv config_file |> Option.value ~default:[] in
@@ -814,15 +787,104 @@ let parse ?(incomplete=false) ?config_file ~usage action =
         else !args_to_export ^ String.of_char env_var_sep ^ encode_argv_to_env args in
       args_to_export := arg_string in
   (* read .inferconfig first, then env vars, then command-line options *)
-  parse_args ~incomplete ~usage ~parse_all:true (Infer Driver) inferconfig_args |> ignore;
+  parse_args ~usage InferCommand inferconfig_args |> ignore;
   (* NOTE: do not add the contents of .inferconfig to INFER_ARGS. This helps avoid hitting the
      command line size limit. *)
-  parse_args ~incomplete ~usage ~parse_all:true (Infer Driver) env_args |> ignore;
-  if not incomplete then add_parsed_args_to_args_to_export ();
+  parse_args ~usage InferCommand env_args |> ignore;
+  add_parsed_args_to_args_to_export ();
   let curr_usage =
     let cl_args = match Array.to_list Sys.argv with _ :: tl -> tl | [] -> [] in
-    let curr_usage = parse_args ~incomplete ~usage action cl_args in
-    if not incomplete then add_parsed_args_to_args_to_export ();
+    let curr_usage = parse_args ~usage action ?initial_command cl_args in
+    add_parsed_args_to_args_to_export ();
     curr_usage in
-  if not incomplete then Unix.putenv ~key:args_env_var ~data:!args_to_export;
-  !final_parse_action, curr_usage
+  Unix.putenv ~key:args_env_var ~data:!args_to_export;
+  !curr_command, curr_usage
+
+let wrap_line indent_string wrap_length line0 =
+  let line = indent_string ^ line0 in
+  let indent_length = String.length indent_string in
+  let word_sep = ' ' in
+  let words = String.split ~on:word_sep line in
+  let word_sep_str = String.of_char word_sep in
+  let add_word_to_paragraph (rev_lines, non_empty, line, line_length) word =
+    let word_length =
+      let len = String.length word in
+      if String.is_prefix ~prefix:"$(b," word || String.is_prefix ~prefix:"$(i," word then
+        len - 4 (* length of formatting tag prefix *)
+        - 1 (* APPROXIMATION: closing parenthesis that will come after the word, or maybe later *)
+      else
+        len in
+    let new_length = line_length + (String.length word_sep_str) + word_length in
+    let new_non_empty = non_empty || word <> "" in
+    if new_length > wrap_length && non_empty then
+      (line::rev_lines, true, indent_string ^ word, indent_length + word_length)
+    else
+      let sep = if Int.equal line_length indent_length then "" else word_sep_str in
+      let new_line = line ^ sep ^ word in
+      if new_length > wrap_length && new_non_empty then
+        (new_line::rev_lines, false, indent_string, indent_length)
+      else
+        (rev_lines, new_non_empty, new_line, new_length) in
+  let (rev_lines, _, line, _) =
+    List.fold ~f:add_word_to_paragraph ~init:([], false, "", 0) words in
+  List.rev (line::rev_lines)
+
+let show_manual ?internal_section format default_doc command_opt =
+  let command_doc = match command_opt with
+    | None ->
+        default_doc
+    | Some command ->
+        match List.Assoc.find_exn !subcommands command with
+        | (Some command_doc, _, _) ->
+            command_doc
+        | (None, _, _) ->
+            invalid_argf "No manual for internal command %s" (string_of_command command) in
+  let pp_meta f meta = match meta with
+    | "" -> ()
+    | meta -> F.fprintf f " $(i,%s)" (Cmdliner.Manpage.escape meta) in
+  let pp_short f = function
+    | "" -> ()
+    | s -> Format.fprintf f ",$(b,-%s)" s in
+  let block_of_desc { long; meta; short; doc } =
+    if String.equal doc "" then
+      []
+    else
+      let doc_first_line, doc_other_lines = match String.split ~on:'\n' doc with
+        | first::other -> first, other
+        | [] -> "", [] in
+      (* Cmdline.Manpage does not format multi-paragraph documentation strings correctly for `I
+         blocks, so we do a bit of formatting by hand *)
+      let indent_string = "    " in
+      let width = 77 (* Cmdliner.Manpage width limit it seems *)
+                  - 7 (* base indentation of documentation strings *) in
+      `I (Format.asprintf "$(b,%s)%a%a" (dashdash long) pp_short short pp_meta meta,
+          doc_first_line)
+      :: List.concat_map (List.concat_map ~f:(wrap_line indent_string width) doc_other_lines)
+        ~f:(fun s -> [`Noblank; `Pre s]) in
+  let option_blocks = match command_doc.manual_options with
+    | `Replace blocks ->
+        `S Cmdliner.Manpage.s_options :: blocks
+    | `Prepend blocks ->
+        let hidden =
+          match internal_section with
+          | Some section ->
+              `S section :: `P "Use at your own risk."
+              :: List.concat_map ~f:block_of_desc (normalize_desc_list !hidden_descs_list)
+          | None ->
+              [] in
+        match command_opt with
+        | Some command ->
+            let sections = List.Assoc.find_exn help_sections_desc_lists command in
+            SectionMap.fold (fun section descs result ->
+                `S section ::
+                (if String.equal section Cmdliner.Manpage.s_options then blocks else []) @
+                List.concat_map ~f:block_of_desc (normalize_desc_list descs) @ result)
+              !sections hidden
+        | None ->
+            `S Cmdliner.Manpage.s_options :: blocks @
+            List.concat_map ~f:block_of_desc (normalize_desc_list !visible_descs_list) @
+            hidden in
+  let blocks = [`Blocks command_doc.manual_before_options; `Blocks option_blocks;
+                `Blocks command_doc.manual_after_options] in
+  Cmdliner.Manpage.print format Format.std_formatter (command_doc.title, blocks);
+  ()

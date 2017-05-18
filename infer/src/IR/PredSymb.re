@@ -11,9 +11,9 @@ open! IStd;
 
 
 /** The Smallfoot Intermediate Language: Predicate Symbols */
-let module L = Logging;
+module L = Logging;
 
-let module F = Format;
+module F = Format;
 
 type func_attribute =
   | FA_sentinel int int /** __attribute__((sentinel(int, int))) */
@@ -44,13 +44,6 @@ type mem_kind =
   | Mnew_array /** memory allocated with new[] */
   | Mobjc /** memory allocated with objective-c alloc */
 [@@deriving compare];
-
-let mem_kind_to_num =
-  fun
-  | Mmalloc => 0
-  | Mnew => 1
-  | Mnew_array => 2
-  | Mobjc => 3;
 
 
 /** resource that can be allocated */
@@ -96,7 +89,7 @@ type taint_kind =
   | Tk_unknown
 [@@deriving compare];
 
-type taint_info = {taint_source: Typ.Procname.t, taint_kind: taint_kind} [@@deriving compare];
+type taint_info = {taint_source: Typ.Procname.t, taint_kind} [@@deriving compare];
 
 
 /** acquire/release action on a resource */

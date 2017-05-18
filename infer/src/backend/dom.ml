@@ -710,7 +710,13 @@ end = struct
     else
       begin
         match atom_in with
-        | Sil.Aneq((Exp.Var id as e), e') | Sil.Aneq(e', (Exp.Var id as e))
+        | Sil.Aneq((Exp.Var id as e), e')
+          when (exp_contains_only_normal_ids e' && not (Ident.is_normal id)) ->
+            (* e' cannot also be a normal id according to the guard so we can consider the two cases
+               separately (this case and the next) *)
+            build_other_atoms (fun e0 -> Prop.mk_neq tenv e0 e') side e
+
+        | Sil.Aneq(e', (Exp.Var id as e))
           when (exp_contains_only_normal_ids e' && not (Ident.is_normal id)) ->
             build_other_atoms (fun e0 -> Prop.mk_neq tenv e0 e') side e
 
@@ -722,7 +728,13 @@ end = struct
           when not (Ident.is_normal id) && List.for_all ~f:exp_contains_only_normal_ids es ->
             build_other_atoms (fun e0 -> Prop.mk_npred tenv a (e0 :: es)) side e
 
-        | Sil.Aeq((Exp.Var id as e), e') | Sil.Aeq(e', (Exp.Var id as e))
+        | Sil.Aeq((Exp.Var id as e), e')
+          when (exp_contains_only_normal_ids e' && not (Ident.is_normal id)) ->
+            (* e' cannot also be a normal id according to the guard so we can consider the two cases
+               separately (this case and the next) *)
+            build_other_atoms (fun e0 -> Prop.mk_eq tenv e0 e') side e
+
+        | Sil.Aeq(e', (Exp.Var id as e))
           when (exp_contains_only_normal_ids e' && not (Ident.is_normal id)) ->
             build_other_atoms (fun e0 -> Prop.mk_eq tenv e0 e') side e
 
@@ -822,10 +834,10 @@ let rec exp_construct_fresh side e =
       let e1' = exp_construct_fresh side e1 in
       let e2' = exp_construct_fresh side e2 in
       Exp.Lindex(e1', e2')
-  | Exp.Sizeof (_, None, _) ->
+  | Exp.Sizeof {dynamic_length=None} ->
       e
-  | Exp.Sizeof (typ, Some len, st) ->
-      Exp.Sizeof (typ, Some (exp_construct_fresh side len), st)
+  | Exp.Sizeof ({dynamic_length=Some len} as sizeof) ->
+      Exp.Sizeof {sizeof with dynamic_length=Some (exp_construct_fresh side len)}
 
 let strexp_construct_fresh side =
   let f (e, inst_opt) = (exp_construct_fresh side e, inst_opt) in
@@ -959,9 +971,16 @@ let rec exp_partial_join (e1: Exp.t) (e2: Exp.t) : Exp.t =
       let e1'' = exp_partial_join e1 e2 in
       let e2'' = exp_partial_join e1' e2' in
       Exp.Lindex(e1'', e2'')
-  | Exp.Sizeof (t1, len1, st1), Exp.Sizeof (t2, len2, st2) ->
-      Exp.Sizeof
-        (typ_partial_join t1 t2, dynamic_length_partial_join len1 len2, Subtype.join st1 st2)
+  | Exp.Sizeof {typ=t1; nbytes=nbytes1; dynamic_length=len1; subtype=st1},
+    Exp.Sizeof {typ=t2; nbytes=nbytes2; dynamic_length=len2; subtype=st2} ->
+      (* forget the static sizes if they differ *)
+      let nbytes_join i1 i2 = if Int.equal i1 i2 then Some i1 else None in
+      Exp.Sizeof {
+        typ=typ_partial_join t1 t2;
+        nbytes=option_partial_join nbytes_join nbytes1 nbytes2;
+        dynamic_length=dynamic_length_partial_join len1 len2;
+        subtype=Subtype.join st1 st2;
+      }
   | _ ->
       L.d_str "exp_partial_join no match "; Sil.d_exp e1; L.d_str " "; Sil.d_exp e2; L.d_ln ();
       raise Sil.JoinFail
@@ -983,13 +1002,16 @@ and static_length_partial_join l1 l2 =
 and dynamic_length_partial_join l1 l2 =
   option_partial_join (fun len1 len2 -> Some (length_partial_join len1 len2)) l1 l2
 
-and typ_partial_join t1 t2 = match t1, t2 with
-  | Typ.Tptr (t1, pk1), Typ.Tptr (t2, pk2) when Typ.equal_ptr_kind pk1 pk2 ->
-      Typ.Tptr (typ_partial_join t1 t2, pk1)
-  | Typ.Tarray (typ1, len1), Typ.Tarray (typ2, len2) ->
+and typ_partial_join (t1 : Typ.t) (t2 : Typ.t) = match t1.desc, t2.desc with
+  | Typ.Tptr (t1, pk1), Typ.Tptr (t2, pk2)
+    when Typ.equal_ptr_kind pk1 pk2 && Typ.equal_quals t1.quals t2.quals ->
+      Typ.mk ~default:t1 (Tptr (typ_partial_join t1 t2, pk1)) (* quals are the same for t1 and t2 *)
+  | Typ.Tarray (typ1, len1, stride1),
+    Typ.Tarray (typ2, len2, stride2) when Typ.equal_quals typ1.quals typ2.quals ->
       let t = typ_partial_join typ1 typ2 in
       let len = static_length_partial_join len1 len2 in
-      Typ.Tarray (t, len)
+      let stride = static_length_partial_join stride1 stride2 in
+      Typ.mk ~default:t1 (Tarray (t, len, stride)) (* quals are the same for t1 and t2 *)
   | _ when Typ.equal t1 t2 -> t1 (* common case *)
   | _ ->
       L.d_str "typ_partial_join no match ";

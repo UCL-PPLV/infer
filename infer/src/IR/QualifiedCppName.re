@@ -15,12 +15,25 @@ let equal = [%compare.equal : t];
 
 let empty = [];
 
-let append_qualifier quals qual::qual => List.cons qual quals;
+let append_qualifier quals ::qual => List.cons qual quals;
 
 let extract_last =
   fun
   | [last, ...rest] => Some (last, rest)
   | [] => None;
+
+let strip_template_args quals => {
+  let no_template_name s => List.hd_exn (String.split on::'<' s);
+  List.map f::no_template_name quals
+};
+
+let append_template_args_to_last quals ::args =>
+  switch quals {
+  | [last, _] when String.contains last '<' =>
+    failwith "expected qualified name without template args"
+  | [last, ...rest] => [last ^ args, ...rest]
+  | [] => failwith "expected non-empty qualified name"
+  };
 
 let to_list = List.rev;
 
@@ -32,22 +45,21 @@ let of_rev_list = ident;
 
 let cpp_separator = "::";
 
+/* define [cpp_separator_regex] here to compute it once */
+let cpp_separator_regex = Str.regexp_string cpp_separator;
+
 /* This is simplistic and will give the wrong answer in some cases, eg
    "foo<bar::baz<goo>>::someMethod" will get parsed as ["foo<bar", "baz<goo>>",
    "someMethod"]. Avoid using it if possible */
-let of_qual_string str => {
-  let class_sep_regex = Str.regexp_string cpp_separator;
-  /* wait until here to define the function so that [class_sep_regex] is only computed once */
-  Str.split class_sep_regex str |> List.rev
-};
+let of_qual_string str => Str.split cpp_separator_regex str |> List.rev;
 
-let to_separated_string quals sep::sep => List.rev quals |> String.concat sep::sep;
+let to_separated_string quals ::sep => List.rev quals |> String.concat ::sep;
 
 let to_qual_string = to_separated_string sep::cpp_separator;
 
 let pp fmt quals => Format.fprintf fmt "%s" (to_qual_string quals);
 
-let module Match = {
+module Match = {
   type quals_matcher = Str.regexp;
   let matching_separator = "#";
   let regexp_string_of_qualifiers quals =>
@@ -72,12 +84,9 @@ let module Match = {
   let of_fuzzy_qual_names fuzzy_qual_names =>
     List.map fuzzy_qual_names f::qualifiers_of_fuzzy_qual_name |> qualifiers_list_matcher;
   let match_qualifiers matcher quals => {
-    let normalized_qualifiers = {
-      /* qual_name may have qualifiers with template parameters - drop them to whitelist all
-         instantiations */
-      let no_template_name s => List.hd_exn (String.split on::'<' s);
-      List.map f::no_template_name quals
-    };
+    /* qual_name may have qualifiers with template parameters - drop them to whitelist all
+       instantiations */
+    let normalized_qualifiers = strip_template_args quals;
     Str.string_match matcher (to_separated_string sep::matching_separator normalized_qualifiers) 0
   };
 };

@@ -81,6 +81,8 @@ let file_arg_cmd_sanitizer cmd => {
   {...cmd, argv: [Format.sprintf "@%s" file]}
 };
 
+let include_override_regex = Option.map f::Str.regexp Config.clang_include_to_override_regex;
+
 /* Work around various path or library issues occurring when one tries to substitute Apple's version
    of clang with a different version. Also mitigate version discrepancies in clang's
    fatal warnings. */
@@ -105,16 +107,23 @@ let clang_cc1_cmd_sanitizer cmd => {
     } else if (
       String.equal option "-isystem"
     ) {
-      switch Config.clang_include_to_override {
-      | Some to_replace when String.equal arg to_replace =>
+      switch include_override_regex {
+      | Some regexp when Str.string_match regexp arg 0 =>
         fcp_dir ^\/ "clang" ^\/ "install" ^\/ "lib" ^\/ "clang" ^\/ "4.0.0" ^\/ "include"
       | _ => arg
       }
     } else {
       arg
     };
+  let args_defines =
+    if (Config.bufferoverrun) {
+      ["-D__INFER_BUFFEROVERRUN"]
+    } else {
+      []
+    };
   let post_args_rev =
     [] |> List.rev_append ["-include", Config.lib_dir ^\/ "clang_wrappers" ^\/ "global_defines.h"] |>
+    List.rev_append args_defines |>
     /* Never error on warnings. Clang is often more strict than Apple's version.  These arguments
        are appended at the end to override previous opposite settings.  How it's done: suppress
        all the warnings, since there are no warnings, compiler can't elevate them to error
@@ -124,7 +133,7 @@ let clang_cc1_cmd_sanitizer cmd => {
     fun
     | [] =>
       /* return non-reversed list */
-      List.rev (post_args_rev @ res_rev)
+      List.rev_append res_rev (List.rev post_args_rev)
     | [flag, ...tl] when List.mem equal::String.equal flags_blacklist flag =>
       filter_unsupported_args_and_swap_includes (flag, res_rev) tl
     | [arg, ...tl] => {
@@ -135,12 +144,7 @@ let clang_cc1_cmd_sanitizer cmd => {
   file_arg_cmd_sanitizer {...cmd, argv: clang_arguments}
 };
 
-let mk quoting_style prog::prog args::args => {
-  exec: prog,
-  orig_argv: args,
-  argv: args,
-  quoting_style
-};
+let mk quoting_style ::prog ::args => {exec: prog, orig_argv: args, argv: args, quoting_style};
 
 let command_to_run cmd => {
   let mk_cmd normalizer => {

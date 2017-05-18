@@ -59,7 +59,7 @@ module StructuredSil = struct
 
   let pp_structured_program = pp_structured_instr_list
 
-  let dummy_typ = Typ.Tvoid
+  let dummy_typ = Typ.mk Tvoid
   let dummy_loc = Location.dummy
   let dummy_procname = Typ.Procname.empty_block
 
@@ -124,7 +124,10 @@ module StructuredSil = struct
   let cast_id_to_id lhs cast_typ rhs =
     let lhs_id = ident_of_str lhs in
     let rhs_id = Exp.Var (ident_of_str rhs) in
-    make_call ~procname:BuiltinDecl.__cast (Some (lhs_id, cast_typ)) [rhs_id, cast_typ]
+    let cast_sizeof =
+      Exp.Sizeof { typ = cast_typ; nbytes=None; dynamic_length=None; subtype=Subtype.exact; } in
+    let args = [(rhs_id, cast_typ); (cast_sizeof, cast_typ)] in
+    make_call ~procname:BuiltinDecl.__cast (Some (lhs_id, cast_typ)) args
 
   let var_assign_exp ~rhs_typ lhs rhs_exp =
     let lhs_exp = var_of_str lhs in
@@ -132,7 +135,7 @@ module StructuredSil = struct
 
   let var_assign_int lhs rhs =
     let rhs_exp = Exp.int (IntLit.of_int rhs) in
-    let rhs_typ = Typ.Tint Typ.IInt in
+    let rhs_typ = Typ.mk (Tint Typ.IInt) in
     var_assign_exp ~rhs_typ lhs rhs_exp
 
   let var_assign_id ?(rhs_typ=dummy_typ) lhs rhs =
@@ -155,7 +158,8 @@ module StructuredSil = struct
     call_unknown None arg_strs
 end
 
-module Make (CFG : ProcCfg.S with type node = Procdesc.Node.t) (T : TransferFunctions.Make) = struct
+module Make
+    (CFG : ProcCfg.S with type node = Procdesc.Node.t) (T : TransferFunctions.MakeSIL) = struct
 
   open StructuredSil
 

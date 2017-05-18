@@ -393,19 +393,21 @@ let start_session node (loc: Location.t) proc_name session source =
   F.fprintf !curr_html_formatter "<LISTING>%a"
     Io_infer.Html.pp_start_color Pp.Black
 
-let node_start_session node session source =
+let node_start_session node session =
   if Config.write_html then
     let loc = Procdesc.Node.get_loc node in
+    let source = loc.Location.file in
     let pname = Procdesc.Node.get_proc_name node in
     start_session node loc pname session source
 
 (** Finish a session, and perform delayed print actions if required *)
-let node_finish_session node source =
+let node_finish_session node =
   if not Config.test then force_delayed_prints ()
   else L.reset_delayed_prints ();
   if Config.write_html then begin
     F.fprintf !curr_html_formatter "</LISTING>%a"
       Io_infer.Html.pp_end_color ();
+    let source = (Procdesc.Node.get_loc node).file in
     NodesHtml.finish_node
       (Procdesc.Node.get_proc_name node)
       (Procdesc.Node.get_id node :> int)
@@ -414,10 +416,11 @@ let node_finish_session node source =
 
 (** Write html file for the procedure.
     The boolean indicates whether to print whole seconds only *)
-let write_proc_html source pdesc =
+let write_proc_html pdesc =
   if Config.write_html then
     begin
       let pname = Procdesc.get_proc_name pdesc in
+      let source = (Procdesc.get_loc pdesc).file in
       let nodes = List.sort ~cmp:Procdesc.Node.compare (Procdesc.get_nodes pdesc) in
       let linenum = (Procdesc.Node.get_loc (List.hd_exn nodes)).Location.line in
       let fd, fmt =
@@ -502,7 +505,7 @@ let write_html_proc source proof_cover table_nodes_at_linenum global_err_log pro
 
 (** Create filename.ext.html. *)
 let write_html_file linereader filename procs =
-  let fname_encoding = SourceFile.encoding filename in
+  let fname_encoding = DB.source_file_encoding filename in
   let (fd, fmt) =
     Io_infer.Html.create
       (DB.Results_dir.Abs_source_dir filename)
@@ -554,7 +557,10 @@ let write_html_file linereader filename procs =
       ~f:(fun n ->
           match Procdesc.Node.get_kind n with
           | Procdesc.Node.Start_node proc_name ->
-              let num_specs = List.length (Specs.get_specs proc_name) in
+              let num_specs =
+                match Specs.get_summary proc_name with
+                | None -> 0
+                | Some summary -> List.length (Specs.get_specs_from_payload summary) in
               let label =
                 (Escape.escape_xml (Typ.Procname.to_string proc_name)) ^
                 ": " ^

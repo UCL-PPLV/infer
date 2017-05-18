@@ -79,51 +79,49 @@ let run_compilation_database compilation_database should_capture_file =
     (run_compilation_file compilation_database) job_to_string
 
 (** Computes the compilation database files. *)
-let get_compilation_database_files_buck () =
-  let cmd = List.rev_append Config.rest (List.rev Config.buck_build_args) in
-  match Buck.add_flavors_to_buck_command cmd with
-  | buck :: build :: args_with_flavor -> (
+let get_compilation_database_files_buck ~prog ~args =
+  match Buck.add_flavors_to_buck_command args with
+  | build :: args_with_flavor -> (
       let build_args = build :: "--config" :: "*//cxx.pch_enabled=false" :: args_with_flavor in
-      Process.create_process_and_wait ~prog:buck ~args:build_args;
+      Process.create_process_and_wait ~prog ~args:build_args;
       let buck_targets_shell =
-        buck :: "targets" :: "--show-output" :: args_with_flavor
-        |> List.map ~f:(Printf.sprintf "'%s'")
-        |> String.concat ~sep:" " in
-      try
-        match fst @@ Utils.with_process_in buck_targets_shell In_channel.input_lines with
-        | [] -> Logging.stdout "There are no files to process, exiting."; exit 0
-        | lines ->
-            Logging.out "Reading compilation database from:@\n%s@\n"
-              (String.concat ~sep:"\n" lines);
-            (* this assumes that flavors do not contain spaces *)
-            let split_regex = Str.regexp "#[^ ]* " in
-            let scan_output compilation_database_files line =
-              match Str.bounded_split split_regex line 2 with
-              | _::filename::[] ->
-                  `Raw filename::compilation_database_files
-              | _ ->
-                  failwithf
-                    "Failed to parse `buck targets --show-output ...` line of output:@\n%s" line in
-            List.fold ~f:scan_output ~init:[] lines
-      with Unix.Unix_error (err, _, _) ->
-        Process.print_error_and_exit
-          "Cannot execute %s\n%!"
-          (buck_targets_shell ^ " " ^ (Unix.error_message err))
+        prog :: "targets" :: "--show-output" :: args_with_flavor
+        |> Utils.shell_escape_command in
+      let (output, exit_or_signal) =
+        Utils.with_process_in buck_targets_shell In_channel.input_lines in
+      match exit_or_signal with
+      | Error _ as status ->
+          failwithf "*** ERROR: command failed:@\n*** %s@\n*** %s@."
+            buck_targets_shell
+            (Unix.Exit_or_signal.to_string_hum status)
+      | Ok () ->
+          match output with
+          | [] -> Logging.stderr "There are no files to process, exiting@."; exit 0
+          | lines ->
+              Logging.out "Reading compilation database from:@\n%s@\n"
+                (String.concat ~sep:"\n" lines);
+              (* this assumes that flavors do not contain spaces *)
+              let split_regex = Str.regexp "#[^ ]* " in
+              let scan_output compilation_database_files line =
+                match Str.bounded_split split_regex line 2 with
+                | _::filename::[] ->
+                    `Raw filename::compilation_database_files
+                | _ ->
+                    failwithf
+                      "Failed to parse `buck targets --show-output ...` line of output:@\n%s"
+                      line in
+              List.fold ~f:scan_output ~init:[] lines
     )
   | _ ->
-      let cmd = String.concat ~sep:" " cmd in
+      let cmd = String.concat ~sep:" " (prog :: args) in
       Process.print_error_and_exit "Incorrect buck command: %s. Please use buck build <targets>" cmd
 
 (** Compute the compilation database files. *)
-let get_compilation_database_files_xcodebuild () =
-  let prog_args = List.rev Config.rest in
+let get_compilation_database_files_xcodebuild ~prog ~args =
   let temp_dir = Config.results_dir ^/ "clang" in
   Utils.create_dir temp_dir;
   let tmp_file = Filename.temp_file ~in_dir:temp_dir "cdb" ".json" in
-  let xcodebuild_prog, xcodebuild_args =
-    match prog_args with
-    | prog :: _ -> (prog, prog_args)
-    | [] -> failwith("Build command cannot be empty") in
+  let xcodebuild_prog, xcodebuild_args = prog, prog::args in
   let xcpretty_prog = "xcpretty" in
   let xcpretty_args =
     [xcpretty_prog; "--report"; "json-compilation-database"; "--output"; tmp_file] in

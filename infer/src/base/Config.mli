@@ -10,17 +10,15 @@
 
 open! IStd
 
+module CLOpt = CommandLineOption
+
 (** Configuration values: either constant, determined at compile time, or set at startup
     time by system calls, environment variables, or command line options *)
 
-type exe = Analyze | Clang | Driver | Print [@@deriving compare]
-
-val exe_name : exe -> string
-
-(** Various kind of analyzers *)
 type analyzer =
-    Capture | Compile | Infer | Eradicate | Checkers | Tracing | Crashcontext | Linters | Quandary
-  | Threadsafety | Bufferoverrun | Permsafety [@@deriving compare]
+  | BiAbduction | CaptureOnly | CompileOnly | Eradicate | Checkers | Tracing | Crashcontext
+  | Linters
+[@@deriving compare]
 
 val equal_analyzer : analyzer -> analyzer -> bool
 
@@ -57,7 +55,8 @@ val issues_fields_symbols :
             | `Issue_field_key
             | `Issue_field_hash
             | `Issue_field_line_offset
-            | `Issue_field_procedure_id_without_crc]) list
+            | `Issue_field_procedure_id_without_crc
+            | `Issue_field_qualifier_contains_potential_exception_note]) list
 
 
 type os_type = Unix | Win32 | Cygwin
@@ -101,7 +100,6 @@ val global_tenv_filename : string
 val idempotent_getters : bool
 val incremental_procs : bool
 val infer_py_argparse_error_exit_code : int
-val inferconfig_file : string
 val initial_analysis_time : float
 val ivar_attributes : string
 val lib_dir : string
@@ -168,9 +166,11 @@ val analysis_stops : bool
 val analysis_suppress_errors : analyzer -> string list
 val analyzer : analyzer
 val angelic_execution : bool
-val annotation_reachability : Yojson.Basic.json
+val annotation_reachability : bool
+val annotation_reachability_custom_pairs : Yojson.Basic.json
 val array_level : int
 val ast_file : string option
+val biabduction : bool
 val blacklist : string option
 val bootclasspath : string option
 val bo_debug : int
@@ -184,20 +184,24 @@ val bugs_csv : string option
 val bugs_json : string option
 val bugs_tests : string option
 val bugs_txt : string option
-val bugs_xml : string option
 val changed_files_index : string option
 val calls_csv : string option
-val checkers : bool
-val checkers_enabled : bool
+
+(** directory where the results of the capture phase are stored *)
+val captured_dir : string
+
 val checkers_repeated_calls : bool
 val clang_biniou_file : string option
 val clang_frontend_action_string : string
 val clang_frontend_do_capture : bool
 val clang_frontend_do_lint : bool
-val clang_include_to_override : string option
+val clang_ignore_regex : string option
+val clang_include_to_override_regex : string option
 val cluster_cmdline : string option
+val command : CLOpt.command
 val compute_analytics : bool
 val continue_capture : bool
+val default_linters : bool
 val linters_ignore_clang_failures : bool
 val copy_propagation : bool
 val crashcontext : bool
@@ -230,8 +234,8 @@ val file_renamings : string option
 val filter_paths : bool
 val filter_report_paths : string option
 val filtering : bool
-val final_parse_action : CommandLineOption.parse_action
 val flavors : bool
+val fragment_retains_view : bool
 val from_json_report : string option
 val frontend_debug : bool
 val frontend_tests : bool
@@ -239,6 +243,7 @@ val frontend_stats : bool
 val generated_classes : string option
 val headers : bool
 val icfg_dotty_outfile : string option
+val immutable_cast : bool
 val infer_cache : string option
 val iphoneos_target_sdk_version : string option
 val issues_fields : [`Issue_field_bug_class
@@ -257,15 +262,18 @@ val issues_fields : [`Issue_field_bug_class
                     | `Issue_field_key
                     | `Issue_field_hash
                     | `Issue_field_line_offset
-                    | `Issue_field_procedure_id_without_crc] list
+                    | `Issue_field_procedure_id_without_crc
+                    | `Issue_field_qualifier_contains_potential_exception_note] list
 val iterations : int
 val java_jar_compiler : string option
-val javac_classes_out : string
+val javac_classes_out : string option
 val javac_verbose_out : string
 val jobs : int
 val join_cond : int
 val latex : string option
+val linter : string option
 val linters_def_file : string list
+val linters_developer_mode : bool
 val load_analysis_results : string option
 val makefile_cmdline : string
 val maven : bool
@@ -280,23 +288,24 @@ val no_translate_libs : bool
 val objc_memory_model_on : bool
 val only_footprint : bool
 val out_file_cmdline : string
-val parse_action : CommandLineOption.parse_action
 val pmd_xml : bool
 val precondition_stats : bool
 val print_logs : bool
 val print_builtins : bool
 val print_types : bool
 val print_using_diff : bool
+val printf_args : bool
+val procedures_per_process : int
 val procs_csv : string option
 val procs_xml : string option
 val project_root : string
 val quandary : bool
+val quandary_endpoints : Yojson.Basic.json
 val quandary_sources : Yojson.Basic.json
 val quandary_sinks : Yojson.Basic.json
 val quiet : bool
 val reactive_mode : bool
 val reactive_capture : bool
-val report : string option
 val report_current : string option
 val report_formatter : [`No_formatter | `Phabricator_formatter]
 val report_hook : string option
@@ -309,6 +318,7 @@ val save_analysis_results : string option
 val seconds_per_iteration : float option
 val show_buckets : bool
 val show_progress_bar : bool
+val siof : bool
 val siof_safe_methods : string list
 val skip_analysis_in_path : string list
 val skip_duplicated_types : bool
@@ -318,6 +328,7 @@ val specs_library : string list
 val stacktrace : string option
 val stacktraces_dir : string option
 val stats_mode : bool
+val stats_report : string option
 val subtype_multirange : bool
 val svg : bool
 val symops_per_iteration : int option

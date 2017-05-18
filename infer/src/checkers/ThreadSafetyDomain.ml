@@ -11,7 +11,7 @@ open! IStd
 
 module F = Format
 
-module AccessPathSetDomain = AbstractDomain.InvertedSet(AccessPath.UntypedRawSet)
+module AccessPathSetDomain = AbstractDomain.InvertedSet(AccessPath.RawSet)
 
 module Access = struct
   type kind =
@@ -66,11 +66,23 @@ let make_access access_path access_kind loc =
   let site = CallSite.make Typ.Procname.empty_block loc in
   TraceElem.make (access_path, access_kind) site
 
+(* In this domain true<=false. The intended denotations [[.]] are
+    [[true]] = the set of all states where we know according, to annotations
+               or assertions or lock instructions, that some lock is held.
+    [[false]] = the empty set
+   The use of && for join in this domain enforces that, to know a lock is held, one must hold in
+   all branches.
+*)
 module LocksDomain = AbstractDomain.BooleanAnd
 
-(*At first we are modelling the distinction "true, known to be UI thread"
-  and "false, don't know definitley to be main tread". Can refine later *)
-module ThreadsDomain = AbstractDomain.BooleanAnd
+(* In this domain false<=true. The intended denotations [[.]] are
+   [[true]] = the set of all states where we know according, to annotations
+             or assertions, that we are on the UI thread (or some oter specific thread).
+   [[false]] = the set of all states
+   The use of || for join in this domain enforces that, to not know for sure you are threaded,
+   it is enough to be unthreaded in one branch. (See RaceWithMainThread.java for  examples)
+*)
+module ThreadsDomain = AbstractDomain.BooleanOr
 
 module PathDomain = SinkTrace.Make(TraceElem)
 
@@ -110,7 +122,7 @@ end
 module AttributeSetDomain = AbstractDomain.InvertedSet (Attribute.Set)
 
 module AttributeMapDomain = struct
-  include AbstractDomain.InvertedMap (AccessPath.UntypedRawMap) (AttributeSetDomain)
+  include AbstractDomain.InvertedMap (AccessPath.RawMap) (AttributeSetDomain)
 
   let has_attribute access_path attribute t =
     try
@@ -159,7 +171,7 @@ module AccessPrecondition = struct
 
   let pp fmt = function
     | Protected -> F.fprintf fmt "Protected"
-    | Unprotected (Some index) -> F.fprintf fmt "Unproctected(%d)" index
+    | Unprotected (Some index) -> F.fprintf fmt "Unprotected(%d)" index
     | Unprotected None -> F.fprintf fmt "Unprotected"
 
   module Map = PrettyPrintable.MakePPMap(struct
@@ -189,20 +201,18 @@ type astate =
     threads: ThreadsDomain.astate;
     locks : LocksDomain.astate;
     accesses : AccessDomain.astate;
-    id_map : IdAccessPathMapDomain.astate;
     attribute_map : AttributeMapDomain.astate;
   }
 
-type summary = ThreadsDomain.astate * LocksDomain.astate
-               * AccessDomain.astate * AttributeSetDomain.astate
+type summary =
+  ThreadsDomain.astate * LocksDomain.astate * AccessDomain.astate * AttributeSetDomain.astate
 
 let empty =
   let threads = false in
   let locks = false in
   let accesses = AccessDomain.empty in
-  let id_map = IdAccessPathMapDomain.empty in
-  let attribute_map = AccessPath.UntypedRawMap.empty in
-  { threads; locks; accesses; id_map; attribute_map; }
+  let attribute_map = AccessPath.RawMap.empty in
+  { threads; locks; accesses; attribute_map; }
 
 let (<=) ~lhs ~rhs =
   if phys_equal lhs rhs
@@ -211,7 +221,6 @@ let (<=) ~lhs ~rhs =
     ThreadsDomain.(<=) ~lhs:lhs.threads ~rhs:rhs.threads &&
     LocksDomain.(<=) ~lhs:lhs.locks ~rhs:rhs.locks &&
     AccessDomain.(<=) ~lhs:lhs.accesses ~rhs:rhs.accesses &&
-    IdAccessPathMapDomain.(<=) ~lhs:lhs.id_map ~rhs:rhs.id_map &&
     AttributeMapDomain.(<=) ~lhs:lhs.attribute_map ~rhs:rhs.attribute_map
 
 let join astate1 astate2 =
@@ -222,9 +231,8 @@ let join astate1 astate2 =
     let threads = ThreadsDomain.join astate1.threads astate2.threads in
     let locks = LocksDomain.join astate1.locks astate2.locks in
     let accesses = AccessDomain.join astate1.accesses astate2.accesses in
-    let id_map = IdAccessPathMapDomain.join astate1.id_map astate2.id_map in
     let attribute_map = AttributeMapDomain.join astate1.attribute_map astate2.attribute_map in
-    { threads; locks; accesses; id_map; attribute_map; }
+    { threads; locks; accesses; attribute_map; }
 
 let widen ~prev ~next ~num_iters =
   if phys_equal prev next
@@ -234,10 +242,9 @@ let widen ~prev ~next ~num_iters =
     let threads = ThreadsDomain.widen ~prev:prev.threads ~next:next.threads ~num_iters in
     let locks = LocksDomain.widen ~prev:prev.locks ~next:next.locks ~num_iters in
     let accesses = AccessDomain.widen ~prev:prev.accesses ~next:next.accesses ~num_iters in
-    let id_map = IdAccessPathMapDomain.widen ~prev:prev.id_map ~next:next.id_map ~num_iters in
     let attribute_map =
       AttributeMapDomain.widen ~prev:prev.attribute_map ~next:next.attribute_map ~num_iters in
-    { threads; locks; accesses; id_map; attribute_map; }
+    { threads; locks; accesses; attribute_map; }
 
 let pp_summary fmt (threads, locks, accesses, return_attributes) =
   F.fprintf
@@ -248,13 +255,11 @@ let pp_summary fmt (threads, locks, accesses, return_attributes) =
     AccessDomain.pp accesses
     AttributeSetDomain.pp return_attributes
 
-let pp fmt { threads; locks; accesses; id_map; attribute_map; } =
+let pp fmt { threads; locks; accesses; attribute_map; } =
   F.fprintf
     fmt
-    "Threads: %a Locks: %a Accesses %a Id Map: %a Attribute Map:\
-     %a"
+    "Threads: %a Locks: %a Accesses: %a Attribute Map: %a"
     ThreadsDomain.pp threads
     LocksDomain.pp locks
     AccessDomain.pp accesses
-    IdAccessPathMapDomain.pp id_map
     AttributeMapDomain.pp attribute_map

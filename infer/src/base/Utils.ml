@@ -176,30 +176,47 @@ let directory_iter f path =
   else
     f path
 
+let dir_is_empty path =
+  let dir_handle = Unix.opendir path in
+  let is_empty = ref true in
+  (try
+     while !is_empty;
+     do if not (List.mem ~equal:String.equal["."; ".."] (Unix.readdir dir_handle)) then
+         is_empty := false;
+     done;
+   with End_of_file -> ()
+  );
+  Unix.closedir dir_handle;
+  !is_empty
+
 
 let string_crc_hex32 s = Digest.to_hex (Digest.string s)
 
-let read_optional_json_file path =
-  if Sys.file_exists path = `Yes then
-    try
-      Ok (Yojson.Basic.from_file path)
-    with Sys_error msg | Yojson.Json_error msg ->
-      Error msg
-  else Ok (`Assoc [])
+let read_json_file path =
+  try
+    Ok (Yojson.Basic.from_file path)
+  with Sys_error msg | Yojson.Json_error msg ->
+    Error msg
 
 let do_finally f g =
   let res = try f () with exc -> g () |> ignore; raise exc in
   let res' = g () in
   (res, res')
 
-let with_file file ~f =
-  let oc = open_out file in
+let with_file_in file ~f =
+  let ic = In_channel.create file in
+  let f () = f ic in
+  let g () =  In_channel.close ic in
+  do_finally f g |> fst
+
+let with_file_out file ~f =
+  let oc = Out_channel.create file in
   let f () = f oc in
-  let g () = Out_channel.close oc in
+  let g () =  Out_channel.close oc in
   do_finally f g |> fst
 
 let write_json_to_file destfile json =
-  with_file destfile ~f:(fun oc -> Yojson.Basic.pretty_to_channel oc json)
+  with_file_out destfile ~f:(fun oc -> Yojson.Basic.pretty_to_channel oc json)
 
 let consume_in chan_in =
   try
@@ -213,6 +230,14 @@ let with_process_in command read =
     consume_in chan;
     Unix.close_process_in chan in
   do_finally f g
+
+let shell_escape_command cmd =
+  let escape arg =
+    (* ends on-going single quote, output single quote inside double quotes, then open a new single
+       quote *)
+    Escape.escape_map (function | '\'' -> Some "'\"'\"'" | _ -> None) arg
+    |> Printf.sprintf "'%s'" in
+  List.map ~f:escape cmd |> String.concat ~sep:" "
 
 (** Create a directory if it does not exist already. *)
 let create_dir dir =

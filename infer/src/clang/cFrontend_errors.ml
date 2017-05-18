@@ -17,10 +17,34 @@ type linter = {
   def_file : string option;
 }
 
+(* If in linter developer mode and if current linter was passed, filter it out *)
+let filter_parsed_linters parsed_linters =
+  if List.length parsed_linters > 1 && Config.linters_developer_mode then
+    match Config.linter with
+    | None ->
+        failwith ("ERROR: In linters developer mode you should debug only one linter at a time. \
+                   This is important for debugging the rule. Pass the flag \
+                   --linter <name> to specify the linter you want to debug.");
+    | Some lint ->
+        List.filter ~f:(
+          fun (rule : linter) -> String.equal rule.issue_desc.name lint
+        ) parsed_linters
+  else parsed_linters
+
+let linters_to_string linters =
+  let linter_to_string linters =
+    List.map ~f:(fun (rule : linter) -> rule.issue_desc.name) linters  in
+  String.concat ~sep:"\n" (linter_to_string linters)
+
+(* Map a formula id to a triple (visited, parameters, definition).
+   Visited is used during the expansion phase to understand if the
+   formula was already expanded and, if yes we have a cyclic definifion *)
+type macros_map = (bool * ALVar.t list * CTL.t) ALVar.FormulaIdMap.t
+
 let single_to_multi checker =
   fun ctx an ->
-    let condition, issue_desc_opt = checker ctx an in
-    (condition, Option.to_list issue_desc_opt)
+    let issue_desc_opt = checker ctx an in
+    Option.to_list issue_desc_opt
 
 (* List of checkers on decls *that return 0 or 1 issue* *)
 let decl_single_checkers_list =
@@ -50,7 +74,7 @@ let parsed_linters = ref []
 let evaluate_place_holder ph an =
   match ph with
   | "%ivar_name%" -> MF.monospaced_to_string (CFrontend_checkers.ivar_name an)
-  | "%decl_name%" -> MF.monospaced_to_string (CFrontend_checkers.decl_name an)
+  | "%decl_name%" -> MF.monospaced_to_string (Ctl_parser_types.ast_node_name an)
   | "%cxx_ref_captured_in_block%" ->
       MF.monospaced_to_string (CFrontend_checkers.cxx_ref_captured_in_block an)
   | "%decl_ref_or_selector_name%" ->
@@ -136,59 +160,6 @@ let create_parsed_linters linters_def_file checkers : linter list =
     {condition; issue_desc; def_file = Some linters_def_file} in
   List.map ~f:do_one_checker checkers
 
-let check_def_well_expanded vars expanded_formula =
-  let open CTL in
-  let check_const c =
-    match c with
-    | ALVar.Const c when List.mem vars (ALVar.Var c) ->
-        failwith ("[ERROR]: Const '" ^ c ^
-                  "' is used as formal parameter of some LET definition.")
-    | ALVar.Const _ -> ()
-    | ALVar.Var v
-    | ALVar.FId (Formula_id v) ->
-        failwith ("[ERROR]: Variable '" ^ v ^
-                  "' could not be substituted and cannot be evaluated") in
-  let rec check_expansion exp_f =
-    match exp_f with
-    | True
-    | False -> ()
-    | Atomic (_, ps) -> List.iter ~f: check_const ps
-    | Not f1 -> check_expansion f1
-    | And (f1, f2) ->
-        check_expansion f1;
-        check_expansion f2
-    | Or (f1, f2) ->
-        check_expansion f1;
-        check_expansion f2
-    | Implies (f1, f2) ->
-        check_expansion f1;
-        check_expansion f2
-    | InNode (node_type_list, f1) ->
-        List.iter ~f:check_const node_type_list;
-        check_expansion f1
-    | AU (f1, f2) ->
-        check_expansion f1;
-        check_expansion f2
-    | EU (_, f1, f2) ->
-        check_expansion f1;
-        check_expansion f2
-    | EF (_, f1) -> check_expansion f1
-    | AF f1 -> check_expansion f1
-    | AG f1 -> check_expansion f1
-    | EX (_, f1) -> check_expansion f1
-    | AX f1 -> check_expansion f1
-    | EH (cl, f1) ->
-        List.iter ~f:check_const cl;
-        check_expansion f1
-    | EG (_, f1) -> check_expansion f1
-    | ET (ntl, _, f1) ->
-        List.iter ~f: check_const ntl;
-        check_expansion f1
-    | ETX (ntl, _, f1) ->
-        List.iter ~f: check_const ntl;
-        check_expansion f1 in
-  check_expansion expanded_formula
-
 let rec apply_substitution f sub =
   let sub_param p = try
       snd (List.find_exn sub ~f:(fun (a,_) -> ALVar.equal p a))
@@ -221,8 +192,7 @@ let rec apply_substitution f sub =
   | ETX (ntl, sw, f1) ->
       ETX (sub_list_param ntl, sw, apply_substitution f1 sub)
 
-(* expands use of let defined formula id in checkers with their definition *)
-let expand_checkers checkers =
+let expand_formula phi _map _error_msg =
   let fail_with_circular_macro_definition name error_msg =
     Logging.out
       "[ERROR]: Macro '%s' has a circular definition.\n Cycle:\n%s"
@@ -265,28 +235,36 @@ let expand_checkers checkers =
     | EG (trans, f1) -> EG (trans, expand f1 map error_msg)
     | ET (tl, sw, f1) -> ET (tl, sw, expand f1 map error_msg)
     | ETX (tl, sw, f1) -> ETX (tl, sw, expand f1 map error_msg) in
-  let expand_one_checker checker =
-    Logging.out " +Start expanding %s\n" checker.name;
-    (* Map a formula id to a triple (visited, parameters, definition).
-       Visited is used during the expansion phase to understand if the
-       formula was already expanded and, if yes we have a cyclic definifion *)
-    let map : (bool * ALVar.t list * CTL.t) ALVar.FormulaIdMap.t = ALVar.FormulaIdMap.empty in
-    let map, vars = List.fold ~f:(fun (map', vars') definition ->
-        match definition with
-        | CLet (key, params, formula) ->
-            ALVar.FormulaIdMap.add key (false, params, formula) map', List.append vars' params
-        | _ -> map', vars') ~init:(map, []) checker.definitions in
+  expand phi _map _error_msg
+
+let _build_macros_map macros init_map =
+  let macros_map = List.fold ~f:(fun map' data -> match data with
+      | CTL.CLet (key, params, formula) ->
+          if ALVar.FormulaIdMap.mem key map' then
+            failwith ("[ERROR] Macro '" ^ (ALVar.formula_id_to_string key) ^
+                      "' has more than one definition.")
+          else ALVar.FormulaIdMap.add key (false, params, formula) map'
+      | _ -> map') ~init:init_map macros in
+  macros_map
+
+let build_macros_map macros =
+  let init_map : macros_map = ALVar.FormulaIdMap.empty in
+  _build_macros_map macros init_map
+
+(* expands use of let defined formula id in checkers with their definition *)
+let expand_checkers macro_map checkers =
+  let open CTL in
+  let expand_one_checker c =
+    Logging.out " +Start expanding %s\n" c.name;
+    let map = _build_macros_map c.definitions macro_map in
     let exp_defs = List.fold ~f:(fun defs clause ->
         match clause with
         | CSet (report_when_const, phi) ->
             Logging.out "  -Expanding report_when\n";
-            let exp_report_when = expand phi map "" in
-            check_def_well_expanded vars exp_report_when;
-            CSet (report_when_const, exp_report_when) :: defs
-        | cl -> cl :: defs) ~init:[] checker.definitions in
-    { checker with definitions = exp_defs} in
-  let expanded_checkers = List.map ~f:expand_one_checker checkers in
-  expanded_checkers
+            CSet (report_when_const, expand_formula phi map "") :: defs
+        | cl -> cl :: defs) ~init:[] c.definitions in
+    { c with definitions = exp_defs} in
+  List.map ~f:expand_one_checker checkers
 
 let get_err_log translation_unit_context method_decl_opt =
   let procname = match method_decl_opt with
@@ -335,13 +313,11 @@ let invoke_set_of_hard_coded_checkers_an context (an : Ctl_parser_types.ast_node
     | Decl dec -> decl_checkers_list, CAst_utils.generate_key_decl dec
     | Stmt st -> stmt_checkers_list, CAst_utils.generate_key_stmt st in
   List.iter ~f:(fun checker ->
-      let condition, issue_desc_list = checker context an in
-      if CTL.eval_formula condition an context then
-        List.iter ~f:(fun issue_desc ->
-            if CIssue.should_run_check issue_desc.CIssue.mode then
-              let loc = issue_desc.CIssue.loc in
-              fill_issue_desc_info_and_log context an key issue_desc None loc
-          ) issue_desc_list
+      let issue_desc_list = checker context an in
+      List.iter ~f:(fun issue_desc ->
+          if CIssue.should_run_check issue_desc.CIssue.mode then
+            fill_issue_desc_info_and_log context an key issue_desc None issue_desc.CIssue.loc
+        ) issue_desc_list
     ) checkers
 
 (* Calls the set of checkers parsed from files (if any) *)
@@ -364,4 +340,4 @@ let invoke_set_of_checkers_on_node context an =
           Because depending on the formula it may give an error at line -1 *)
        ()
    | _ -> invoke_set_of_parsed_checkers_an !parsed_linters context an);
-  invoke_set_of_hard_coded_checkers_an context an
+  if Config.default_linters then invoke_set_of_hard_coded_checkers_an context an

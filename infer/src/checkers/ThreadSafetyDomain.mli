@@ -11,7 +11,7 @@ open! IStd
 
 module F = Format
 
-module AccessPathSetDomain : module type of AbstractDomain.InvertedSet (AccessPath.UntypedRawSet)
+module AccessPathSetDomain : module type of AbstractDomain.InvertedSet (AccessPath.RawSet)
 
 module Access : sig
   type kind =
@@ -74,7 +74,7 @@ end
 module AttributeSetDomain : module type of AbstractDomain.InvertedSet (Attribute.Set)
 
 module AttributeMapDomain : sig
-  include module type of AbstractDomain.InvertedMap (AccessPath.UntypedRawMap) (AttributeSetDomain)
+  include module type of AbstractDomain.InvertedMap (AccessPath.RawMap) (AttributeSetDomain)
 
   val has_attribute : AccessPath.Raw.t -> Attribute.t -> astate -> bool
 
@@ -125,16 +125,14 @@ type astate =
     (** boolean that is true if a lock must currently be held *)
     accesses : AccessDomain.astate;
     (** read and writes accesses performed without ownership permissions *)
-    id_map : IdAccessPathMapDomain.astate;
-    (** map used to decompile temporary variables into access paths *)
     attribute_map : AttributeMapDomain.astate;
     (** map of access paths to attributes such as owned, functional, ... *)
   }
 
 (** same as astate, but without [id_map]/[owned] (since they are local) and with the addition of the
     attributes associated with the return value *)
-type summary = ThreadsDomain.astate * LocksDomain.astate
-               * AccessDomain.astate * AttributeSetDomain.astate
+type summary =
+  ThreadsDomain.astate * LocksDomain.astate * AccessDomain.astate * AttributeSetDomain.astate
 
 include AbstractDomain.WithBottom with type astate := astate
 

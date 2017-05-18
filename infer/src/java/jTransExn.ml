@@ -57,7 +57,7 @@ let translate_exceptions (context : JContext.t) exit_nodes get_body_nodes handle
         let catch_nodes = get_body_nodes handler.JBir.e_handler in
         let loc = match catch_nodes with
           | n:: _ -> Procdesc.Node.get_loc n
-          | [] -> Location.dummy in
+          | [] -> Location.none context.source_file in
         let exn_type =
           let class_name =
             match handler.JBir.e_catch_type with
@@ -65,16 +65,17 @@ let translate_exceptions (context : JContext.t) exit_nodes get_body_nodes handle
             | Some cn -> cn in
           match JTransType.get_class_type
                   context.program (JContext.get_tenv context) class_name with
-          | Typ.Tptr (typ, _) -> typ
+          | {Typ.desc=Tptr (typ, _)} -> typ
           | _ -> assert false in
         let id_instanceof = Ident.create_fresh Ident.knormal in
         let instr_call_instanceof =
           let instanceof_builtin = Exp.Const (Const.Cfun BuiltinDecl.__instanceof) in
           let args = [
-            (Exp.Var id_exn_val, Typ.Tptr(exn_type, Typ.Pk_pointer));
-            (Exp.Sizeof (exn_type, None, Subtype.exact), Typ.Tvoid)] in
+            (Exp.Var id_exn_val, Typ.mk (Tptr(exn_type, Typ.Pk_pointer)));
+            (Exp.Sizeof {typ=exn_type; nbytes=None; dynamic_length=None; subtype=Subtype.exact},
+             Typ.mk Tvoid)] in
           Sil.Call
-            (Some (id_instanceof, Tint IBool), instanceof_builtin, args, loc, CallFlags.default) in
+            (Some (id_instanceof, Typ.mk (Tint IBool)), instanceof_builtin, args, loc, CallFlags.default) in
         let if_kind = Sil.Ik_switch in
         let instr_prune_true = Sil.Prune (Exp.Var id_instanceof, loc, true, if_kind) in
         let instr_prune_false =
@@ -108,7 +109,7 @@ let translate_exceptions (context : JContext.t) exit_nodes get_body_nodes handle
         List.fold ~f:process_handler ~init:exit_nodes (List.rev handler_list) in
       let loc = match nodes_first_handler with
         | n:: _ -> Procdesc.Node.get_loc n
-        | [] -> Location.dummy in
+        | [] -> Location.none context.source_file in
       let entry_node = create_entry_node loc in
       Procdesc.node_set_succs_exn procdesc entry_node nodes_first_handler exit_nodes;
       Hashtbl.add catch_block_table handler_list [entry_node] in

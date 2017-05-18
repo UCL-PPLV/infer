@@ -33,7 +33,7 @@ let infer_profile = lazy
 \n        </plugins>\
 \n      </build>\
 \n    </profile>\
-  " infer_profile_name (Config.(bin_dir ^/ string_of_analyzer Infer)))
+  " infer_profile_name (Config.bin_dir ^/ CommandDoc.infer_exe_name))
 
 let pom_worklist = ref [CLOpt.init_work_dir]
 
@@ -120,7 +120,7 @@ let add_infer_profile mvn_pom infer_pom =
       let xml_out = Xmlm.make_output ~nl:true (`Channel out_chan) in
       add_infer_profile_to_xml (Filename.dirname mvn_pom) xml_in xml_out in
     protect ~f:with_ic ~finally:(fun () -> In_channel.close ic) in
-  Utils.with_file infer_pom ~f:with_oc
+  Utils.with_file_out infer_pom ~f:with_oc
 
 let add_profile_to_pom_in_directory dir =
   (* Even though there is a "-f" command-line arguments to change the config file Maven reads from,

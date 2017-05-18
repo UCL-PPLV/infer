@@ -11,19 +11,31 @@ open! IStd
 
 (** Module for error logs. *)
 
+type node_tag =
+  | Condition of bool
+  | Exception of Typ.name
+  | Procedure_start of Typ.Procname.t
+  | Procedure_end of Typ.Procname.t
+
 (** Element of a loc trace *)
 type loc_trace_elem = private {
   lt_level : int; (** nesting level of procedure calls *)
   lt_loc : Location.t; (** source location at the current step in the trace *)
   lt_description : string; (** description of the current step in the trace *)
-  lt_node_tags : (string * string) list (** tags describing the node at the current location *)
+  lt_node_tags : node_tag list (** tags describing the node at the current location *)
 }
 
 (** build a loc_trace_elem from its constituents (unambiguously identified by their types). *)
-val make_trace_element : int -> Location.t -> string -> (string * string) list -> loc_trace_elem
+val make_trace_element : int -> Location.t -> string -> node_tag list -> loc_trace_elem
 
 (** Trace of locations *)
 type loc_trace = loc_trace_elem list
+
+(** Look at all the trace steps and find those that are arising any exception,
+    then bind them to the closest step at level 0.
+    This extra information adds value to the report itself, and may avoid
+    digging into the trace to understand the cause of the report. *)
+val compute_local_exception_line : loc_trace -> int option
 
 type node_id_key = private {
   node_id : int;
@@ -61,6 +73,10 @@ type iter_fun = err_key -> err_data -> unit
 
 (** Apply f to nodes and error names *)
 val iter : iter_fun -> t -> unit
+
+val pp_loc_trace_elem : Format.formatter -> loc_trace_elem -> unit
+
+val pp_loc_trace : Format.formatter -> loc_trace -> unit
 
 (** Print errors from error log *)
 val pp_errors : Format.formatter -> t -> unit

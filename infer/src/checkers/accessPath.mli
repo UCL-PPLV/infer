@@ -73,7 +73,7 @@ val append : Raw.t -> access list -> Raw.t
 
 (** swap base of existing access path for [base_var] (e.g., `with_base_bvar x y.f.g` produces
     `x.f.g` *)
-val with_base_var : Var.t -> t -> t
+val with_base : base -> t -> t
 
 (** return true if [ap1] is a prefix of [ap2]. returns true for equal access paths *)
 val is_prefix : Raw.t -> Raw.t -> bool
@@ -102,7 +102,3 @@ module AccessMap : PrettyPrintable.PPMap with type key = access
 module RawSet : PrettyPrintable.PPSet with type elt = Raw.t
 
 module RawMap : PrettyPrintable.PPMap with type key = Raw.t
-
-module UntypedRawSet : PrettyPrintable.PPSet with type elt = Raw.t
-
-module UntypedRawMap : PrettyPrintable.PPMap with type key = Raw.t

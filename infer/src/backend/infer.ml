@@ -72,13 +72,13 @@ let string_of_build_system build_system =
 type driver_mode =
   | Analyze
   | BuckGenrule of string
-  | BuckCompilationDB
+  | BuckCompilationDB of string * string list
   | Clang of Clang.compiler * string * string list
   | ClangCompilationDB of [ `Escaped of string | `Raw of string ] list
   | Javac of Javac.compiler * string * string list
   | Maven of string * string list
   | PythonCapture of build_system * string list
-  | XcodeXcpretty
+  | XcodeXcpretty of string * string list
 [@@deriving compare]
 
 let equal_driver_mode = [%compare.equal : driver_mode]
@@ -92,8 +92,8 @@ let pp_driver_mode fmt driver_mode =
     with exn ->
       F.fprintf fmt "  Error reading file '%s':@\n  %a@." fname Exn.pp exn in
   match driver_mode with
-  | Analyze | BuckGenrule _ | BuckCompilationDB | ClangCompilationDB _  | PythonCapture (_,_)
-  | XcodeXcpretty ->
+  | Analyze | BuckGenrule _ | BuckCompilationDB _ | ClangCompilationDB _  | PythonCapture (_,_)
+  | XcodeXcpretty _ ->
       (* these are pretty boring, do not log anything *)
       ()
   | Javac (_, prog, args) ->
@@ -114,6 +114,17 @@ let pp_driver_mode fmt driver_mode =
   | Clang (_, prog, args) ->
       F.fprintf fmt "Clang driver mode:@\nprog = %s@\n" prog;
       List.iter ~f:(F.fprintf fmt "Arg: %s@\n") args
+
+(* A clean command for each driver mode to be suggested to the user
+   in case nothing got captured. *)
+let clean_compilation_command driver_mode =
+  match driver_mode with
+  | BuckCompilationDB (prog, _)
+  | Clang (_, prog, _) ->
+      Some (prog ^ " clean")
+  | XcodeXcpretty (prog, args) ->
+      Some (String.concat ~sep:" " (List.append (prog::args) ["clean"]))
+  | _ -> None
 
 let remove_results_dir () =
   rmtree Config.results_dir
@@ -156,6 +167,20 @@ let clean_results_dir () =
         () in
   clean Config.results_dir
 
+let check_captured_empty driver_mode =
+  let clean_command_opt = clean_compilation_command driver_mode in
+  (* if merge is passed, the captured folder will be empty at this point,
+     but will be filled later on. *)
+  if Utils.dir_is_empty Config.captured_dir && not Config.merge then ((
+      match clean_command_opt with
+      | Some clean_command ->
+          Logging.stderr "@\nNothing to compile. Try running `%s` first.@." clean_command
+      | None ->
+          Logging.stderr "@\nNothing to compile. Try cleaning the build first.@."
+    );
+     true
+    ) else
+    false
 
 let register_perf_stats_report () =
   let stats_dir = Filename.concat Config.results_dir Config.backend_stats_dir_name in
@@ -210,20 +235,20 @@ let capture_with_compilation_database db_files =
   CaptureCompilationDatabase.capture_files_in_database compilation_database
 
 let capture = function
-  | Analyze->
+  | Analyze ->
       ()
-  | BuckCompilationDB ->
-      L.stdout "Capturing using Buck's compilation database...@\n";
-      let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_buck () in
+  | BuckCompilationDB (prog, args) ->
+      L.stdout "Capturing using Buck's compilation database...@.";
+      let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_buck ~prog ~args in
       capture_with_compilation_database json_cdb
   | BuckGenrule path ->
-      L.stdout "Capturing for Buck genrule compatibility...@\n";
+      L.stdout "Capturing for Buck genrule compatibility...@.";
       JMain.from_arguments path
   | Clang (compiler, prog, args) ->
-      L.stdout "Capturing in make/cc mode...@\n";
+      L.stdout "Capturing in make/cc mode...@.";
       Clang.capture compiler ~prog ~args
   | ClangCompilationDB db_files ->
-      L.stdout "Capturing using compilation database...@\n";
+      L.stdout "Capturing using compilation database...@.";
       capture_with_compilation_database db_files
   | Javac (compiler, prog, args) ->
       L.stdout "Capturing in javac mode...@.";
@@ -286,10 +311,11 @@ let capture = function
           | _ ->
               ()
         )
-  | XcodeXcpretty ->
-      L.stdout "Capturing using xcpretty...@\n";
+  | XcodeXcpretty (prog, args) ->
+      L.stdout "Capturing using xcodebuild and xcpretty...@.";
       check_xcpretty ();
-      let json_cdb = CaptureCompilationDatabase.get_compilation_database_files_xcodebuild () in
+      let json_cdb =
+        CaptureCompilationDatabase.get_compilation_database_files_xcodebuild ~prog ~args in
       capture_with_compilation_database json_cdb
 
 let run_parallel_analysis () =
@@ -330,7 +356,6 @@ let report () =
         if_some "--issues-csv" report_csv @@
         if_some "--issues-json" report_json @@
         if_some "--issues-txt" Config.bugs_txt @@
-        if_some "--issues-xml" Config.bugs_xml @@
         if_true "--pmd-xml" Config.pmd_xml [
           "--project-root"; Config.project_root;
           "--results-dir"; Config.results_dir
@@ -348,18 +373,18 @@ let analyze driver_mode =
     | _ when Config.maven ->
         (* Called from Maven, only do capture. *)
         false, false
-    | _, (Capture | Compile) ->
+    | _, (CaptureOnly | CompileOnly) ->
         false, false
-    | _, (Infer | Eradicate | Checkers | Tracing | Crashcontext | Quandary | Threadsafety | Bufferoverrun | Permsafety) ->
+    | _, (BiAbduction | Checkers | Crashcontext | Eradicate | Tracing) ->
         true, true
     | _, Linters ->
         false, true in
   if (should_analyze || should_report) &&
-     (Sys.file_exists Config.(results_dir ^/ captured_dir_name)) <> `Yes then (
-    L.stderr "There was nothing to analyze, exiting@." ;
-    exit 1
-  );
-  if should_analyze then execute_analyze ();
+     (((Sys.file_exists Config.captured_dir) <> `Yes) ||
+      check_captured_empty driver_mode) then (
+    L.stderr "There was nothing to analyze.@\n@." ;
+  ) else if should_analyze then
+    execute_analyze ();
   if should_report then report ()
 
 (** as the Config.fail_on_bug flag mandates, exit with error when an issue is reported *)
@@ -405,8 +430,11 @@ let assert_supported_build_system build_system = match build_system with
       string_of_build_system build_system
       |> assert_supported_mode `Xcode
   | BBuck ->
-      let (analyzer, build_string) = if Config.flavors then
+      let (analyzer, build_string) =
+        if Config.flavors then
           (`Clang, "buck with flavors")
+        else if Option.is_some Config.buck_compilation_database then
+          (`Clang, "buck compilation database")
         else
           (`Java, string_of_build_system build_system) in
       assert_supported_mode analyzer build_string
@@ -428,7 +456,7 @@ let driver_mode_of_build_cmd build_cmd =
       | BAnalyze ->
           Analyze
       | BBuck when Option.is_some Config.buck_compilation_database ->
-          BuckCompilationDB
+          BuckCompilationDB (prog, List.append args (List.rev Config.buck_build_args))
       | BClang ->
           Clang (Clang.Clang, prog, args)
       | BMake ->
@@ -440,7 +468,7 @@ let driver_mode_of_build_cmd build_cmd =
       | BMvn ->
           Maven (prog, args)
       | BXcode when Config.xcpretty ->
-          XcodeXcpretty
+          XcodeXcpretty (prog, args)
       | BAnt | BBuck | BGradle | BNdk | BXcode as build_system ->
           PythonCapture (build_system, build_cmd)
 
@@ -465,7 +493,7 @@ let infer_mode () =
     remove_results_dir () ;
   create_results_dir () ;
   (* re-set log files, as default files were in results_dir removed above *)
-  if not Config.buck_cache_mode then L.set_log_file_identifier CLOpt.(Infer Driver) None;
+  if not Config.buck_cache_mode then L.set_log_file_identifier CLOpt.Run None;
   if Config.print_builtins then Builtin.print_and_exit () ;
   if CLOpt.is_originator then L.do_out "%s@\n" Config.version_string ;
   if Config.debug_mode || Config.stats_mode then log_infer_args driver_mode ;
@@ -493,14 +521,18 @@ let infer_mode () =
     clean_results_dir ()
 
 let differential_mode () =
-  let arg_or_fail arg_name arg_opt =
-    match arg_opt with
-    | Some arg -> arg
-    | None -> failwithf "Expected '%s' argument not found" arg_name in
-  let load_report filename : Jsonbug_t.report =
-    Jsonbug_j.report_of_string (In_channel.read_all filename) in
-  let current_report = load_report (arg_or_fail "report-current" Config.report_current) in
-  let previous_report = load_report (arg_or_fail "report-previous" Config.report_previous) in
+  (* at least one report must be passed in input to compute differential *)
+  (match Config.report_current, Config.report_previous with
+   | None, None ->
+       failwith "Expected at least one argument among 'report-current' and 'report-previous'\n"
+   | _ -> ());
+  let load_report filename_opt : Jsonbug_t.report =
+    let empty_report = [] in
+    Option.value_map
+      ~f:(fun filename -> Jsonbug_j.report_of_string (In_channel.read_all filename))
+      ~default:empty_report filename_opt in
+  let current_report = load_report Config.report_current in
+  let previous_report = load_report Config.report_previous in
   let file_renamings = match Config.file_renamings with
     | Some f -> DifferentialFilters.FileRenamings.from_json_file f
     | None -> DifferentialFilters.FileRenamings.empty in
@@ -513,6 +545,22 @@ let differential_mode () =
   Differential.to_files diff out_path
 
 let () =
-  match Config.final_parse_action with
-  | Differential -> differential_mode ()
-  | _ -> infer_mode ()
+  match Config.command with
+  | Analyze ->
+      Logging.set_log_file_identifier
+        CommandLineOption.Analyze (Option.map ~f:Filename.basename Config.cluster_cmdline);
+      if Config.print_builtins then Builtin.print_and_exit ();
+      if Sys.file_exists Config.results_dir <> `Yes then (
+        L.err "ERROR: results directory %s does not exist@.@." Config.results_dir;
+        Config.print_usage_exit ()
+      );
+      InferAnalyze.register_perf_stats_report ();
+      InferAnalyze.main Config.makefile_cmdline
+  | Clang ->
+      let prog, args = match Array.to_list Sys.argv with
+        | prog::args -> prog, args
+        | [] -> assert false (* Sys.argv is never empty *) in
+      ClangWrapper.exe ~prog ~args
+  | Report -> InferPrint.main_from_config ()
+  | ReportDiff -> differential_mode ()
+  | Capture | Compile | Run  -> infer_mode ()

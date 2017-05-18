@@ -11,28 +11,60 @@ open! IStd
 open Lexing
 open Ctl_lexer
 
-let parse_ctl_file linters_def_file channel : CFrontend_errors.linter list =
-  let print_position _ lexbuf =
+let parse_al_file fname channel : CTL.al_file option =
+  let pos_str lexbuf =
     let pos = lexbuf.lex_curr_p in
-    Logging.err "%s:%d:%d" pos.pos_fname
-      pos.pos_lnum (pos.pos_cnum - pos.pos_bol + 1) in
+    pos.pos_fname ^ ":" ^ (string_of_int pos.pos_lnum) ^ ":" ^
+    (string_of_int  (pos.pos_cnum - pos.pos_bol + 1)) in
   let parse_with_error lexbuf =
-    try Some (Ctl_parser.checkers_list token lexbuf) with
-    | SyntaxError msg ->
-        Logging.err "%a: %s\n" print_position lexbuf msg;
-        None
+    try Some (Ctl_parser.al_file token lexbuf) with
+    | Ctl_parser_types.ALParsingException s ->
+        raise (Ctl_parser_types.ALParsingException
+                 (s ^ " at " ^  (pos_str lexbuf)))
+    | SyntaxError _
     | Ctl_parser.Error ->
-        Logging.err "\n#######################################################\
-                     \n\n%a: SYNTAX ERROR\n\
-                     \n########################################################\n@."
-          print_position lexbuf;
-        exit (-1) in
+        raise (Ctl_parser_types.ALParsingException
+                 ("SYNTAX ERROR at " ^ (pos_str lexbuf))) in
   let lexbuf = Lexing.from_channel channel in
-  lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = linters_def_file };
-  match parse_with_error lexbuf with
-  | Some parsed_checkers ->
+  lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = fname };
+  parse_with_error lexbuf
+
+let already_imported_files = ref []
+
+let rec parse_import_file import_file channel : CTL.clause list =
+  if List.mem !already_imported_files import_file then
+    failwith ("[ERROR] Cyclic imports: file '" ^ import_file ^ "' was already imported.")
+  else (
+    match parse_al_file import_file channel with
+    | Some {import_files = imports; global_macros = curr_file_macros; checkers = _} ->
+        already_imported_files := import_file :: !already_imported_files;
+        collect_all_macros imports curr_file_macros
+    | None -> Logging.out "No macros found.\n";[])
+
+and collect_all_macros imports curr_file_macros =
+  Logging.out "#### Start parsing import macros #####\n";
+  let import_macros = parse_imports imports in
+  Logging.out "#### Add global macros to import macros #####\n";
+  List.append import_macros curr_file_macros
+
+(* Parse import files with macro definitions, and it returns a list of LET clauses *)
+and parse_imports imports_files : CTL.clause list =
+  let parse_one_import_file fimport macros =
+    Logging.out "  Loading import macros from file %s\n" fimport;
+    let in_channel = open_in fimport in
+    let parsed_macros = parse_import_file fimport in_channel in
+    In_channel.close in_channel;
+    List.append parsed_macros macros in
+  List.fold_right ~f:parse_one_import_file ~init:[] imports_files
+
+let parse_ctl_file linters_def_file channel : CFrontend_errors.linter list =
+  match parse_al_file linters_def_file channel with
+  | Some {import_files = imports; global_macros = curr_file_macros; checkers = parsed_checkers} ->
+      already_imported_files := [linters_def_file];
+      let macros = collect_all_macros imports curr_file_macros in
+      let macros_map = CFrontend_errors.build_macros_map macros in
       Logging.out "#### Start Expanding checkers #####\n";
-      let exp_checkers = CFrontend_errors.expand_checkers parsed_checkers in
+      let exp_checkers = CFrontend_errors.expand_checkers macros_map parsed_checkers in
       Logging.out "#### Checkers Expanded #####\n";
       if Config.debug_mode then List.iter ~f:CTL.print_checker exp_checkers;
       CFrontend_errors.create_parsed_linters linters_def_file exp_checkers
@@ -213,19 +245,23 @@ let context_with_ck_set context decl_list =
     context
 
 let store_issues source_file =
-  let abbrev_source_file = SourceFile.encoding source_file in
+  let abbrev_source_file = DB.source_file_encoding source_file in
   let lint_issues_dir = Config.results_dir ^/ Config.lint_issues_dir_name in
   Utils.create_dir lint_issues_dir;
   let lint_issues_file =
     DB.filename_from_string (Filename.concat lint_issues_dir (abbrev_source_file ^ ".issue")) in
   LintIssues.store_issues lint_issues_file !LintIssues.errLogMap
 
-let do_frontend_checks trans_unit_ctx ast =
+let do_frontend_checks (trans_unit_ctx: CFrontend_config.translation_unit_context) ast =
+  CTL.create_ctl_evaluation_tracker trans_unit_ctx.source_file;
   try
     let parsed_linters = parse_ctl_files Config.linters_def_file in
-    CFrontend_errors.parsed_linters := parsed_linters;
+    let filtered_parsed_linters = CFrontend_errors.filter_parsed_linters parsed_linters in
+    CFrontend_errors.parsed_linters := filtered_parsed_linters;
     let source_file = trans_unit_ctx.CFrontend_config.source_file in
-    Logging.out "Start linting file %a@\n" SourceFile.pp source_file;
+    Logging.out "Start linting file %a with rules: @\n%s@\n"
+      SourceFile.pp source_file
+      (CFrontend_errors.linters_to_string filtered_parsed_linters);
     match ast with
     | Clang_ast_t.TranslationUnitDecl(_, decl_list, _, _) ->
         let context =

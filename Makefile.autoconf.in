@@ -22,10 +22,13 @@ CMAKE = @CMAKE@
 CPP = @CPP@
 CXX = @CXX@
 CXXFLAGS = @CXXFLAGS@
+# this is useless but autoconf is picky...
+datarootdir = @datarootdir@
 ENABLE_OCAMLOPT_CUSTOM_CC = @ENABLE_OCAMLOPT_CUSTOM_CC@
 ENABLE_OCAML_BINANNOT = @ENABLE_OCAML_BINANNOT@
 exec_prefix = @exec_prefix@
 INFER_MAJOR = @INFER_MAJOR@
+INFER_MAN_LAST_MODIFIED = @INFER_MAN_LAST_MODIFIED@
 INFER_MINOR = @INFER_MINOR@
 INFER_PATCH = @INFER_PATCH@
 INSTALL = @INSTALL@
@@ -39,6 +42,7 @@ libdir = @libdir@
 # override in your `make` command to make the install relocatable
 libdir_relative_to_bindir = $(libdir)
 LIBS = @LIBS@
+mandir = @mandir@
 MENHIR = @MENHIR@
 MKDIR_P_CMD = case "@MKDIR_P@" in \
     ./*) printf "$(ROOT_DIR)/@MKDIR_P@\n";; \
@@ -52,6 +56,7 @@ OCAMLC = @OCAMLC@
 OCAMLFIND = @OCAMLFIND@
 OCAMLLEX = @OCAMLLEX@
 OCAMLOPT = @OCAMLOPT@
+PATH = @PATH@
 prefix = @prefix@
 PYTHON_lxml = @PYTHON_lxml@
 REBUILD = @REBUILD@
@@ -67,9 +72,9 @@ else
 LN_S = @LN_S@ -v
 endif
 
-# Export parts of the config relevant to the compilation (taken from `opam config env`) in case the
-# user runs `./configure` in some configuration but `make` in another.
-export PATH := $(shell cd "$(dir $(REBUILD))" && pwd):$(PATH)
-ifneq ($(CAML_LD_LIBRARY_PATH),)
+# Export parts of the config relevant to running other programs
+# be merciful and allow PATH to be updated between ./configure and make
+# except for OCaml-related executables
+# TODO(17630614) get rid of this hack
+export PATH := $(dir $(OCAMLC)):$(shell printf "%s" "$$PATH"):$(PATH)
 export CAML_LD_LIBRARY_PATH := $(CAML_LD_LIBRARY_PATH)
-endif

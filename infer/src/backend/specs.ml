@@ -303,11 +303,10 @@ type stats =
     call_stats : call_stats;
   }
 
-type status = Initialized | Active | Analyzed [@@deriving compare]
+type status = Pending | Analyzed [@@deriving compare]
 
 let string_of_status = function
-  | Initialized -> "Initialized"
-  | Active -> "Active"
+  | Pending -> "Pending"
   | Analyzed -> "Analyzed"
 
 let pp_status fmt status =
@@ -319,14 +318,12 @@ type phase = FOOTPRINT | RE_EXECUTION [@@deriving compare]
 
 let equal_phase = [%compare.equal : phase]
 
-type call_summary = CallSite.Set.t Annot.Map.t
-
 (** Payload: results of some analysis *)
 type payload =
   {
     preposts : NormSpec.t list option; (** list of specs *)
     typestate : unit TypeState.t option; (** final typestate *)
-    calls: call_summary option;
+    annot_map : AnnotReachabilityDomain.astate option;
     crashcontext_frame: Stacktree_t.stacktree option;
     (** Proc location and blame_range info for crashcontext analysis *)
     quandary : QuandarySummary.t option;
@@ -352,11 +349,6 @@ type spec_tbl = summary Typ.Procname.Hash.t
 let spec_tbl: spec_tbl = Typ.Procname.Hash.create 128
 
 let clear_spec_tbl () = Typ.Procname.Hash.clear spec_tbl
-
-(** pretty print analysis time; if [whole_seconds] is true, only print time in seconds *)
-let pp_time whole_seconds fmt t =
-  if whole_seconds then F.fprintf fmt "%3.0f s" t
-  else F.fprintf fmt "%f s" t
 
 let pp_failure_kind_opt fmt failure_kind_opt = match failure_kind_opt with
   | Some failure_kind -> SymOp.pp_failure_kind fmt failure_kind
@@ -445,18 +437,21 @@ let pp_summary_no_stats_specs fmt summary =
   F.fprintf fmt "%a@\n" pp_status summary.status;
   F.fprintf fmt "%a@\n" pp_pair (describe_phase summary)
 
-let pp_payload pe fmt { preposts; typestate; crashcontext_frame; quandary; siof; threadsafety; buffer_overrun } =
-  let pp_opt pp fmt = function
-    | Some x -> pp fmt x
+let pp_payload pe fmt
+    { preposts; typestate; crashcontext_frame;
+      quandary; siof; threadsafety; buffer_overrun; annot_map } =
+  let pp_opt prefix pp fmt = function
+    | Some x -> F.fprintf fmt "%s: %a\n" prefix pp x
     | None -> () in
-  F.fprintf fmt "%a%a%a%a%a%a%a@\n"
-    (pp_specs pe) (get_specs_from_preposts preposts)
-    (pp_opt (TypeState.pp TypeState.unit_ext)) typestate
-    (pp_opt Crashcontext.pp_stacktree) crashcontext_frame
-    (pp_opt QuandarySummary.pp) quandary
-    (pp_opt SiofDomain.pp) siof
-    (pp_opt ThreadSafetyDomain.pp_summary) threadsafety
-    (pp_opt BufferOverrunDomain.Summary.pp) buffer_overrun
+  F.fprintf fmt "%a%a%a%a%a%a%a%a@\n"
+    (pp_opt "PrePosts" (pp_specs pe)) (Option.map ~f:NormSpec.tospecs preposts)
+    (pp_opt "TypeState" (TypeState.pp TypeState.unit_ext)) typestate
+    (pp_opt "CrashContext" Crashcontext.pp_stacktree) crashcontext_frame
+    (pp_opt "Quandary" QuandarySummary.pp) quandary
+    (pp_opt "Siof" SiofDomain.pp) siof
+    (pp_opt "ThreadSafety" ThreadSafetyDomain.pp_summary) threadsafety
+    (pp_opt "BufferOverrun" BufferOverrunDomain.Summary.pp) buffer_overrun
+    (pp_opt "AnnotationReachability" AnnotReachabilityDomain.pp) annot_map
 
 
 let pp_summary_text fmt summary =
@@ -488,7 +483,7 @@ let pp_summary_html source color fmt summary =
   Errlog.pp_html source [] fmt err_log;
   Io_infer.Html.pp_hline fmt ();
   F.fprintf fmt "<LISTING>@\n";
-  pp_specs pe fmt (get_specs_from_payload summary);
+  pp_payload pe fmt summary.payload;
   F.fprintf fmt "</LISTING>@\n"
 
 let empty_stats calls =
@@ -645,9 +640,6 @@ let summary_exists proc_name =
 let get_status summary =
   summary.status
 
-let is_active summary =
-  equal_status (get_status summary) Active
-
 let get_proc_name summary =
   summary.attributes.ProcAttributes.proc_name
 
@@ -667,20 +659,6 @@ let get_flag summary key =
     Some (Hashtbl.find proc_flags key)
   with Not_found -> None
 
-(** Return the specs and parameters for the proc in the spec table *)
-let get_specs_formals proc_name =
-  match get_summary proc_name with
-  | None ->
-      raise (Failure ("Specs.get_specs_formals: " ^ (Typ.Procname.to_string proc_name) ^ "Not_found"))
-  | Some summary ->
-      let specs = get_specs_from_payload summary in
-      let formals = get_formals summary in
-      (specs, formals)
-
-(** Return the specs for the proc in the spec table *)
-let get_specs proc_name =
-  fst (get_specs_formals proc_name)
-
 (** Return the current phase for the proc *)
 let get_phase summary =
   summary.phase
@@ -699,17 +677,11 @@ let store_summary (summ1: summary) =
     (res_dir_specs_filename proc_name)
     ~data:final_summary
 
-(** Set the current status for the proc *)
-let set_status proc_name status =
-  match get_summary proc_name with
-  | None -> raise (Failure ("Specs.set_status: " ^ (Typ.Procname.to_string proc_name) ^ " Not_found"))
-  | Some summary -> add_summary proc_name { summary with status = status }
-
 let empty_payload =
   {
     preposts = None;
     typestate = None;
-    calls = None;
+    annot_map = None;
     crashcontext_frame = None;
     quandary = None;
     siof = None;
@@ -733,7 +705,7 @@ let init_summary
       sessions = ref 0;
       payload = empty_payload;
       stats = empty_stats calls;
-      status = Initialized;
+      status = Pending;
       attributes =
         { proc_attributes with
           ProcAttributes.proc_flags = proc_flags; };
@@ -742,18 +714,26 @@ let init_summary
   Typ.Procname.Hash.replace spec_tbl proc_attributes.ProcAttributes.proc_name summary;
   summary
 
-(** Reset a summary rebuilding the dependents and preserving the proc attributes if present. *)
-let reset_summary proc_name attributes_opt proc_desc_option =
-  let proc_attributes = match attributes_opt with
-    | Some attributes ->
-        attributes
-    | None ->
-        ProcAttributes.default proc_name !Config.curr_language in
+let dummy =
   init_summary (
     [],
     ProcAttributes.proc_flags_empty (),
     [],
-    proc_attributes,
+    ProcAttributes.default Typ.Procname.empty_block Config.Java,
+    None
+  )
+
+(** Reset a summary rebuilding the dependents and preserving the proc attributes if present. *)
+let reset_summary proc_desc =
+  let proc_desc_option =
+    if Config.dynamic_dispatch = `Lazy
+    then Some proc_desc
+    else None in
+  init_summary (
+    [],
+    ProcAttributes.proc_flags_empty (),
+    [],
+    Procdesc.get_attributes proc_desc,
     proc_desc_option
   )
 

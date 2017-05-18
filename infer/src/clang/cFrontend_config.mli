@@ -100,12 +100,11 @@ val log_out : Format.formatter ref
 val pointer_decl_index : Clang_ast_t.decl Clang_ast_main.PointerMap.t ref
 val pointer_stmt_index : Clang_ast_t.stmt Clang_ast_main.PointerMap.t ref
 
-(** Map from clang pointers to types produced by ast exporter.  Populated once on InferClang
-    startup *)
+(** Map from clang pointers to types produced by ast exporter.  Populated once on startup *)
 val pointer_type_index : Clang_ast_t.c_type Clang_ast_main.PointerMap.t ref
 
 (** Map from type pointers (clang pointers and types created later by frontend) to sil types
     Populated during frontend execution when new type is found *)
-val sil_types_map : (Typ.t Clang_ast_types.TypePointerMap.t) ref
+val sil_types_map : (Typ.desc Clang_ast_extend.TypePointerMap.t) ref
 
 val reset_global_state : unit -> unit

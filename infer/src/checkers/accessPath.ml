@@ -11,18 +11,15 @@ open! IStd
 
 module F = Format
 
-type _array_sensitive_typ = Typ.t
+type _typ = Typ.t
 
-let compare__array_sensitive_typ = Typ.array_sensitive_compare
+let compare__typ _ _ = 0
 
-type base = Var.t * _array_sensitive_typ [@@deriving compare]
+(* ignore types while comparing bases. we can't trust the types from all of our frontends to be
+   consistent, and the variable names should already be enough to distinguish the bases. *)
+type base = Var.t * _typ [@@deriving compare]
 
 let equal_base = [%compare.equal : base]
-
-let compare_base_untyped (base_var1, _) (base_var2, _) =
-  if phys_equal base_var1 base_var2
-  then 0
-  else Var.compare base_var1 base_var2
 
 type access =
   | ArrayAccess of Typ.t
@@ -30,7 +27,6 @@ type access =
 [@@deriving compare]
 
 let equal_access = [%compare.equal : access]
-
 
 let equal_access_list l1 l2 =  Int.equal (List.compare compare_access l1 l2) 0
 
@@ -74,22 +70,6 @@ module Raw = struct
     | base, accesses ->  F.fprintf fmt "%a.%a" pp_base base pp_access_list accesses
 end
 
-module UntypedRaw = struct
-  type t = Raw.t
-
-  (* untyped comparison *)
-  let compare ((base1, accesses1) as raw1) ((base2, accesses2) as raw2) =
-    if phys_equal raw1 raw2
-    then
-      0
-    else
-      let n = compare_base_untyped base1 base2 in
-      if n <> 0 then n
-      else List.compare compare_access accesses1 accesses2
-
-  let pp = Raw.pp
-end
-
 type t =
   | Abstracted of Raw.t
   | Exact of Raw.t
@@ -119,7 +99,7 @@ let of_exp exp0 typ0 ~(f_resolve_id : Var.t -> Raw.t option) =
           | Some (base, base_accesses) -> (base, base_accesses @ accesses) :: acc
           | None -> (base_of_id id typ, accesses) :: acc
         end
-    | Exp.Lvar pvar when Pvar.is_frontend_tmp pvar ->
+    | Exp.Lvar pvar when Pvar.is_ssa_frontend_tmp pvar ->
         begin
           match f_resolve_id (Var.of_pvar pvar) with
           | Some (base, base_accesses) -> (base, base_accesses @ accesses) :: acc
@@ -132,7 +112,7 @@ let of_exp exp0 typ0 ~(f_resolve_id : Var.t -> Raw.t option) =
         of_exp_ root_exp root_exp_typ (field_access :: accesses) acc
     | Exp.Lindex (root_exp, _) ->
         let array_access = ArrayAccess typ in
-        let array_typ = Typ.Tarray (typ, None) in
+        let array_typ = Typ.mk (Tarray (typ, None, None)) in
         of_exp_ root_exp array_typ (array_access :: accesses) acc
     | Exp.Cast (cast_typ, cast_exp) ->
         of_exp_ cast_exp cast_typ [] acc
@@ -156,9 +136,9 @@ let of_lhs_exp lhs_exp typ ~(f_resolve_id : Var.t -> Raw.t option) =
 let append (base, old_accesses) new_accesses =
   base, old_accesses @ new_accesses
 
-let with_base_var var = function
-  | Exact ((_, base_typ), accesses) -> Exact ((var, base_typ), accesses)
-  | Abstracted ((_, base_typ), accesses) -> Abstracted ((var, base_typ), accesses)
+let with_base base = function
+  | Exact (_, accesses) -> Exact (base, accesses)
+  | Abstracted (_, accesses) -> Abstracted (base, accesses)
 
 let rec is_prefix_path path1 path2 =
   if phys_equal path1 path2
@@ -207,7 +187,3 @@ module AccessMap = PrettyPrintable.MakePPMap(struct
 module RawSet = PrettyPrintable.MakePPSet(Raw)
 
 module RawMap = PrettyPrintable.MakePPMap(Raw)
-
-module UntypedRawSet = PrettyPrintable.MakePPSet(UntypedRaw)
-
-module UntypedRawMap = PrettyPrintable.MakePPMap(UntypedRaw)

@@ -12,9 +12,14 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-INFER_ROOT="$SCRIPT_DIR/../"
+INFER_ROOT="$SCRIPT_DIR"
+INFER_DEPS_DIR="$INFER_ROOT/dependencies/infer-deps"
 PLATFORM="$(uname)"
 NCPU="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+OCAML_VERSION="4.04.0"
+OPAM_LOCK_URL=${OPAM_LOCK_URL:-"https://github.com/rgrinberg/opam-lock"}
+
+INFER_OPAM_SWITCH_DEFAULT=infer-"$OCAML_VERSION"
 
 function usage() {
   echo "Usage: $0 [-y] [targets]"
@@ -25,8 +30,11 @@ function usage() {
   echo "   java     build Java analyzer"
   echo
   echo " options:"
-  echo "   -h,--help   show this message"
-  echo "   -y,--yes    automatically agree to everything"
+  echo "   -h,--help             show this message"
+  echo "   --only-install-opam   install the opam dependencies of infer and exists"
+  echo "   --opam-switch         specify the opam switch where to install infer (default: $INFER_OPAM_SWITCH_DEFAULT)"
+  echo "   --no-opam-lock        do not use the opam.lock file and let opam resolve dependencies"
+  echo "   -y,--yes              automatically agree to everything"
   echo
   echo " examples:"
   echo "    $0               # build Java and C/Objective-C analyzers"
@@ -35,9 +43,12 @@ function usage() {
 }
 
 # arguments
-BUILD_CLANG=no
-BUILD_JAVA=no
-INTERACTIVE=yes
+BUILD_CLANG=${BUILD_CLANG:-no}
+BUILD_JAVA=${BUILD_JAVA:-no}
+INTERACTIVE=${INTERACTIVE:-yes}
+ONLY_SETUP_OPAM=${ONLY_SETUP_OPAM:-no}
+INFER_OPAM_SWITCH=${INFER_OPAM_SWITCH:-$INFER_OPAM_SWITCH_DEFAULT}
+USE_OPAM_LOCK=${USE_OPAM_LOCK:-yes}
 ORIG_ARGS="$*"
 
 while [[ $# > 0 ]]; do
@@ -63,6 +74,23 @@ while [[ $# > 0 ]]; do
       usage
       exit 0
      ;;
+    --no-opam-lock)
+      USE_OPAM_LOCK=no
+      shift
+      continue
+     ;;
+    --opam-switch)
+      shift
+      [[ $# > 0 ]] || (usage; exit 1)
+      INFER_OPAM_SWITCH="$1"
+      shift
+      continue
+     ;;
+    --only-setup-opam)
+      ONLY_SETUP_OPAM=yes
+      shift
+      continue
+     ;;
     -y|--yes)
       INTERACTIVE=no
       shift
@@ -86,6 +114,8 @@ YES=
 if [ "$INTERACTIVE" = "no" ]; then
   YES=--yes
 fi
+# --yes by default for opam commands
+export OPAMYES=1
 
 check_installed () {
   local cmd=$1
@@ -96,42 +126,68 @@ check_installed () {
 }
 
 setup_opam () {
-    OCAML_VERSION="4.02.3"
-
     opam init --compiler=$OCAML_VERSION -j $NCPU --no-setup --yes
-
-    OPAMSWITCH=infer-$OCAML_VERSION
-    opam switch set -j $NCPU $OPAMSWITCH --alias-of $OCAML_VERSION
+    opam switch set -j $NCPU $INFER_OPAM_SWITCH --alias-of $OCAML_VERSION
 }
 
-add_opam_git_pin () {
-    PACKAGE_NAME=$1
-    REPO_URL=$2
-    PIN_HASH=$3
+# Install and record the infer dependencies in opam. The main trick is to install the
+# $INFER_DEPS_DIR directory instead of the much larger infer repository. That directory contains
+# just enough to pretend it installs infer.
+install_infer-deps () {
+    # remove previous infer-deps pin, which might have conflicting dependencies
+    opam pin remove infer-deps --no-action
+    INFER_TMP_DEPS_DIR=$(mktemp -d "$INFER_ROOT"/dependencies/infer-deps-XXXX)
+    INFER_TMP_PACKAGE_NAME="$(basename "$INFER_TMP_DEPS_DIR")"
+    cp -a "$INFER_DEPS_DIR"/* "$INFER_TMP_DEPS_DIR"
+    # give unique name to the package to force opam to recheck the dependencies are all installed
+    opam pin add --no-action "$INFER_TMP_PACKAGE_NAME" "$INFER_TMP_DEPS_DIR"
+    opam install -j $NCPU --deps-only "$INFER_TMP_PACKAGE_NAME"
+    opam pin remove "$INFER_TMP_PACKAGE_NAME"
+    rm -fr "$INFER_TMP_DEPS_DIR"
+    # pin infer so that opam doesn't violate its package constraints when the user does
+    # "opam upgrade"
+    opam pin add infer-deps "$INFER_DEPS_DIR"
+}
 
-    if [ "$(opam show -f pinned "$PACKAGE_NAME")" != "git ($PIN_HASH)" ]; then
-        opam pin add --yes --no-action "$PACKAGE_NAME" "$REPO_URL"
+install_locked_deps() {
+    if ! opam lock 2> /dev/null; then
+        echo "opam-lock not found in the current switch, installing from '$OPAM_LOCK_URL'..."
+        opam pin add -k git lock "$OPAM_LOCK_URL"
+    fi
+    opam lock --install < "$INFER_ROOT"/opam.lock
+}
+
+install_opam_deps() {
+    if [ "$USE_OPAM_LOCK" = yes ]; then
+        install_locked_deps
+    else
+        install_infer-deps
     fi
 }
 
-install_opam_deps () {
-    # trick to avoid rsync'inc the whole directory to opam since we are only interested in
-    # installing the dependencies
-    INFER_DEPS_DIR=$(mktemp -d infer-deps-XXXX)
-    cp opam "$INFER_DEPS_DIR"
-    # give unique name to the package to force opam to recheck the dependencies are all installed
-    opam pin add --yes --no-action "$INFER_DEPS_DIR" "$INFER_DEPS_DIR"
-    opam install -j $NCPU --yes --deps-only "$INFER_DEPS_DIR"
-    opam pin remove "$INFER_DEPS_DIR"
-    rm -fr "$INFER_DEPS_DIR"
-}
 
 echo "initializing opam... "
 check_installed opam
-setup_opam
-eval $(SHELL=bash opam config env --switch=$OPAMSWITCH)
-echo "installing infer dependencies... "
-install_opam_deps
+if [ "$INFER_OPAM_SWITCH" = "$INFER_OPAM_SWITCH_DEFAULT" ]; then
+    # set up the custom infer switch
+    setup_opam
+else
+    opam switch set -j $NCPU $INFER_OPAM_SWITCH
+fi
+eval $(SHELL=bash opam config env --switch=$INFER_OPAM_SWITCH)
+echo
+echo "installing infer dependencies; this can take up to 30 minutes... "
+install_opam_deps || ( \
+  echo; \
+  echo '*** Failed to install opam dependencies'; \
+  echo '*** Updating opam then retrying'; \
+  opam update && \
+  install_opam_deps \
+)
+
+if [ "$ONLY_SETUP_OPAM" = "yes" ]; then
+  exit 0
+fi
 
 echo "preparing build... "
 if [ ! -f .release ]; then

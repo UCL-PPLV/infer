@@ -118,10 +118,7 @@ end
 
 module PPMap =
 struct
-  include PrettyPrintable.MakePPMap (struct
-      include Allocsite
-      let pp_key f k = pp f k
-    end)
+  include PrettyPrintable.MakePPMap (Allocsite)
 
   let pp ~pp_value fmt m =
     let pp_item fmt (k, v) = F.fprintf fmt "(%a, %a)" pp_key k pp_value v in
@@ -132,6 +129,9 @@ include AbstractDomain.Map (PPMap) (ArrInfo)
 
 let bot : astate
   = empty
+
+let is_bot : astate -> bool
+  = is_empty
 
 let make : Allocsite.t -> Itv.t -> Itv.t -> Itv.t -> astate
   = fun a o sz st -> add a (ArrInfo.make (o, sz, st)) bot
@@ -162,7 +162,7 @@ let diff : astate -> astate -> Itv.t
     let diff_join k a2 acc =
       match find k arr1 with
       | a1 -> Itv.join acc (ArrInfo.diff a1 a2)
-      | exception Not_found -> acc
+      | exception Not_found -> Itv.top
     in
     fold diff_join arr2 Itv.bot
 

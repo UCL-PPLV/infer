@@ -201,24 +201,30 @@ def merge_reports_from_paths(report_paths):
 
 def _pmd_xml_of_issues(issues):
     if etree is None:
-        print('ERROR: "etree" Python package not found.')
+        print('ERROR: "lxml" Python package not found.')
         print('ERROR: You need to install it to use Infer with --pmd-xml')
         sys.exit(1)
     root = etree.Element('pmd')
     root.attrib['version'] = '5.4.1'
     root.attrib['date'] = datetime.datetime.now().isoformat()
     for issue in issues:
-        fully_qualifed_method_name = re.search('(.*)\(.*',
-                                               issue[JSON_INDEX_PROCEDURE_ID])
-        class_name = ''
-        package = ''
-        if fully_qualifed_method_name is not None:
-            # probably Java
-            info = fully_qualifed_method_name.groups()[0].split('.')
-            class_name = info[-2:-1][0]
-            method = info[-1]
-            package = '.'.join(info[0:-2])
-        else:
+        successful_java = False
+        if issue[JSON_INDEX_FILENAME].endswith('.java'):
+            fully_qualified_method_name = re.search(
+                '(.*)\(.*', issue[JSON_INDEX_PROCEDURE_ID])
+            if fully_qualified_method_name is not None:
+                # probably Java, let's try
+                try:
+                    info = fully_qualified_method_name.groups()[0].split('.')
+                    class_name = info[-2:-1][0]
+                    method = info[-1]
+                    package = '.'.join(info[0:-2])
+                    successful_java = True
+                except IndexError:
+                    successful_java = False
+        if not successful_java:
+            class_name = ''
+            package = ''
             method = issue[JSON_INDEX_PROCEDURE]
         file_node = etree.Element('file')
         file_node.attrib['name'] = issue[JSON_INDEX_FILENAME]

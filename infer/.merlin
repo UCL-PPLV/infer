@@ -1,8 +1,9 @@
 S src/**
 B _build/infer/**
+PKG ANSITerminal
 PKG atdgen
+PKG cmdliner
 PKG core
-PKG ctypes
 PKG javalib
 PKG oUnit
 PKG ppx_compare

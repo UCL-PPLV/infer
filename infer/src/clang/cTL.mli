@@ -85,6 +85,12 @@ type ctl_checker = {
   definitions : clause list (* A list of let/set definitions *)
 }
 
+type al_file = {
+  import_files : string list;
+  global_macros : clause list;
+  checkers : ctl_checker list
+}
+
 val print_checker : ctl_checker -> unit
 
 val eval_formula : t -> ast_node -> CLintersContext.context -> bool
@@ -92,6 +98,8 @@ val eval_formula : t -> ast_node -> CLintersContext.context -> bool
 val save_dotty_when_in_debug_mode : SourceFile.t -> unit
 
 val next_state_via_transition : ast_node -> transitions option -> ast_node option
+
+val create_ctl_evaluation_tracker : SourceFile.t -> unit
 
 module Debug : sig
   val pp_formula : Format.formatter -> t -> unit
