@@ -77,6 +77,9 @@ val d_pi_sigma: pi -> sigma -> unit
     The boolean indicates whether the stack should only include local variales. *)
 val sigma_get_stack_nonstack : bool -> sigma -> sigma * sigma
 
+(** Create an environment mapping (ident) expressions to the program variables containing them *)
+val create_pvar_env: sigma -> (Exp.t -> Exp.t)
+
 (** Update the object substitution given the stack variables in the prop *)
 val prop_update_obj_sub : Pp.env -> 'a t -> Pp.env
 
