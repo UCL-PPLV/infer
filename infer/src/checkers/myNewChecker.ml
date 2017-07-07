@@ -112,13 +112,15 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
   print_string "\n";
   print_specs specs;
   let spec = List.hd specs in
+  let pre = match spec with
+  | Some s -> Specs.Jprop.to_prop s.pre
+  | None -> Prop.prop_emp in
   let post_pairs = match spec with 
   | Some s -> s.posts
   | None -> [] 
   in 
-  let posts = List.map ~f:fst post_pairs in
-  let posts_renamed = List.map ~f:(Prop.prop_rename_primed_footprint_vars tenv) posts in
-  List.iter ~f:(Prop.pp_prop Pp.text F.std_formatter) posts_renamed;
+  let posts = List.map ~f:fst post_pairs in 
+  ();
 
 
   summary
