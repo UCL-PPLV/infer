@@ -94,12 +94,24 @@ let print_specs specs =
     ) posts;
   ) specs
 
-let make_my_post = ()
+(** create a replacement list from for pointsto for program variables *)
+let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Exp.t) list =
+  let env = ref [] in
+  let filter = function
+    | Sil.Hpointsto (Lvar pvar, Eexp (Var v, _), _) ->
+        if not (Pvar.is_global pvar) then env := (Exp.Var v, Exp.Lvar pvar) :: !env
+    | _ -> () in
+  List.iter ~f:filter sigma;
+  !env
 
+let swap_post = ref Prop.prop_emp
+
+let swap_incmpl_post = ref Prop.prop_emp
 
 let checker { Callbacks.get_proc_desc; get_procs_in_file; 
   idenv; tenv; summary; proc_desc; } : Specs.summary =
-  let proc_name_readable = Typ.Procname.to_string (Procdesc.get_proc_name proc_desc) in
+  let pname = Procdesc.get_proc_name proc_desc in 
+  let proc_name_readable = Typ.Procname.to_string pname in
   if String.equal proc_name_readable "main" then 
     summary
   else
@@ -115,13 +127,33 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
   let pre = match spec with
   | Some s -> Specs.Jprop.to_prop s.pre
   | None -> Prop.prop_emp in
-  let post_pairs = match spec with 
-  | Some s -> s.posts
+  let posts = match spec with 
+  | Some s -> List.map ~f:fst s.posts
   | None -> [] 
   in 
-  let posts = List.map ~f:fst post_pairs in 
-  ();
+  let post = List.hd posts in 
+  begin
+  match post with
+  | None -> ();
+  | Some post -> 
+    (* let exp_replace_list = create_pvar_env_list pre.sigma in *)
+    (* let replaced_post_sigma = List.map ~f:(Sil.hpred_replace_exp exp_replace_list) post.sigma in *)
+    (* match Prover.check_implication_base pname tenv true true post (Prop.expose pre) with *)
+    match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
+    | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes";
+    | ImplFail _ -> print_endline "No";
 
+    if String.equal proc_name_readable "swap" then swap_post := post;
+    if String.equal proc_name_readable "swap_incmpl" then swap_incmpl_post := post;
 
+    if not (Prop.equal_prop !swap_post Prop.prop_emp) && 
+      not (Prop.equal_prop !swap_incmpl_post Prop.prop_emp)
+    then match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
+    | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "\nYes*Yes";
+    | ImplFail _ -> print_endline "\nNo*No";
+    else ()
+  end;
   summary
   end
