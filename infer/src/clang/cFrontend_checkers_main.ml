@@ -100,10 +100,11 @@ let parse_ctl_files linters_def_files : CFrontend_errors.linter list =
 
 let rec get_responds_to_selector stmt =
   let open Clang_ast_t in
+  let responToSelectorMethods = ["respondsToSelector:"; "instancesRespondToSelector:"] in
   match stmt with
   | ObjCMessageExpr (_, [_; ObjCSelectorExpr (_, _, _, method_name)], _, mdi)
   | ObjCMessageExpr (_, [ObjCSelectorExpr (_, _, _, method_name)], _, mdi)
-    when  String.equal mdi.Clang_ast_t.omei_selector "respondsToSelector:" ->
+    when List.mem ~equal:String.equal responToSelectorMethods mdi.Clang_ast_t.omei_selector ->
       [method_name]
   | BinaryOperator (_, [stmt1;stmt2], _, bo_info)
     when PVariant.(=) bo_info.Clang_ast_t.boi_kind `LAnd ->
@@ -297,6 +298,10 @@ let do_frontend_checks (trans_unit_ctx: CFrontend_config.translation_unit_contex
     L.(debug Linters Medium) "Start linting file %a with rules: @\n%a@\n"
       SourceFile.pp source_file
       CFrontend_errors.pp_linters filtered_parsed_linters;
+    if Config.print_active_checkers then
+      L.progress "Linting file %a, active linters: @\n%a@\n"
+        SourceFile.pp source_file
+        CFrontend_errors.pp_linters filtered_parsed_linters;
     match ast with
     | Clang_ast_t.TranslationUnitDecl(_, decl_list, _, _) ->
         let context =
