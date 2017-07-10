@@ -105,7 +105,7 @@ let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list
 
 let find_original (e: Exp.t) sigma = 
   match List.find ~f:(fun h -> Exp.equal (Sil.hpred_get_lhs h) (e)) sigma with 
-  | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> v
+  | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> Exp.Var v
   | _ -> failwith "find_original: No original value found"
 
 let checker { Callbacks.get_proc_desc; get_procs_in_file; 
@@ -141,25 +141,41 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
     begin
     match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes"
-    | ImplFail _ -> print_endline "No"
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "pre = post: Yes"
+    | ImplFail _ -> print_endline "pre = post: No"
     end;
 
     let exp_replace_list = create_pvar_env_list pre.sigma in
     let x_val = find_exp_replacement "x" exp_replace_list in
     let y_val = find_exp_replacement "y" exp_replace_list in
     let x_pointsto = find_original x_val pre.sigma in
-    let y_pointsto = find_original y_val pre.sigma in
-    let my_new_hpred1 = Sil.Hpointsto (x_val, Sil.Eexp (Exp.Var y_pointsto, Sil.inst_formal), (Exp.get_undefined true)) in
-    let my_new_hpred2 = Sil.Hpointsto (y_val, Sil.Eexp (Exp.Var x_pointsto, Sil.inst_formal), (Exp.get_undefined true)) in
+    let y_pointsto = find_original y_val pre.sigma in 
+    let my_new_hpred1 = Prop.mk_ptsto tenv x_val (Sil.Eexp (y_pointsto, Sil.inst_none)) 
+      (Exp.Sizeof 
+        {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
+    let my_new_hpred2 = Prop.mk_ptsto tenv y_val (Sil.Eexp (x_pointsto, Sil.inst_none)) 
+      (Exp.Sizeof
+        {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
     let my_new_sigma = my_new_hpred1 :: my_new_hpred2 :: [] in
     let my_new_post = Prop.from_sigma my_new_sigma in
 
     begin match Prover.check_implication_for_footprint pname tenv post my_new_post with 
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes2"
-    | ImplFail _ -> print_endline "No2"
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "post = given post: Yes"
+    | ImplFail _ -> print_endline "post = given post: No"
     end;
+
+    List.iter ~f:(fun hpred1 -> 
+      List.iter ~f:(fun hpred2 ->
+        if Sil.equal_hpred hpred1 hpred2 then print_string "Match found - ";
+        print_string "hpred1 is: ";
+        Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred1;
+        print_string " and hpred2 is: ";
+        Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred2;
+        print_endline ""
+      ) my_new_post.sigma;
+    ) post.sigma;
+
 
 
   print_endline "";
