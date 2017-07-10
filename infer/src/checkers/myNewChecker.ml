@@ -31,6 +31,18 @@ end
 module Analyzer =
   AbstractInterpreter.Make (ProcCfg.Normal) (TransferFunctions)
 
+let print_sigma sigma = 
+  List.iter ~f:(fun s -> 
+    Sil.pp_hpred Pp.text F.std_formatter s;
+    print_string " "
+  ) sigma
+
+let print_pi pi = 
+  List.iter ~f:(fun p -> 
+    Sil.pp_atom Pp.text F.std_formatter p;
+    print_string " " 
+  ) pi
+
 let print_specs specs = 
   List.iter ~f:(fun (s: Prop.normal Specs.spec) -> 
     let joined_pre = s.pre in
@@ -41,25 +53,13 @@ let print_specs specs =
     and pi_fp = pre.pi_fp in
     print_endline "pre: ";
     print_endline "sigma: ";
-    List.iter ~f:(fun s -> 
-      Sil.pp_hpred Pp.text F.std_formatter s;
-      print_string " "
-    ) sigma;
+    print_sigma sigma;
     print_endline "\npi: ";
-    List.iter ~f:(fun p -> 
-      Sil.pp_atom Pp.text F.std_formatter p;
-      print_string " "
-    ) pi;
+    print_pi pi;
     print_endline "\nsigma_fp: ";
-    List.iter ~f:(fun s -> 
-      Sil.pp_hpred Pp.text F.std_formatter s;
-      print_string " "
-    ) sigma_fp;
+    print_sigma sigma_fp;
     print_endline "\npi_fp: ";
-    List.iter ~f:(fun p -> 
-      Sil.pp_atom Pp.text F.std_formatter p;
-      print_string " "
-    ) pi_fp;
+    print_pi pi_fp;
     print_endline "";
 
     let posts = s.posts in 
@@ -71,42 +71,42 @@ let print_specs specs =
       and pi_fp = post.pi_fp in
       print_endline "post: ";
       print_endline "sigma: ";
-      List.iter ~f:(fun s -> 
-        Sil.pp_hpred Pp.text F.std_formatter s;
-        print_string " "
-      ) sigma;
+      print_sigma sigma;
       print_endline "\npi: ";
-      List.iter ~f:(fun p -> 
-        Sil.pp_atom Pp.text F.std_formatter p;
-        print_string " "
-      ) pi;
+      print_pi pi;
       print_endline "\nsigma_fp: ";
-      List.iter ~f:(fun s -> 
-        Sil.pp_hpred Pp.text F.std_formatter s;
-        print_string " "
-      ) sigma_fp;
+      print_sigma sigma_fp;
       print_endline "\npi_fp: ";
-      List.iter ~f:(fun p ->
-        Sil.pp_atom Pp.text F.std_formatter p;
-        print_string " "
-      ) pi_fp;
+      print_pi pi_fp;
       print_endline "";
     ) posts;
   ) specs
 
 (** create a replacement list from for pointsto for program variables *)
-let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Exp.t) list =
+let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   let env = ref [] in
   let filter = function
     | Sil.Hpointsto (Lvar pvar, Eexp (Var v, _), _) ->
-        if not (Pvar.is_global pvar) then env := (Exp.Var v, Exp.Lvar pvar) :: !env
-    | _ -> () in
+        if not (Pvar.is_global pvar) then env := (Exp.Var v, pvar) :: !env
+    | _ -> ()
+  in
   List.iter ~f:filter sigma;
   !env
 
 let swap_post = ref Prop.prop_emp
 
 let swap_incmpl_post = ref Prop.prop_emp
+
+let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list) = 
+  match List.find ~f:(fun p -> String.equal (Pvar.get_simplified_name (snd p)) name) 
+      exp_replace_list with
+  | Some pair -> fst pair
+  | None -> failwith "find_exp_replacement: No var of that name found"
+
+let find_original (e: Exp.t) sigma = 
+  match List.find ~f:(fun h -> Exp.equal (Sil.hpred_get_lhs h) (e)) sigma with 
+  | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> v
+  | _ -> failwith "find_original: No original value found"
 
 let checker { Callbacks.get_proc_desc; get_procs_in_file; 
   idenv; tenv; summary; proc_desc; } : Specs.summary =
@@ -123,6 +123,7 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
   Specs.pp_specs Pp.text F.std_formatter specs;
   print_string "\n";
   print_specs specs;
+  print_string "\n";
   let spec = List.hd specs in
   let pre = match spec with
   | Some s -> Specs.Jprop.to_prop s.pre
@@ -135,25 +136,33 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
   begin
   match post with
   | None -> ();
-  | Some post -> 
-    (* let exp_replace_list = create_pvar_env_list pre.sigma in *)
-    (* let replaced_post_sigma = List.map ~f:(Sil.hpred_replace_exp exp_replace_list) post.sigma in *)
-    (* match Prover.check_implication_base pname tenv true true post (Prop.expose pre) with *)
+  | Some post ->
+
+    begin
     match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes";
-    | ImplFail _ -> print_endline "No";
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes"
+    | ImplFail _ -> print_endline "No"
+    end;
 
-    if String.equal proc_name_readable "swap" then swap_post := post;
-    if String.equal proc_name_readable "swap_incmpl" then swap_incmpl_post := post;
+    let exp_replace_list = create_pvar_env_list pre.sigma in
+    let x_val = find_exp_replacement "x" exp_replace_list in
+    let y_val = find_exp_replacement "y" exp_replace_list in
+    let x_pointsto = find_original x_val pre.sigma in
+    let y_pointsto = find_original y_val pre.sigma in
+    let my_new_hpred1 = Sil.Hpointsto (x_val, Sil.Eexp (Exp.Var y_pointsto, Sil.inst_formal), (Exp.get_undefined true)) in
+    let my_new_hpred2 = Sil.Hpointsto (y_val, Sil.Eexp (Exp.Var x_pointsto, Sil.inst_formal), (Exp.get_undefined true)) in
+    let my_new_sigma = my_new_hpred1 :: my_new_hpred2 :: [] in
+    let my_new_post = Prop.from_sigma my_new_sigma in
 
-    if not (Prop.equal_prop !swap_post Prop.prop_emp) && 
-      not (Prop.equal_prop !swap_incmpl_post Prop.prop_emp)
-    then match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
+    begin match Prover.check_implication_for_footprint pname tenv post my_new_post with 
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "\nYes*Yes";
-    | ImplFail _ -> print_endline "\nNo*No";
-    else ()
+       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "Yes2"
+    | ImplFail _ -> print_endline "No2"
+    end;
+
+
+  print_endline "";
   end;
   summary
   end
