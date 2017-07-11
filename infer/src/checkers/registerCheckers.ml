@@ -19,6 +19,7 @@ let () = if false then let module SC = SimpleChecker.Make in ()
 
 type callback = Procedure of Callbacks.proc_callback_t | Cluster of Callbacks.cluster_callback_t
 
+<<<<<<< HEAD
 let checkers =
   [ ( "annotation reachability"
     , Config.annotation_reachability
@@ -58,6 +59,41 @@ let checkers =
       ; (Procedure ThreadSafety.analyze_procedure, Config.Java)
       ; (Cluster ThreadSafety.file_analysis, Config.Clang)
       ; (Cluster ThreadSafety.file_analysis, Config.Java) ] ) ]
+=======
+let checkers = [
+  "annotation reachability", Config.annotation_reachability,
+  [Procedure AnnotationReachability.checker, Config.Java];
+  "biabduction", Config.biabduction,
+  [Procedure Interproc.analyze_procedure, Config.Clang;
+   Procedure Interproc.analyze_procedure, Config.Java];
+  "buffer overrun", Config.bufferoverrun,
+  [Procedure BufferOverrunChecker.checker, Config.Clang;
+   Procedure BufferOverrunChecker.checker, Config.Java];
+  "crashcontext", Config.crashcontext, [Procedure BoundedCallTree.checker, Config.Java];
+  "eradicate", Config.eradicate, [Procedure Eradicate.callback_eradicate, Config.Java];
+  "fragment retains view", Config.fragment_retains_view,
+  [Procedure FragmentRetainsViewChecker.callback_fragment_retains_view, Config.Java];
+  "immutable cast", Config.immutable_cast,
+  [Procedure ImmutableChecker.callback_check_immutable_cast, Config.Java];
+  "printf args", Config.printf_args, [Procedure PrintfArgs.callback_printf_args, Config.Java];
+  "nullable suggestion", Config.suggest_nullable,
+  [Procedure NullabilitySuggest.checker, Config.Java];
+  "quandary", Config.quandary,
+  [Procedure JavaTaintAnalysis.checker, Config.Java;
+   Procedure ClangTaintAnalysis.checker, Config.Clang];
+  "repeated calls", Config.repeated_calls,
+  [Procedure RepeatedCallsChecker.callback_check_repeated_calls, Config.Java];
+  "resource leak", Config.resource_leak,
+  [Procedure ResourceLeaks.checker, Config.Java];
+  "SIOF", Config.siof, [Procedure Siof.checker, Config.Clang];
+  "thread safety", Config.threadsafety,
+  [Procedure ThreadSafety.analyze_procedure, Config.Clang;
+   Procedure ThreadSafety.analyze_procedure, Config.Java;
+   Cluster ThreadSafety.file_analysis, Config.Clang;
+   Cluster ThreadSafety.file_analysis, Config.Java];
+   "my new checker", true, [Procedure MyNewChecker.checker, Config.Clang]
+   ]
+>>>>>>> blzq/master
 
 let register () =
   let register_one (_, active, callbacks) =
