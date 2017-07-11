@@ -111,6 +111,18 @@ fb-setup:
 	$(QUIET)$(call silent_on_success,Facebook setup,\
 	$(MAKE) -C facebook setup)
 
+OCAMLFORMAT_EXE=facebook/dependencies/ocamlformat/src/_build/opt/ocamlformat.exe
+
+.PHONY: fmt
+fmt:
+	parallel $(OCAMLFORMAT_EXE) -i -- $$(git diff --name-only $$(git merge-base origin/master HEAD) | grep "\.mli\?$$")
+
+SRC_ML:=$(shell find * \( -name _build -or -name facebook-clang-plugins -or -path facebook/dependencies \) -not -prune -or -type f -and -name '*'.ml -or -name '*'.mli 2>/dev/null)
+
+.PHONY: fmt_all
+fmt_all:
+	parallel $(OCAMLFORMAT_EXE) -i -- $(SRC_ML)
+
 .PHONY: src_build
 src_build:
 	$(QUIET)$(call silent_on_success,Building native Infer,\
@@ -297,7 +309,7 @@ endif
 
 .PHONY: check_missing_mli
 check_missing_mli:
-	$(QUIET)for x in $$(find $(INFER_DIR)/src -name "*.ml" -or -name "*.re"); do \
+	$(QUIET)for x in $$(find $(INFER_DIR)/src -name "*.ml"); do \
 	    test -f "$$x"i || echo Missing "$$x"i; done
 
 .PHONY: toplevel
@@ -308,7 +320,7 @@ toplevel: clang_plugin
 inferScriptMode_test: test_build
 	$(QUIET)$(call silent_on_success,Testing infer OCaml REPL,\
 	INFER_REPL_BINARY=ocaml TOPLEVEL_DIR=$(BUILD_DIR)/test/infer $(SCRIPT_DIR)/infer_repl \
-	  $(INFER_DIR)/tests/repl/infer_batch_script.ml)
+	  $(INFER_DIR)/tests/repl/infer_batch_script.mltop)
 
 .PHONY: checkCopyright
 checkCopyright:
