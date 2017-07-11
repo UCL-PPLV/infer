@@ -37,6 +37,11 @@
       "index": "0"
     },
     {
+      "procedure": "__infer_sql_sink",
+      "kind": "SQL",
+      "index": "all"
+    },
+    {
       "procedure": "basics::Obj::method_sink",
       "kind": "Other",
       "index": "1"
@@ -56,5 +61,17 @@
       "kind": "Other",
       "index": "1"
     }
+  ],
+  "quandary-sanitizers": [
+    {
+      "procedure": "basics::Obj::sanitizer1"
+    },
+    {
+      "procedure": "basics::Obj::sanitizer2"
+    }
+  ],
+  "quandary-endpoints": [
+    "basics::Obj::endpoint",
+    "execs::Obj::endpoint"
   ]
 }

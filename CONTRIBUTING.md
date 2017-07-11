@@ -21,17 +21,11 @@ We welcome contributions via [pull requests on GitHub](https://github.com/facebo
 
 ### Development Dependencies
 
-You'll want to install a few more dependencies to comfortably hack on the infer codebase. Using
-opam:
+You'll want to install a few more dependencies to comfortably hack on the infer codebase. Simply
+run:
 ```sh
-opam install ocp-indent merlin tuareg
+make devsetup
 ```
-
-[Merlin](https://github.com/ocaml/merlin) provides OCaml and Reason support for several editors,
-including [Atom](https://atom.io/), [Emacs](https://www.gnu.org/software/emacs/), and
-[Vim](http://www.vim.org/).
-
-Run `opam user-setup install` to set up your terminal and editors to use this tooling.
 
 ### Tips and Tricks
 
@@ -71,32 +65,47 @@ us a line at cla@fb.com. Thanks!
 
 ### OCaml
 
-- Follow the ocp-indent style in infer/.ocpindent for indentation.
-
-- Spaces around binary operators, e.g., `let x = a + 5`.
-
-- Spaces around parentheses, no space inside parentheses.
-
-- Spaces around braces and brackets, spaces inside braces and brackets.
-
-- Space after `,` and `;`, e.g. `let (a, b) = ({ foo = 4; }, ())`.
-
-- Terminate multi-line values such as lists and records with `;` so that it's easy to add new lines
-  without modifying existing ones. For instance:
-```OCaml
-let foo = [
-  value1;
-  value2;
-]
+- The module IStd (infer/src/base/IStd.ml) is automatically opened in every file. Beware that this
+  can cause weird errors such as:
+```
+$ pwd
+/somewhere/infer/infer/src
+$ cat base/toto.ml
+let b = List.mem true [true; false]
+$ make
+[...]
+File "base/toto.ml", line 1, characters 17-21:
+Error: This variant expression is expected to have type 'a list
+       The constructor true does not belong to type list
 ```
 
-- All modules open `IStd`, using `open! IStd`. In particular this also opens `Core.Std`. Do not add
-  anything to `IStd`; if you find some utility function is missing (and not provided by
-  [`Core`](https://ocaml.janestreet.com/ocaml-core/latest/doc/core/)), add it to `Utils`.
+  If your new module cannot compile with `IStd`, for instance because it's generated code, modify
+  the line in infer/src/Makefile that adds `-open IStd` so that your module is excluded (see how
+  it's done for other such modules, eg IStd.ml).
+
+- All modules open `IStd` using `open! IStd`. This is to make that fact more explicit (there's also
+  the compilation flag mentioned above), and also it helps merlin find the right types. In
+  particular this also opens `Core.Std`.
+
+- Do not add anything to `IStd` unless you have a compelling reason to do so, for instance if you
+  find some utility function is missing and is not provided by
+  [`Core`](https://ocaml.janestreet.com/ocaml-core/latest/doc/core/).
 
 - Polymorphic equality is disabled; use type-specific equality instead, even for primitive types
-  (e.g., `Int.equal`). However, if your module uses a lot of polymorphic variants you may
-  `open! PVariant`.
+  (e.g., `Int.equal`). However, if your module uses a lot of polymorphic variants with no arguments
+  you may safely `open! PVariant`.
+
+  If you try and use polymorphic equality `=` in your code you will get a compilation error, such as:
+```
+Error: This expression has type int but an expression was expected of type
+         [ `no_polymorphic_compare ]
+```
+
+- Alias and use `module L = Logging` for all your logging needs. Refer to its API in Logging.mli for
+  documentation.
+
+- Check that your code compiles without warnings with `make -j test_build` (this also runs as part
+  of `make test`).
 
 - Apart from `IStd` and `PVariant`, refrain from globally `open`ing modules. Using local open
   instead when it improves readability: `let open MyModule in ...`.
@@ -129,11 +138,7 @@ module MF = MarkupFormatter
 
 - Use the `_hum` suffix to flag functions that output human-readable strings.
 
-- Check that your code compiles without warnings with `make -j test_build`.
-
-### Reason
-
-Follow `refmt`.
+- Format code with ocamlformat.
 
 ### C/C++/Objective-C
 
@@ -186,3 +191,14 @@ Follow `clang-format` (see ".clang-format" at the root of the repository).
 $ infer --debug -- clang -c examples/hello.c
 $ firefox infer-out/captured/hello.c.*.html
 ```
+
+## Updating opam and opam.lock
+
+tl; dr: Run `make opam.lock`.
+
+opam.lock records fixed versions of the opam dependencies known to work with infer and to respect
+the constraints in opam. This prevents unpredictable breakages of infer or its dependencies,
+especially for infer releases, for which it is more difficult to change their package constraints
+after the fact.
+
+To add an opam package or update its version constraints, edit 'opam' then run `make opam.lock`.

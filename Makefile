@@ -31,11 +31,11 @@ BUILD_SYSTEMS_TESTS += \
   waf \
 
 DIRECT_TESTS += \
-  c_bufferoverrun c_errors c_frontend \
-  cpp_bufferoverrun cpp_errors cpp_frontend cpp_quandary cpp_siof \
+  c_biabduction c_bufferoverrun c_errors c_frontend \
+  cpp_bufferoverrun cpp_errors cpp_frontend cpp_quandary cpp_siof cpp_threadsafety \
 
 ifneq ($(BUCK),no)
-BUILD_SYSTEMS_TESTS += buck-clang-db
+BUILD_SYSTEMS_TESTS += buck-clang-db buck_flavors buck_flavors_deterministic
 endif
 ifneq ($(CMAKE),no)
 BUILD_SYSTEMS_TESTS += clang_compilation_db cmake inferconfig
@@ -49,7 +49,9 @@ endif
 ifneq ($(XCODE_SELECT),no)
 BUILD_SYSTEMS_TESTS += xcodebuild_no_xcpretty
 DIRECT_TESTS += \
-  objc_frontend objc_errors objc_linters objc_ioslints objcpp_frontend objcpp_linters objc_linters-for-test-only
+  objc_frontend objc_errors objc_linters objc_ioslints \
+	objcpp_frontend objcpp_linters objc_linters-for-test-only \
+	objc_linters-def-folder
 ifneq ($(XCPRETTY),no)
 BUILD_SYSTEMS_TESTS += xcodebuild
 endif
@@ -58,6 +60,7 @@ endif # BUILD_C_ANALYZERS
 
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 BUILD_SYSTEMS_TESTS += \
+	differential_interesting_paths_filter \
   differential_resolve_infer_eradicate_conflict \
   differential_skip_anonymous_class_renamings \
   differential_skip_duplicated_types_on_filenames \
@@ -107,6 +110,18 @@ endif
 fb-setup:
 	$(QUIET)$(call silent_on_success,Facebook setup,\
 	$(MAKE) -C facebook setup)
+
+OCAMLFORMAT_EXE=facebook/dependencies/ocamlformat/src/_build/opt/ocamlformat.exe
+
+.PHONY: fmt
+fmt:
+	parallel $(OCAMLFORMAT_EXE) -i -- $$(git diff --name-only $$(git merge-base origin/master HEAD) | grep "\.mli\?$$")
+
+SRC_ML:=$(shell find * \( -name _build -or -name facebook-clang-plugins -or -path facebook/dependencies \) -not -prune -or -type f -and -name '*'.ml -or -name '*'.mli 2>/dev/null)
+
+.PHONY: fmt_all
+fmt_all:
+	parallel $(OCAMLFORMAT_EXE) -i -- $(SRC_ML)
 
 .PHONY: src_build
 src_build:
@@ -294,7 +309,7 @@ endif
 
 .PHONY: check_missing_mli
 check_missing_mli:
-	$(QUIET)for x in $$(find $(INFER_DIR)/src -name "*.ml" -or -name "*.re"); do \
+	$(QUIET)for x in $$(find $(INFER_DIR)/src -name "*.ml"); do \
 	    test -f "$$x"i || echo Missing "$$x"i; done
 
 .PHONY: toplevel
@@ -305,7 +320,7 @@ toplevel: clang_plugin
 inferScriptMode_test: test_build
 	$(QUIET)$(call silent_on_success,Testing infer OCaml REPL,\
 	INFER_REPL_BINARY=ocaml TOPLEVEL_DIR=$(BUILD_DIR)/test/infer $(SCRIPT_DIR)/infer_repl \
-	  $(INFER_DIR)/tests/repl/infer_batch_script.ml)
+	  $(INFER_DIR)/tests/repl/infer_batch_script.mltop)
 
 .PHONY: checkCopyright
 checkCopyright:
@@ -515,6 +530,79 @@ conf-clean: clean
 	$(REMOVE_DIR) $(MODELS_DIR)/cpp/out/
 	$(REMOVE_DIR) $(MODELS_DIR)/java/infer-out/
 	$(REMOVE_DIR) $(MODELS_DIR)/objc/out/
+
+
+# opam package to hold infer dependencies
+INFER_PKG_OPAMLOCK=infer-lock-deps
+
+# phony because it depends on opam's internal state
+.PHONY: opam.lock
+opam.lock: opam
+	$(QUIET)if test x"$$(git status --porcelain -- opam)" != "x"; then \
+	  echo "ERROR: Changes to 'opam' detected." 1>&2; \
+	  echo "ERROR: Please commit or revert your changes before updating opam.lock." 1>&2; \
+	  echo "ERROR: This is because opam.lock is generated from the HEAD commit." 1>&2; \
+	  exit 1; \
+	fi
+	$(QUIET)$(call silent_on_success,opam update,$(OPAM) update)
+	$(QUIET)$(call silent_on_success,installing dependencies $(INFER_PKG_OPAMLOCK) opam package,\
+	  OPAMSWITCH=$(OPAMSWITCH); \
+	  $(OPAM) pin add --yes --no-action -k git $(INFER_PKG_OPAMLOCK) .#HEAD; \
+	  $(OPAM) install --deps-only --yes $(INFER_PKG_OPAMLOCK))
+	$(QUIET)$(call silent_on_success,generating opam.lock,\
+	  $(OPAM) lock --pkg  $(INFER_PKG_OPAMLOCK) > opam.lock)
+
+OPAM_DEV_DEPS = ocp-indent merlin tuareg
+
+.PHONY: devsetup
+devsetup: Makefile.autoconf
+	$(QUIET)[ $(OPAM) != "no" ] || (echo 'No `opam` found, aborting setup.' >&2; exit 1)
+	$(QUIET)$(call silent_on_success,installing $(OPAM_DEV_DEPS),\
+	  OPAMSWITCH=$(OPAMSWITCH); $(OPAM) install --yes --no-checksum user-setup $(OPAM_DEV_DEPS))
+	$(QUIET)echo '$(TERM_INFO)*** Running `opam config setup -a`$(TERM_RESET)' >&2
+	$(QUIET)OPAMSWITCH=$(OPAMSWITCH); $(OPAM) config --yes setup -a
+	$(QUIET)echo '$(TERM_INFO)*** Running `opam user-setup`$(TERM_RESET)' >&2
+	$(QUIET)OPAMSWITCH=$(OPAMSWITCH); OPAMYES=1; $(OPAM) user-setup install
+# 	expand all occurrences of "~" in PATH and MANPATH
+	$(QUIET)infer_repo_is_in_path=$$(echo $${PATH//\~/$$HOME} | grep -q "$(ABSOLUTE_ROOT_DIR)"/infer/bin; echo $$?); \
+	infer_repo_is_in_manpath=$$(echo $${MANPATH//\~/$$HOME} | grep -q "$(ABSOLUTE_ROOT_DIR)"/infer/man; echo $$?); \
+	if [ "$$infer_repo_is_in_path" != "0" ] || [ "$$infer_repo_is_in_manpath" != "0" ]; then \
+	  shell_config_file="<could not auto-detect, please fill in yourself>"; \
+	  if [ $$(basename "$(ORIG_SHELL)") = "bash" ]; then \
+	    if [ "$(PLATFORM)" = "Linux" ]; then \
+	      shell_config_file="$$HOME"/.bashrc; \
+	    else \
+	      shell_config_file="$$HOME"/.bash_profile; \
+	    fi; \
+	  elif [ $$(basename "$(ORIG_SHELL)") = "zsh" ]; then \
+	    shell_config_file="$$HOME"/.zshrc; \
+	  fi; \
+	  echo >&2; \
+	  echo '$(TERM_INFO)*** NOTE: `infer` is not in your PATH or MANPATH. If you are hacking on infer, you may$(TERM_RESET)' >&2; \
+	  echo '$(TERM_INFO)*** NOTE: want to make infer executables and manuals available in your terminal. Type$(TERM_RESET)' >&2; \
+	  echo '$(TERM_INFO)*** NOTE: the following commands to configure the current terminal and record the$(TERM_RESET)' >&2; \
+	  printf '$(TERM_INFO)*** NOTE: changes in your shell configuration file (%s):$(TERM_RESET)\n' "$$shell_config_file">&2; \
+	  echo >&2; \
+	  if [ "$$infer_repo_is_in_path" != "0" ]; then \
+	    printf '$(TERM_INFO)  export PATH="%s/infer/bin":$$PATH$(TERM_RESET)\n' "$(ABSOLUTE_ROOT_DIR)" >&2; \
+	  fi; \
+	  if [ "$$infer_repo_is_in_manpath" != "0" ]; then \
+	    printf '$(TERM_INFO)  export MANPATH="%s/infer/man":$$MANPATH$(TERM_RESET)\n' "$(ABSOLUTE_ROOT_DIR)" >&2; \
+	  fi; \
+	  if [ "$$infer_repo_is_in_path" != "0" ]; then \
+	    printf "$(TERM_INFO)  echo 'export PATH=\"%s/infer/bin\":\$$PATH' >> \"$$shell_config_file\"$(TERM_RESET)\n" "$(ABSOLUTE_ROOT_DIR)" >&2; \
+	  fi; \
+	  if [ "$$infer_repo_is_in_manpath" != "0" ]; then \
+	    printf "$(TERM_INFO)  echo 'export MANPATH=\"%s/infer/man\":\$$MANPATH' >> \"$$shell_config_file\"$(TERM_RESET)\n" "$(ABSOLUTE_ROOT_DIR)" >&2; \
+	  fi; \
+	fi
+	$(QUIET)PATH=$(ORIG_SHELL_PATH); if [ "$$(ocamlc -where 2>/dev/null)" != "$$($(OCAMLC) -where)" ]; then \
+	  echo >&2; \
+	  echo '$(TERM_INFO)*** NOTE: The current shell is not set up for the right opam switch.$(TERM_RESET)' >&2; \
+	  echo '$(TERM_INFO)*** NOTE: Please run:$(TERM_RESET)' >&2; \
+	  echo >&2; \
+	  echo '$(TERM_INFO)  eval $$(opam config env)$(TERM_RESET)' >&2; \
+	fi
 
 # print any variable for Makefile debugging
 print-%:

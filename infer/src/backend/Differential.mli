@@ -7,11 +7,9 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
 
-type t = {
-  introduced : Jsonbug_t.report;
-  fixed : Jsonbug_t.report;
-  preexisting : Jsonbug_t.report;
-}
+open! IStd
+
+type t = {introduced: Jsonbug_t.report; fixed: Jsonbug_t.report; preexisting: Jsonbug_t.report}
 
 val of_reports : current_report:Jsonbug_t.report -> previous_report:Jsonbug_t.report -> t
 

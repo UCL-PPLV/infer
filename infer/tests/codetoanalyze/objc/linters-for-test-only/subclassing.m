@@ -62,6 +62,12 @@
 @implementation F
 @end
 
+@interface ThisIsAVeryLongName : NSObject
+@end
+
+@implementation ThisIsAVeryLongName
+@end
+
 @interface TestType : NSObject
 
 - (void)m1;
@@ -92,5 +98,26 @@
 //- (SEL) m27;
 - (float*)m23;
 - (unsigned int**)m24;
-
+- (A*)m25;
+- (ThisIsAVeryLongName*)m26;
+- (void)m26:(int)p1
+     pname2:(float)p2
+     pname3:(ThisIsAVeryLongName*)p3
+     pname4:(A*)p4;
 @end
+
+typedef unsigned long my_ulong;
+
+my_ulong l;
+
+typedef struct {
+  int a;
+  int b;
+  int c;
+} S, *my_pS;
+
+my_pS p;
+
+typedef struct Node { struct my_listNode* next; } my_listNode;
+
+my_listNode ln;

@@ -51,6 +51,14 @@ LOG_FILE = 'toplevel.log'
 
 BUCK_INFER_OUT = 'infer'
 
+BUCK_OUT = 'buck-out'
+
+TRASH = '.trash'
+
+BUCK_OUT_TRASH = os.path.join(BUCK_OUT, TRASH)
+
+BUCK_OUT_GEN = os.path.join(BUCK_OUT, 'gen')
+
 
 # list of possible analyzers
 ANALYZER_INFER = 'infer'
@@ -58,12 +66,8 @@ ANALYZER_ERADICATE = 'eradicate'
 ANALYZER_CHECKERS = 'checkers'
 ANALYZER_CAPTURE = 'capture'
 ANALYZER_COMPILE = 'compile'
-ANALYZER_TRACING = 'tracing'
 ANALYZER_CRASHCONTEXT = 'crashcontext'
 ANALYZER_LINTERS = 'linters'
-ANALYZER_QUANDARY = 'quandary'
-ANALYZER_THREADSAFETY = 'threadsafety'
-ANALYZER_PERMSAFETY='permsafety'
 
 ANALYZERS = [
     ANALYZER_CAPTURE,
@@ -73,8 +77,4 @@ ANALYZERS = [
     ANALYZER_ERADICATE,
     ANALYZER_INFER,
     ANALYZER_LINTERS,
-    ANALYZER_TRACING,
-    ANALYZER_QUANDARY,
-    ANALYZER_THREADSAFETY,
-    ANALYZER_PERMSAFETY
 ]

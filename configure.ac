@@ -18,7 +18,7 @@ AC_INIT([Infer],
         [0.12.0],
         [https://github.com/facebook/infer/issues/])
 
-AC_CONFIG_SRCDIR([infer/src/IR/Sil.re])
+AC_CONFIG_SRCDIR([infer/src/base/IStd.ml])
 
 # WARNING: keep in sync with above
 INFER_MAJOR=0
@@ -128,6 +128,9 @@ AC_PROG_MKDIR_P
 if test "x$enable_c_analyzers" = "xyes"; then
   AC_PROG_CPP
   AC_PROG_CXX(clang++ g++)
+  # AC_PROG_CXX doesn't set CXX to "no" in case of failure (I have no words...); from the manual:
+  # "If none of those checks succeed, then as a last resort set CXX to g++. "
+  AS_IF([command -v "$CXX" > /dev/null], [], [AC_MSG_ERROR([no C++ compiler found])])
 
   dnl clang wants either clang version >= 3.1 or gcc version >= 4.7.2 to
   dnl compile itself
@@ -170,28 +173,33 @@ fi
 AC_PROG_OCAML
 AC_ASSERT_PROG([ocamlc], [$OCAMLC])
 # check the version of OCaml
-AC_ASSERT_OCAML_MIN_VERSION([4.04.0])
+AC_ASSERT_OCAML_MIN_VERSION([4.04.2])
 AC_ASSERT_PROG([ocamlopt], [$OCAMLOPT])
+AC_PATH_TOOL([OCAMLBUILD], [ocamlbuild], [no])
 AC_ASSERT_PROG([ocamlbuild], [$OCAMLBUILD])
 AC_PROG_FINDLIB
 AC_PROG_OCAMLLEX
 AC_ASSERT_PROG([ocamllex], [$OCAMLLEX])
 AC_PATH_TOOL([MENHIR], [menhir], [no])
 AC_ASSERT_PROG([menhir], [$MENHIR])
-AC_ASSERT_OCAML_PKG([atdgen], [], [1.6.0])
+AC_ASSERT_OCAML_PKG([atdgen], [], [])
 AC_ASSERT_OCAML_PKG([biniou])
 AC_ASSERT_OCAML_PKG([camlzip], [zip])
 AC_ASSERT_OCAML_PKG([easy-format])
 AC_ASSERT_OCAML_PKG([oUnit], [], [2.0.0])
-AC_ASSERT_OCAML_PKG([reason])
 AC_ASSERT_OCAML_PKG([yojson])
-# check for rebuild after checking for Reason since `rebuild` is normally provided by Reason. This
-# way if Reason is missing we get a more helpful error message and not "rebuild not found".
-AC_PATH_TOOL([REBUILD], [rebuild], [no])
-AC_ASSERT_PROG([rebuild], [$REBUILD])
 
 AC_ARG_VAR([CAML_LD_LIBRARY_PATH],
   [Additional directories to search for dynamically-loaded libraries.])
+
+
+AC_CHECK_TOOL([OPAM], [opam], [no])
+AS_IF([test "$OPAM" != "no"], [
+  AC_MSG_CHECKING([current opam switch])
+  OPAMSWITCH=$("$OPAM" switch show)
+  AC_MSG_RESULT([$OPAMSWITCH])
+], [OPAMSWITCH=no])
+AC_SUBST([OPAMSWITCH])
 
 if test "x$enable_java_analyzers" = "xyes"; then
   AC_CHECK_TOOL([JAVA], [java], [no])
@@ -226,8 +234,11 @@ _ACEOF
   fi
   AC_MSG_RESULT([$USER_JAVA_HOME])
   AC_SUBST([USER_JAVA_HOME])
-fi
 
+  AC_CHECK_LIB([z], [inflateEnd], [ZLIB_FOUND=yes], [ZLIB_FOUND=no])
+  AS_IF([test x"$ZLIB_FOUND" = xno], [AC_MSG_ERROR([zlib not found.])])
+fi
+# end if($enable_java_analyzers)
 
 AC_PATH_TOOL([ATDGEN], [atdgen], [no])
 AC_ASSERT_PROG([atdgen], [$ATDGEN])

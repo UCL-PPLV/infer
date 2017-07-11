@@ -8,6 +8,8 @@
  *)
 
 {
+  open! IStd
+
   open Lexing
   open Ctl_parser
 
@@ -34,11 +36,11 @@ rule token = parse
   | "HOLDS-UNTIL" { EU }
   | "HOLDS-EVERYWHERE-UNTIL" { AU }
   | "HOLDS-EVENTUALLY" { EF }
-  | "HOLDS-EVENTUALLY-EVERYWHERE" { AF }
+  | "HOLDS-EVERYWHERE-EVENTUALLY" { AF }
   | "HOLDS-NEXT" { EX }
   | "HOLDS-EVERYWHERE-NEXT" { AX }
-  | "ALWAYS-HOLDS" { EG }
-  | "ALSWAYS-HOLDS-EVERYWHERE" { AG }
+  | "HOLDS-ALWAYS" { EG }
+  | "HOLDS-EVERYWHERE-ALWAYS" { AG }
   | "HOLDS-IN-SOME-SUPERCLASS-OF" { EH }
   | "IN-NODE" { ET }
   | "IN-EXCLUSIVE-NODE" { ETX }
@@ -47,11 +49,14 @@ rule token = parse
   | "WITH-TRANSITION" {WITH_TRANSITION}
   | "DEFINE-CHECKER" { DEFINE_CHECKER }
   | "GLOBAL-MACROS" { GLOBAL_MACROS }
+  | "GLOBAL-PATHS" { GLOBAL_PATHS }
   | "#IMPORT" { HASHIMPORT }
   | "SET" { SET }
   | "LET" { LET }
   | "TRUE" { TRUE }
   | "FALSE" { FALSE }
+  | "whitelist_path" { WHITELIST_PATH }
+  | "blacklist_path" { BLACKLIST_PATH }
   | "{" { LEFT_BRACE }
   | "}" { RIGHT_BRACE }
   | "(" { LEFT_PAREN }

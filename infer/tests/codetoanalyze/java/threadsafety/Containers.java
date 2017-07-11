@@ -21,6 +21,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import javax.annotation.concurrent.ThreadSafe;
 
 import android.support.v4.util.Pools.SynchronizedPool;
+import android.support.v4.util.SparseArrayCompat;
+import android.util.SparseArray;
+import android.support.v4.util.SimpleArrayMap;
+import android.support.v4.util.Pools;
+import android.support.v4.util.Pools.SimplePool;
 
 class ContainerWrapper {
   private final List<Object> children = new ArrayList<Object>();
@@ -171,7 +176,7 @@ class Containers {
 
   static boolean sUsePooling;
 
-  private Obj poolWrapper() {
+  private Obj poolWrapper1() {
     Obj obj = sUsePooling ? sPool.acquire() : null;
     if (obj == null) {
       obj = new Obj();
@@ -180,8 +185,28 @@ class Containers {
     return obj;
   }
 
-  void poolWrapperOk() {
-    Obj obj = poolWrapper();
+  void poolWrapperOk1() {
+    Obj obj = poolWrapper1();
+    obj.f = new Object();
+  }
+
+  private Pools.Pool<Obj> mPool;
+  private boolean mIsSync;
+
+  private Obj poolWrapper2() {
+    Obj item;
+    if (mIsSync) {
+      synchronized (this) {
+        item = mPool.acquire();
+      }
+    } else {
+      item = mPool.acquire();
+    }
+    return item;
+  }
+
+  void poolWrapperOk2() {
+    Obj obj = poolWrapper2();
     obj.f = new Object();
   }
 
@@ -214,6 +239,52 @@ class Containers {
   public void addToNullListOk() {
     List list = null;
     addOrCreateList(list);
+  }
+
+  void addToSparseArrayCompatOk() {
+    SparseArrayCompat sparseArray = new SparseArrayCompat();
+    sparseArray.put(0, new Object());
+  }
+
+  public void addToSparseArrayCompatBad(SparseArrayCompat sparseArray) {
+    sparseArray.put(0, new Object());
+  }
+
+  public void addToSparseArrayOk() {
+    SparseArray sparseArray = new SparseArray();
+    sparseArray.put(0, new Object());
+  }
+
+  public void addToSparseArrayBad(SparseArray sparseArray) {
+    sparseArray.put(0, new Object());
+  }
+
+  SimpleArrayMap<Integer, Integer> si_map = new SimpleArrayMap<Integer, Integer>();
+
+  synchronized public void addToSimpleArrayMapOk() {
+    si_map.put(1,1);
+  }
+
+  public void addToSimpleArrayMapBad(SimpleArrayMap<Integer, Integer> map) {
+    map.put(1,1);
+  }
+
+  // this should be a read/write race with addToSimpleArrayMapOk
+  public int FN_readSimpleArrayMap() {
+    return si_map.get(1);
+  }
+
+  SimplePool<Integer> simplePool = new SimplePool<Integer>(10);
+  synchronized public Integer getFromPoolOK() {
+    return simplePool.acquire();
+  }
+
+  public void poolBad() {
+    Integer a;
+    synchronized(this) {
+      a = simplePool.acquire();
+    }
+    simplePool.release(a);
   }
 
 }

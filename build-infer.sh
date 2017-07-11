@@ -16,7 +16,7 @@ INFER_ROOT="$SCRIPT_DIR"
 INFER_DEPS_DIR="$INFER_ROOT/dependencies/infer-deps"
 PLATFORM="$(uname)"
 NCPU="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
-OCAML_VERSION="4.04.0"
+OCAML_VERSION="4.04.2"
 OPAM_LOCK_URL=${OPAM_LOCK_URL:-"https://github.com/rgrinberg/opam-lock"}
 
 INFER_OPAM_SWITCH_DEFAULT=infer-"$OCAML_VERSION"
@@ -31,9 +31,9 @@ function usage() {
   echo
   echo " options:"
   echo "   -h,--help             show this message"
-  echo "   --only-install-opam   install the opam dependencies of infer and exists"
-  echo "   --opam-switch         specify the opam switch where to install infer (default: $INFER_OPAM_SWITCH_DEFAULT)"
   echo "   --no-opam-lock        do not use the opam.lock file and let opam resolve dependencies"
+  echo "   --only-setup-opam     initialize opam, install the opam dependencies of infer, and exit"
+  echo "   --opam-switch         specify the opam switch where to install infer (default: $INFER_OPAM_SWITCH_DEFAULT)"
   echo "   -y,--yes              automatically agree to everything"
   echo
   echo " examples:"
@@ -120,14 +120,28 @@ export OPAMYES=1
 check_installed () {
   local cmd=$1
   if ! which $cmd >/dev/null 2>&1; then
-    echo "dependency not found: $cmd"
+    echo "dependency not found: $cmd" >&2
     exit 1
   fi
 }
 
+opam_retry () {
+  "$@" || ( \
+    echo >&2; \
+    printf '*** `%s` failed\n' "$*" >&2; \
+    echo '*** Updating opam then retrying' >&2; \
+    opam update && \
+    "$@" || ( \
+      echo >&2; \
+      printf '*** ERROR: `%s` failed\n' "$*" >&2; \
+      exit 1 \
+    ) \
+  ) \
+}
+
 setup_opam () {
-    opam init --compiler=$OCAML_VERSION -j $NCPU --no-setup --yes
-    opam switch set -j $NCPU $INFER_OPAM_SWITCH --alias-of $OCAML_VERSION
+    opam_retry opam init --compiler=$OCAML_VERSION -j $NCPU --no-setup
+    opam_retry opam switch set -j $NCPU $INFER_OPAM_SWITCH --alias-of $OCAML_VERSION
 }
 
 # Install and record the infer dependencies in opam. The main trick is to install the
@@ -141,7 +155,7 @@ install_infer-deps () {
     cp -a "$INFER_DEPS_DIR"/* "$INFER_TMP_DEPS_DIR"
     # give unique name to the package to force opam to recheck the dependencies are all installed
     opam pin add --no-action "$INFER_TMP_PACKAGE_NAME" "$INFER_TMP_DEPS_DIR"
-    opam install -j $NCPU --deps-only "$INFER_TMP_PACKAGE_NAME"
+    opam opam install -j $NCPU --deps-only "$INFER_TMP_PACKAGE_NAME"
     opam pin remove "$INFER_TMP_PACKAGE_NAME"
     rm -fr "$INFER_TMP_DEPS_DIR"
     # pin infer so that opam doesn't violate its package constraints when the user does
@@ -151,7 +165,7 @@ install_infer-deps () {
 
 install_locked_deps() {
     if ! opam lock 2> /dev/null; then
-        echo "opam-lock not found in the current switch, installing from '$OPAM_LOCK_URL'..."
+        echo "opam-lock not found in the current switch, installing from '$OPAM_LOCK_URL'..." >&2
         opam pin add -k git lock "$OPAM_LOCK_URL"
     fi
     opam lock --install < "$INFER_ROOT"/opam.lock
@@ -166,30 +180,19 @@ install_opam_deps() {
 }
 
 
-echo "initializing opam... "
+echo "initializing opam... " >&2
 check_installed opam
-if [ "$INFER_OPAM_SWITCH" = "$INFER_OPAM_SWITCH_DEFAULT" ]; then
-    # set up the custom infer switch
-    setup_opam
-else
-    opam switch set -j $NCPU $INFER_OPAM_SWITCH
-fi
+setup_opam
 eval $(SHELL=bash opam config env --switch=$INFER_OPAM_SWITCH)
-echo
-echo "installing infer dependencies; this can take up to 30 minutes... "
-install_opam_deps || ( \
-  echo; \
-  echo '*** Failed to install opam dependencies'; \
-  echo '*** Updating opam then retrying'; \
-  opam update && \
-  install_opam_deps \
-)
+echo >&2
+echo "installing infer dependencies; this can take up to 30 minutes... " >&2
+opam_retry install_opam_deps
 
 if [ "$ONLY_SETUP_OPAM" = "yes" ]; then
   exit 0
 fi
 
-echo "preparing build... "
+echo "preparing build... " >&2
 if [ ! -f .release ]; then
   if [ "$BUILD_CLANG" = "no" ]; then
     SKIP_SUBMODULES=true ./autogen.sh > /dev/null
@@ -239,10 +242,16 @@ if [ "$BUILD_CLANG" = "yes" ] && ! facebook-clang-plugins/clang/setup.sh --only-
 fi
 
 make -j $NCPU all || (
-  echo
-  echo '  compilation failure; you can try running'
-  echo
-  echo '    make clean'
-  echo "    $0 $ORIG_ARGS"
-  echo
+  echo >&2
+  echo '  compilation failure; you can try running' >&2
+  echo >&2
+  echo '    make clean' >&2
+  echo "    $0 $ORIG_ARGS" >&2
+  echo >&2
   exit 1)
+
+echo
+echo "*** Success! Infer is now built in '$SCRIPT_PATH/infer/bin/'."
+echo '*** Install infer on your system with `make install`.'
+echo
+echo '*** If you plan to hack on infer, check out CONTRIBUTING.md to setup your dev environment.'

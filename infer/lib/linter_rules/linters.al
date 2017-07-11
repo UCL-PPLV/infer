@@ -18,7 +18,7 @@ DEFINE-CHECKER DIRECT_ATOMIC_PROPERTY_ACCESS = {
 		HOLDS-IN-NODE ObjCIvarRefExpr;
 
   	SET message = "Direct access to ivar %ivar_name% of an atomic property";
-  	SET suggestion = "Accessing an ivar of an atomic property makes the property nonatomic";
+  	SET suggestion = "Accessing an ivar of an atomic property makes the property nonatomic.";
 	  SET severity = "WARNING";
 };
 
@@ -149,7 +149,7 @@ DEFINE-CHECKER STRONG_DELEGATE_WARNING = {
 			HOLDS-IN-NODE ObjCPropertyDecl;
 
   SET message = "Property or ivar %decl_name% declared strong";
-  SET suggestion = "In general delegates should be declared weak or assign";
+  SET suggestion = "In general delegates should be declared weak or assign.";
 
 };
 
@@ -218,7 +218,29 @@ DEFINE-CHECKER CXX_REFERENCE_CAPTURED_IN_OBJC_BLOCK = {
 		  SET message =
 		        "%decl_ref_or_selector_name% is not available in the required iOS SDK version
 		         %iphoneos_target_sdk_version% (only available from version %available_ios_sdk%)";
-
+      SET name = "Unavailable API In Supported iOS SDK";
 		  SET suggestion = "This could cause a crash.";
 			SET severity = "ERROR";
 		};
+
+	DEFINE-CHECKER UNAVAILABLE_CLASS_IN_SUPPORTED_IOS_SDK = {
+		SET report_when =
+				 WHEN (class_unavailable_in_supported_ios_sdk())
+				 HOLDS-IN-NODE ObjCMessageExpr;
+
+			SET message =
+						"The receiver %receiver_method_call% of %name% is not available in the required iOS SDK version
+						 %iphoneos_target_sdk_version% (only available from version %class_available_ios_sdk%)";
+			SET name = "Unavailable API In Supported iOS SDK";
+			SET severity = "ERROR";
+			SET mode = "OFF";
+		};
+
+
+DEFINE-CHECKER POINTER_TO_INTEGRAL_IMPLICIT_CAST = {
+  SET report_when =
+      WHEN has_cast_kind("PointerToIntegral")
+      HOLDS-IN-NODE ImplicitCastExpr;
+  SET message = "Implicit conversion from %child_type% to %type% in usage of %name%";
+	SET doc_url = "https://clang.llvm.org/docs/DiagnosticsReference.html#wint-conversion";
+};

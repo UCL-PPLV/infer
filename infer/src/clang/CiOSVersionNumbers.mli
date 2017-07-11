@@ -7,11 +7,15 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
 
+open! IStd
+
 type machine_readable_version = float
+
 type human_readable_version = string
+
 type t = machine_readable_version * human_readable_version
 
 val version_of : string -> human_readable_version option
 
-val pp_diff_of_version_opt : Format.formatter ->
-  (human_readable_version option * human_readable_version option) -> unit
+val pp_diff_of_version_opt :
+  Format.formatter -> human_readable_version option * human_readable_version option -> unit

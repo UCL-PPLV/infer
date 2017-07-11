@@ -5,8 +5,34 @@ GLOBAL-MACROS {
   LET global_is_subclass_of(x) =
         is_class(x) HOLDS-IN-SOME-SUPERCLASS-OF  ObjCInterfaceDecl;
 
-};
+  LET parameter_of_type(x) =
+        WHEN
+          has_type(x)
+        HOLDS-IN-NODE ParmVarDecl;
 
+  LET method_has_a_parameter_with_type(x) =
+        WHEN
+          HOLDS-NEXT WITH-TRANSITION Parameters
+                (has_type(x))
+        HOLDS-IN-NODE ObjCMethodDecl;
+
+  LET method_has_at_least_a_parameter =
+      WHEN
+         HOLDS-NEXT WITH-TRANSITION Parameters
+               (TRUE)
+       HOLDS-IN-NODE ObjCMethodDecl;
+
+   LET method_has_all_parameter_with_type(x) =
+        WHEN
+          HOLDS-EVERYWHERE-NEXT WITH-TRANSITION Parameters
+           (has_type(x))
+        HOLDS-IN-NODE ObjCMethodDecl;
+ };
+
+
+ GLOBAL-PATHS {
+ 	LET filtered_files = {REGEXP("codetoanalyze/objc/linters-for-test-only/filter_by_path/.*") };
+ };
 
 //Check that class A is not subclassed.
 DEFINE-CHECKER SUBCLASSING_TEST_EXAMPLE = {
@@ -126,6 +152,8 @@ DEFINE-CHECKER TEST_BUILTIN_TYPE = {
           OR method_return_type("SEL")
           OR method_return_type("float *")
           OR method_return_type("unsigned int **")
+          OR method_return_type("A*")
+          OR method_return_type("REGEXP('This.+')*" )
         HOLDS-IN-NODE ObjCMethodDecl;
 
   SET message = "Method return.....";
@@ -140,7 +168,7 @@ DEFINE-CHECKER TEST_IMPLICIT_CAST_CHECK = {
             has_type("int") AND has_type_long_expr
 	    HOLDS-IN-NODE ImplicitCastExpr;
 
-  SET message = "An implicit case from long to int can cause a crash";
+  SET message = "An implicit cast from long to int can cause a crash";
 };
 
 DEFINE-CHECKER TEST_VAR_TYPE_CHECK = {
@@ -150,4 +178,163 @@ DEFINE-CHECKER TEST_VAR_TYPE_CHECK = {
 	    HOLDS-IN-NODE VarDecl;
 
   SET message = "Var has type int or long";
+};
+
+DEFINE-CHECKER TEST_TYPEDEF_CHECK = {
+
+  SET report_when =
+        WHEN
+        has_type("my_ulong") OR
+        has_type("my_pS") OR
+        has_type("my_listNode")
+	    HOLDS-IN-NODE VarDecl;
+
+  SET message = "Var has type....";
+};
+
+DEFINE-CHECKER TEST_PARAM_TYPE_CHECK = {
+
+  SET report_when =
+           method_has_a_parameter_with_type("REGEXP('This.+')*" );
+
+  SET message = "Found a method with a parameter of type....";
+
+};
+
+DEFINE-CHECKER TEST_PARAM_TYPE_CHECK2 = {
+
+  SET report_when = method_has_at_least_a_parameter AND
+                    method_has_all_parameter_with_type("int");
+
+  SET message = "Found a method with a parameter of type....";
+
+};
+
+DEFINE-CHECKER TEST_NTH_PARAM_TYPE_CHECK = {
+
+  SET report_when =
+    WHEN
+      objc_method_has_nth_parameter_of_type("2", "REGEXP('This.+')*")
+    HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET message = "Found a method with nth parameter of type....";
+  SET severity = "LIKE";
+};
+
+DEFINE-CHECKER TEST_PROTOCOL_DEF_INHERITANCE = {
+
+  LET is_subprotocol_of(x) =
+          declaration_has_name(x) HOLDS-EVENTUALLY WITH-TRANSITION Protocol;
+
+  SET report_when =
+    WHEN
+      is_subprotocol_of("A")
+    HOLDS-IN-NODE ObjCProtocolDecl;
+
+  SET message = "Protocol inherit from A";
+};
+
+DEFINE-CHECKER TEST_PROTOCOL_TYPE_INHERITANCE = {
+
+  LET method_has_parameter_subprotocol_of(x) =
+            WHEN
+             HOLDS-NEXT WITH-TRANSITION Parameters
+                (has_type_subprotocol_of(x))
+             HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET report_when =
+      WHEN
+        declaration_has_name(REGEXP("^newWith.*:$")) AND
+        method_has_parameter_subprotocol_of("A")
+      HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET message = "Method declared with parameter whose type inherit from protocol A";
+};
+
+DEFINE-CHECKER TEST_GENERICS_TYPE = {
+
+  LET method_has_parameter_type(x) =
+        WHEN
+          HOLDS-NEXT WITH-TRANSITION Parameters
+            (has_type(x))
+          HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET report_when =
+      WHEN
+         method_has_parameter_type ("NSArray<id<C>>*")
+      HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET message = "Method declared with parameter whose type NSArray<id<C>>*";
+};
+
+
+DEFINE-CHECKER TEST_INSTANCE_TYPE = {
+
+  SET report_when =
+      WHEN
+        has_type("instancetype")
+      HOLDS-IN-NODE ObjCMethodDecl;
+
+  SET message = "Method declared has return type instancetype";
+};
+
+DEFINE-CHECKER TEST_DEFINE_NAMESPACE = {
+
+  SET report_when =
+    WHEN
+      declaration_has_name(REGEXP("FirstNam*"))
+    HOLDS-IN-NODE NamespaceDecl;
+
+  SET message = "Found a namespace with name....";
+
+};
+
+DEFINE-CHECKER TEST_USING_NAMESPACE = {
+
+  SET report_when =
+      using_namespace(REGEXP("FirstNam*"));
+
+  SET message = "Found using namespace with name....";
+
+};
+
+DEFINE-CHECKER FILTER_BY_PATH_EXAMPLE = {
+  SET report_when =
+     WHEN declaration_has_name("main")
+     HOLDS-IN-NODE FunctionDecl;
+  SET message = "Found main method";
+  SET whitelist_path = { filtered_files, "A.m" };
+};
+
+DEFINE-CHECKER ALL_PATH_NO_FILTER_EXAMPLE = {
+  SET report_when =
+     WHEN declaration_has_name("main")
+     HOLDS-IN-NODE FunctionDecl;
+  SET message = "Found main method";
+};
+
+DEFINE-CHECKER FILTER_BY_ALL_PATH_EXAMPLE = {
+  SET report_when =
+     WHEN declaration_has_name("main")
+     HOLDS-IN-NODE FunctionDecl;
+  SET message = "Found main method";
+  SET whitelist_path = { REGEXP(".*") };
+};
+
+DEFINE-CHECKER BLACKLIST_PATH_EXAMPLE = {
+  SET report_when =
+     WHEN declaration_has_name("main")
+     HOLDS-IN-NODE FunctionDecl;
+  SET message = "Found main method";
+  SET blacklist_path = { REGEXP("codetoanalyze/objc/linters-for-test-only/filter_by_path/.*") };
+};
+
+DEFINE-CHECKER WHITE_BLACKLIST_PATH_EXAMPLE = {
+  SET report_when =
+     WHEN declaration_has_name("main")
+     HOLDS-IN-NODE FunctionDecl;
+  SET message = "Found main method";
+  SET whitelist_path = { all_files };
+  SET blacklist_path = { filtered_files };
+  SET doc_url = "www.example.com";
 };

@@ -86,14 +86,14 @@ class vector {
   void* _ignore1;
   void* _ignore2;
 
-  void access_at(size_type index) {
-    _Tp* dummy_array = (_Tp*) malloc(sizeof(value_type) * infer_size);
-    auto dummy_value = dummy_array[index];
-    free(dummy_array);
+  void access_at(size_type index) const {
+    int* dummy_array = (int*)malloc(sizeof(int) * infer_size);
+    int x = dummy_array[index];
   }
 
   value_type* get() const {
-    return __infer_skip__get_nondet_val<value_type>();
+    value_type* p = (value_type*)malloc(sizeof(value_type));
+    return p;
   }
 
   void allocate(size_type __n) {
@@ -106,7 +106,7 @@ class vector {
 
   template <class Iter>
   void allocate_iter(Iter begin, Iter end) {
-    allocate(end - begin);
+    allocate(distance(begin, end));
   }
 
   /* std::vector implementation */
@@ -434,6 +434,7 @@ operator[](size_type __n) {
 template <class _Tp, class _Allocator>
 inline typename vector<_Tp, _Allocator>::const_reference
     vector<_Tp, _Allocator>::operator[](size_type __n) const {
+  access_at(__n);
   return (const_reference)*get();
 }
 
@@ -482,14 +483,12 @@ template <class _Tp, class _Allocator>
 inline typename vector<_Tp, _Allocator>::iterator
 vector<_Tp, _Allocator>::erase(const_iterator __position) {
   infer_size--;
-  return __position;
 }
 
 template <class _Tp, class _Allocator>
 typename vector<_Tp, _Allocator>::iterator vector<_Tp, _Allocator>::erase(
     const_iterator __first, const_iterator __last) {
-  infer_size -= __last - __first;
-  return __first;
+  infer_size -= distance(__first, __last);
 }
 
 template <class _Tp, class _Allocator>
@@ -526,7 +525,7 @@ typename enable_if<is_constructible<_Tp,
 vector<_Tp, _Allocator>::insert(const_iterator __position,
                                 _ForwardIterator __first,
                                 _ForwardIterator __last) {
-  infer_size += __last - __first;
+  infer_size += distance(__first, __last);
 }
 
 template <class _Tp, class _Allocator>

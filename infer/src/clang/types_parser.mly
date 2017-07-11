@@ -8,7 +8,11 @@
  */
 
 %{
+  open! IStd
+
   open Ctl_parser_types
+
+  module L = Logging
 
 (* See StringRef BuiltinType::getName in
   https://clang.llvm.org/doxygen/Type_8cpp_source.html *)
@@ -54,27 +58,60 @@
 %token OBJCSEL
 %token STAR
 %token EOF
-
+%token REGEXP
+%token LEFT_PAREN
+%token RIGHT_PAREN
+%token LEFT_ANGLE
+%token RIGHT_ANGLE
+%token <string> IDENTIFIER
+%token <string> STRING
+%token <string> REARG
 
 %start <Ctl_parser_types.abs_ctype> abs_ctype
 %%
 
 abs_ctype:
  | ctype_specifier_seq EOF {
-   Logging.out "\tType effectively parsed: `%s`\n"
+   L.(debug Linters Verbose) "\tType effectively parsed: `%s`@\n"
    (Ctl_parser_types.abs_ctype_to_string $1);
    $1 }
  ;
 
 ctype_specifier_seq:
+| protocol_or_generics_type_spec { $1 }
 | noptr_type_spec  { $1 }
 | ptr_type_spec  { $1 }
+| type_name { $1 }
 ;
 
 ptr_type_spec:
 | noptr_type_spec STAR { Pointer $1 }
 | ptr_type_spec STAR { Pointer $1 }
+| type_name STAR { Pointer $1 }
+| protocol_or_generics_type_spec STAR { Pointer $1 }
 ;
+
+protocol_or_generics_type_spec:
+|  type_name_or_objid LEFT_ANGLE ctype_specifier_seq RIGHT_ANGLE {
+   let tname = $1 in
+    L.(debug Linters Verbose) "\tProtocol or Generics parsed: `%s<%s>`@\n"
+    (Ctl_parser_types.abs_ctype_to_string tname)
+    (Ctl_parser_types.abs_ctype_to_string $3);
+    ObjCGenProt (tname, $3)
+  }
+;
+
+
+type_name_or_objid:
+ | OBJCID { BuiltIn ObjCId}
+ | type_name { $1 }
+ ;
+
+type_name:
+  | alexp {
+    L.(debug Linters Verbose) "\tType_name parsed: `%s`@\n"
+    (ALVar.alexp_to_string $1);
+    TypeName $1 }
 
 noptr_type_spec:
   | trailing_type_specifier_seq
@@ -116,5 +153,14 @@ simple_type_specifier:
   | OBJCCLASS { ObjCClass }
   | OBJCSEL { ObjCSel }
   ;
+
+  alexp:
+   | STRING { L.(debug Linters Verbose) "\tParsed string constant '%s' @\n" $1;
+              ALVar.Const $1 }
+   | REGEXP LEFT_PAREN REARG RIGHT_PAREN
+            { L.(debug Linters Verbose) "\tParsed regular expression '%s' @\n" $3;
+              ALVar.Regexp $3 }
+   | IDENTIFIER { ALVar.Var $1 }
+   ;
 
 %%

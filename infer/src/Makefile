@@ -22,7 +22,9 @@ ATDGEN_SUFFIXES = _t.ml _t.mli _j.ml _j.mli
 
 #### ocamlbuild options ####
 
-OCAML_FATAL_WARNINGS = +3+5+6+8+10+11+12+18+19+20+21+23+26+29+27+33+34+35+37+38+39+50+52+57
+GENERATED_OCAML_SOURCES_GLOB = <*{clang_plugin/*,backend/jsonbug_*,checkers/stacktree_*}>
+
+OCAML_FATAL_WARNINGS = +3+5+6+8+10+11+12+18+19+20+21+23+26+29+27+33+34+35+37+38+39+50+52+57-50
 
 # options for ocamlbuild
 # Notice that use-ocamlfind is used here to avoid a linker bug in ocamlbuild when using -tag thread
@@ -37,10 +39,11 @@ OCAMLBUILD_OPTIONS = \
   -cflags -strict-formats \
   -cflags -strict-sequence \
   -cflags -w,$(OCAML_FATAL_WARNINGS)-4-9-32-40-41-42-45-48 \
-  -tag-line "<*{clang/clang_ast_*,backend/jsonbug_*,checkers/stacktree_*}>: warn(-27-32-34-35-39)" \
-  -tag-line "<*/{,*/}*.{ml,re}{,i}>: package(ppx_compare)" \
+  -tag-line "$(GENERATED_OCAML_SOURCES_GLOB): warn(-27-32-34-35-39)" \
+  -tag-line "not $(GENERATED_OCAML_SOURCES_GLOB) and <*/{,*/}*.{ml,re}{,i}>: package(ppx_compare)" \
+  -tag-line "not $(GENERATED_OCAML_SOURCES_GLOB) and not <*{base/IList,base/IStd}.*>: open(IStd)" \
   -tag thread \
-  -pkgs ANSITerminal,atdgen,cmdliner,core,extlib,oUnit,str,unix,xmlm,yojson,zip
+  -pkgs ANSITerminal,atdgen,cmdliner,core,extlib,oUnit,parmap,str,unix,xmlm,yojson,zip
 
 ifeq ($(ENABLE_OCAML_BINANNOT),yes)
 OCAMLBUILD_OPTIONS += -cflags -bin-annot
@@ -58,6 +61,7 @@ ifeq ($(TEST),1)
 OCAMLBUILD_OPTIONS += -cflags -warn-error,$(OCAML_FATAL_WARNINGS)
 endif
 
+export OCAMLFIND_IGNORE_DUPS_IN=$(shell $(OCAMLC) -where)/compiler-libs
 
 #### Backend declarations ####
 
@@ -75,6 +79,12 @@ INFERPRINT_ATDGEN_STUB_BASE = backend/jsonbug
 INFERPRINT_ATDGEN_STUB_ATD = $(INFERPRINT_ATDGEN_STUB_BASE).atd
 INFERPRINT_ATDGEN_STUBS = $(addprefix $(INFERPRINT_ATDGEN_STUB_BASE), $(ATDGEN_SUFFIXES))
 
+#### InferCreateTraceViewLinks declarations ####
+
+FACEBOOK_DIR = facebook
+INFER_CREATE_TRACEVIEW_LINKS_MODULE = InferCreateTraceViewLinks
+INFER_CREATE_TRACEVIEW_LINKS_MAIN = $(FACEBOOK_DIR)/$(INFER_CREATE_TRACEVIEW_LINKS_MODULE)
+
 ### InferUnit declarations ###
 
 UNIT_SOURCES = unit
@@ -91,23 +101,24 @@ JAVA_SOURCES = java
 
 CLANG_SOURCES = clang
 
+CLANG_PLUGIN_MIRROR = clang_plugin
+
 FCP_CLANG_OCAML_BUILD_DIR = $(FCP_CLANG_OCAML_DIR)/build
 
 CLANG_PLUGIN_BINARIES = $(addprefix $(FCP_CLANG_OCAML_BUILD_DIR), \
                           clang_ast_converter clang_ast_named_decl_printer)
 
 CLANG_AST_BASE_NAME = clang_ast
-CLANG_ATDGEN_STUB_BASE = $(CLANG_SOURCES)/$(CLANG_AST_BASE_NAME)
+CLANG_ATDGEN_STUB_BASE = $(CLANG_PLUGIN_MIRROR)/$(CLANG_AST_BASE_NAME)
 CLANG_ATDGEN_STUB_ATD = $(FCP_CLANG_OCAML_BUILD_DIR)/$(CLANG_AST_BASE_NAME).atd
 CLANG_ATDGEN_SUFFIXES = _t.ml _t.mli _b.ml _b.mli _j.ml _j.mli _v.ml _v.mli
 CLANG_ATDGEN_STUBS = $(addprefix $(CLANG_ATDGEN_STUB_BASE), $(CLANG_ATDGEN_SUFFIXES))
 
 FCP_CLANG_AST_PROJ = $(addprefix $(FCP_CLANG_OCAML_BUILD_DIR)/, \
                        clang_ast_proj.ml clang_ast_proj.mli)
-FCP_CLANG_AST_MAIN = $(addprefix $(FCP_CLANG_OCAML_DIR)/, \
-                       clang_ast_visit.ml clang_ast_main.ml clang_ast_types.ml)
+FCP_CLANG_AST_MAIN = $(addprefix $(FCP_CLANG_OCAML_DIR)/, clang_ast_visit.ml clang_ast_types.ml)
 FCP_FILES_TO_MIRROR = $(FCP_CLANG_AST_PROJ) $(FCP_CLANG_AST_MAIN)
-INFER_CLANG_FCP_MIRRORED_FILES = $(addprefix $(CLANG_SOURCES)/, $(notdir $(FCP_FILES_TO_MIRROR)))
+CLANG_PLUGIN_MIRRORED_FILES = $(addprefix $(CLANG_PLUGIN_MIRROR)/, $(notdir $(FCP_FILES_TO_MIRROR)))
 
 CLANG_BINIOU_DICT = $(ETC_DIR)/clang_ast.dict
 
@@ -127,12 +138,12 @@ EXTRA_DEPS = opensource
 endif
 
 DEPENDENCIES = \
-  IR backend base checkers eradicate harness integration quandary bufferoverrun \
+  absint backend base bufferoverrun checkers eradicate harness integration IR labs quandary unit \
   $(EXTRA_DEPS)
 
 # ocamlbuild command with options common to all build targets
 OCAMLBUILD_BASE = \
-  $(REBUILD) $(OCAMLBUILD_OPTIONS) -j $(NCPU) $(addprefix -I , $(DEPENDENCIES)) \
+  $(OCAMLBUILD) $(OCAMLBUILD_OPTIONS) -j $(NCPU) $(addprefix -I , $(DEPENDENCIES)) \
 
 # ocamlbuild with options necessary to build all targets at once, regardless of configure flags
 OCAMLBUILD_ALL = $(OCAMLBUILD_BASE) $(JAVA_OCAMLBUILD_OPTIONS)
@@ -141,6 +152,9 @@ OCAMLBUILD_ALL = $(OCAMLBUILD_BASE) $(JAVA_OCAMLBUILD_OPTIONS)
 OCAMLBUILD_CONFIG = $(OCAMLBUILD_BASE)
 # list of ocamlbuild targets common to all build targets -- native version
 INFER_CONFIG_TARGETS = $(INFER_MAIN).native
+ifeq ($(IS_FACEBOOK_TREE),yes)
+INFER_CONFIG_TARGETS += $(INFER_CREATE_TRACEVIEW_LINKS_MAIN).native
+endif
 
 ifeq ($(BUILD_JAVA_ANALYZERS),yes)
 OCAMLBUILD_CONFIG += $(JAVA_OCAMLBUILD_OPTIONS)
@@ -149,7 +163,7 @@ else
 DEPENDENCIES += java_stubs
 endif
 ifeq ($(BUILD_C_ANALYZERS),yes)
-DEPENDENCIES += clang unit/clang
+DEPENDENCIES += clang clang_plugin unit/clang
 else
 DEPENDENCIES += clang_stubs unit/clang_stubs
 endif
@@ -164,11 +178,9 @@ OCAML_BASE_SOURCES = \
   $(STACKTREE_ATDGEN_STUBS) $(INFERPRINT_ATDGEN_STUBS)
 OCAML_CONFIG_SOURCES = $(OCAML_BASE_SOURCES)
 ifeq ($(BUILD_C_ANALYZERS),yes)
-OCAML_CONFIG_SOURCES += $(CLANG_ATDGEN_STUBS) $(INFER_CLANG_FCP_MIRRORED_FILES)
+OCAML_CONFIG_SOURCES += $(CLANG_ATDGEN_STUBS) $(CLANG_PLUGIN_MIRRORED_FILES)
 endif
-OCAML_ALL_SOURCES = $(OCAML_BASE_SOURCES) $(CLANG_ATDGEN_STUBS) $(INFER_CLANG_FCP_MIRRORED_FILES)
-
-export OCAMLFIND_IGNORE_DUPS_IN=$(shell $(OCAMLC) -where)/compiler-libs
+OCAML_ALL_SOURCES = $(OCAML_BASE_SOURCES) $(CLANG_ATDGEN_STUBS) $(CLANG_PLUGIN_MIRRORED_FILES)
 
 .PHONY: all
 all: infer
@@ -194,6 +206,11 @@ $(INFER_BIN_ALIASES): Makefile
 $(INFER_BIN).native: $(INFER_BUILD_DIR)/$(INFER_MAIN).native $(INFER_BIN_ALIASES)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFER_MAIN).native $(INFER_BIN)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFER_MAIN).native $(INFER_BIN).native
+ifeq ($(IS_FACEBOOK_TREE),yes)
+	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFER_CREATE_TRACEVIEW_LINKS_MAIN).native \
+		$(INFER_CREATE_TRACEVIEW_LINKS_BIN)
+endif
+
 
 .PHONY: infer
 infer: $(INFER_BIN).native
@@ -214,6 +231,10 @@ $(INFER_BIN).byte: $(INFER_BUILD_DIR)/$(INFER_MAIN).byte $(INFER_BIN_ALIASES)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFER_MAIN).byte $(INFER_BIN).byte
 ifeq ($(TEST),1)
 	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFERUNIT_MAIN).byte $(INFERUNIT_BIN)
+endif
+ifeq ($(IS_FACEBOOK_TREE),yes)
+	$(INSTALL_PROGRAM) $(INFER_BUILD_DIR)/$(INFER_CREATE_TRACEVIEW_LINKS_MAIN).byte \
+		$(INFER_CREATE_TRACEVIEW_LINKS_BIN)
 endif
 
 .PHONY: byte
@@ -241,29 +262,20 @@ module: base/Version.ml $(OCAML_ALL_SOURCES)
 mli:
 	$(OCAMLFIND) ocamlc -package atdgen,oUnit,str,unix,yojson,zip $(addprefix -I $(INFER_BUILD_DIR),$(DEPENDENCIES)) -i $(M).ml > $(M).mli
 
-rei:
-	$(OCAMLFIND) ocamlc -package atdgen,oUnit,str,unix,yojson,zip $(addprefix -I $(INFER_BUILD_DIR),$(DEPENDENCIES)) -i -pp refmt -impl $(M).re > $(M).rei
-
-# convert to reason
-%.re : %.ml
-	$(SCRIPT_DIR)/refmt.sh -parse ml -print re $< > $*.re
-
-%.rei : %.mli
-	$(SCRIPT_DIR)/refmt.sh -parse ml -print re $< > $*.rei
-
-roots:=Infer StatsAggregator
+roots:=Infer
+ifeq ($(IS_FACEBOOK_TREE),yes)
+roots += $(INFER_CREATE_TRACEVIEW_LINKS_MODULE)
+endif
 clusters:=base clang java IR
 
 ml_src_files:=$(shell find $(DEPENDENCIES) -regex '.*\.ml\(i\)*')
-re_src_files:=$(shell find $(DEPENDENCIES) -regex '.*\.re\(i\)*')
 inc_flags:=$(foreach dir,$(DEPENDENCIES),-I $(dir))
 root_flags:=$(foreach root,$(roots),-r $(root))
 cluster_flags:=$(foreach cluster,$(clusters),-c $(cluster))
 
-mod_dep.dot: $(ml_src_files) $(re_src_files)
+mod_dep.dot: $(ml_src_files)
 	$(MAKE) -C $(DEPENDENCIES_DIR)/ocamldot
-	{ ocamldep.opt $(inc_flags) -ml-synonym .re -mli-synonym .rei $(ml_src_files); \
-	  ocamldep.opt $(inc_flags) -ml-synonym .re -mli-synonym .rei -pp refmt $(re_src_files); } \
+	ocamldep.opt $(inc_flags) $(ml_src_files) \
 	| $(DEPENDENCIES_DIR)/ocamldot/ocamldot $(cluster_flags) $(root_flags) \
 	| grep -v -e "\"IList\"\|\"Utils\"" \
         > mod_dep.dot
@@ -273,7 +285,7 @@ mod_dep.pdf: mod_dep.dot
 
 .PHONY: dsort
 dsort:
-	$(QUIET)ocamldep.opt -sort $(inc_flags) -ml-synonym .re -mli-synonym .rei $(ml_src_files) -pp refmt $(re_src_files)
+	$(QUIET)ocamldep.opt -sort $(inc_flags) $(ml_src_files)
 
 define to_ocaml_module
 $(shell \
@@ -311,7 +323,7 @@ checkCopyright: $(CHECKCOPYRIGHT_BIN)
 
 $(CHECKCOPYRIGHT_BIN): $(CHECKCOPYRIGHT_MAIN).ml $(MAKEFILE_LIST)
 	$(MKDIR_P) $(BASE_BUILD_DIR)
-	$(REBUILD) -quiet -r -j $(NCPU) -build-dir $(BASE_BUILD_DIR)/checkCopyright \
+	$(OCAMLBUILD) -quiet -r -j $(NCPU) -build-dir $(BASE_BUILD_DIR)/checkCopyright \
 	  -cflags -g,-safe-string -lflags -g \
 	  -pkgs core,str -tag thread -use-ocamlfind $(CHECKCOPYRIGHT_MAIN).native
 	$(INSTALL_PROGRAM) \
@@ -347,7 +359,7 @@ $(foreach atd_type,b j t v,\
 
 
 define mirror_fcp_file
-$(CLANG_SOURCES)/$(notdir $(1)): $(1)
+$(CLANG_PLUGIN_MIRROR)/$(notdir $(1)): $(1)
 	$(INSTALL_DATA) $$< $$@
 endef
 
@@ -391,9 +403,19 @@ clean:
 	$(REMOVE) base/Version.ml.tmp.*
 	$(REMOVE) backend/jsonbug_{j,t}.ml{,i}
 	$(REMOVE) checkers/stacktree_{j,t}.ml{,i}
-	$(REMOVE) $(INFER_BIN){,.byte,.native} $(INFER_BIN_ALIASES)
-	$(REMOVE) $(INFERUNIT_BIN) $(CHECKCOPYRIGHT_BIN)
-	$(REMOVE) $(CLANG_ATDGEN_STUBS)
-	$(REMOVE) $(INFER_CLANG_FCP_MIRRORED_FILES)
+#	be a bit more aggressive than needed with what we remove here so that stale binaries that
+#	only existed in previous versions get removed as well
+	$(REMOVE) $(BIN_DIR)/Infer* $(BIN_DIR)/infer-* $(INFER_BIN){,.byte,.native} $(INFER_BIN_ALIASES) \
+	  $(INFERUNIT_BIN) $(CHECKCOPYRIGHT_BIN)
+	$(REMOVE) $(INFER_CREATE_TRACEVIEW_LINKS_BIN)
+	$(REMOVE) $(CLANG_PLUGIN_MIRROR)/*
 	$(REMOVE) mod_dep.dot
 	$(REMOVE) mod_dep.pdf
+
+.PHONY: fmt
+fmt:
+	@$(MAKE) -C $(ROOT_DIR) fmt
+
+# print any variable for Makefile debugging
+print-%:
+	$(QUIET)echo '$*=$($*)'

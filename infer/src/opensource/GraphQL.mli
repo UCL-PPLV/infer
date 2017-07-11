@@ -7,9 +7,8 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
 
-module DeprecatedAPIUsage :
-sig
-  val checker :
-    CLintersContext.context -> Ctl_parser_types.ast_node ->
-    CIssue.issue_desc option
+open! IStd
+
+module DeprecatedAPIUsage : sig
+  val checker : CLintersContext.context -> Ctl_parser_types.ast_node -> CIssue.issue_desc option
 end

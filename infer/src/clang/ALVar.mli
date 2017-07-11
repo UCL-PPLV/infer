@@ -6,22 +6,14 @@
  * LICENSE file in the root directory of this source tree. An additional grant
  * of patent rights can be found in the PATENTS file in the same directory.
  *)
+
 open! IStd
 
-type keyword =
-  | Report_when
-  | Message
-  | Suggestion
-  | Severity
-  | Mode
+type keyword = Doc_url | Message | Mode | Name | Report_when | Severity | Suggestion
 
 type formula_id = Formula_id of string
 
-type alexp =
-  | Const of string
-  | Regexp of string
-  | Var of string
-  | FId of formula_id
+type alexp = Const of string | Regexp of string | Var of string | FId of formula_id
 
 type t = alexp
 
@@ -43,4 +35,14 @@ val is_severity_keyword : keyword -> bool
 
 val is_mode_keyword : keyword -> bool
 
+val is_doc_url_keyword : keyword -> bool
+
+val is_name_keyword : keyword -> bool
+
+val str_match_regex : string -> string -> bool
+
+val compare_str_with_alexp : string -> alexp -> bool
+
 module FormulaIdMap : Caml.Map.S with type key = formula_id
+
+module VarMap : Caml.Map.S with type key = string
