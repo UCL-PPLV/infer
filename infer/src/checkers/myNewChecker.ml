@@ -93,10 +93,6 @@ let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   List.iter ~f:filter sigma;
   !env
 
-let swap_post = ref Prop.prop_emp
-
-let swap_incmpl_post = ref Prop.prop_emp
-
 let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list) = 
   match List.find ~f:(fun p -> String.equal (Pvar.get_simplified_name (snd p)) name) 
       exp_replace_list with
@@ -108,12 +104,26 @@ let find_original (e: Exp.t) sigma =
   | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> Exp.Var v
   | _ -> failwith "find_original: No original value found"
 
+let create_new_post tenv (pre: Prop.normal Prop.t) = 
+  let exp_replace_list = create_pvar_env_list pre.sigma in
+  let x_val = find_exp_replacement "x" exp_replace_list in
+  let y_val = find_exp_replacement "y" exp_replace_list in
+  let x_pointsto = find_original x_val pre.sigma in
+  let y_pointsto = find_original y_val pre.sigma in 
+  let my_new_hpred1 = Prop.mk_ptsto tenv x_val (Sil.Eexp (y_pointsto, Sil.inst_none)) 
+    (Exp.Sizeof 
+      {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
+  let my_new_hpred2 = Prop.mk_ptsto tenv y_val (Sil.Eexp (x_pointsto, Sil.inst_none)) 
+    (Exp.Sizeof
+      {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
+  let my_new_sigma = my_new_hpred1 :: my_new_hpred2 :: [] in
+  Prop.from_sigma my_new_sigma
+
 let checker { Callbacks.get_proc_desc; get_procs_in_file; 
-  idenv; tenv; summary; proc_desc; } : Specs.summary =
+  idenv; tenv; summary; proc_desc; } : Specs.summary = 
   let pname = Procdesc.get_proc_name proc_desc in 
   let proc_name_readable = Typ.Procname.to_string pname in
-  if String.equal proc_name_readable "main" then 
-    summary
+  if String.equal proc_name_readable "main" then summary
   else
   begin
   print_endline ("Begin proc: " ^ proc_name_readable);
@@ -130,40 +140,20 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
   | None -> Prop.prop_emp in
   let posts = match spec with 
   | Some s -> List.map ~f:fst s.posts
-  | None -> [] 
-  in 
+  | None -> [] in 
   let post = List.hd posts in 
-  begin
   match post with
-  | None -> ();
+  | None -> summary
   | Some post ->
 
-    begin
-    match Prover.check_implication_for_footprint pname tenv pre (Prop.expose post) with 
-    | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "pre = post: Yes"
-    | ImplFail _ -> print_endline "pre = post: No"
-    end;
+    let my_new_post = create_new_post tenv pre in
 
-    let exp_replace_list = create_pvar_env_list pre.sigma in
-    let x_val = find_exp_replacement "x" exp_replace_list in
-    let y_val = find_exp_replacement "y" exp_replace_list in
-    let x_pointsto = find_original x_val pre.sigma in
-    let y_pointsto = find_original y_val pre.sigma in 
-    let my_new_hpred1 = Prop.mk_ptsto tenv x_val (Sil.Eexp (y_pointsto, Sil.inst_none)) 
-      (Exp.Sizeof 
-        {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
-    let my_new_hpred2 = Prop.mk_ptsto tenv y_val (Sil.Eexp (x_pointsto, Sil.inst_none)) 
-      (Exp.Sizeof
-        {typ=(Typ.mk (Tint IInt)); nbytes=None; dynamic_length=None; subtype=Subtype.exact}) in
-    let my_new_sigma = my_new_hpred1 :: my_new_hpred2 :: [] in
-    let my_new_post = Prop.from_sigma my_new_sigma in
-
-    begin match Prover.check_implication_for_footprint pname tenv post my_new_post with 
+    match Prover.check_implication_for_footprint pname tenv post my_new_post with 
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-       frame_fld, missing_fld, frame_typ, missing_typ) -> print_endline "post = given post: Yes"
-    | ImplFail _ -> print_endline "post = given post: No"
-    end;
+      frame_fld, missing_fld, frame_typ, missing_typ) -> 
+      print_endline "post = given post: Yes";
+      summary
+    | ImplFail _ -> print_endline "post = given post: No";
 
     List.iter ~f:(fun hpred1 -> 
       List.iter ~f:(fun hpred2 ->
@@ -175,10 +165,19 @@ let checker { Callbacks.get_proc_desc; get_procs_in_file;
         print_endline ""
       ) my_new_post.sigma;
     ) post.sigma;
+   
+    print_endline "";
 
+    let all_clusters = DB.find_source_dirs () in
+    List.iter ~f:(fun c -> 
+      let exe_env = Exe_env.from_cluster c in
+      let call_graph = Exe_env.get_cg exe_env in
+      Specs.clear_spec_tbl ();
+      Random.self_init ();
+      Callbacks.iterate_callbacks call_graph exe_env;
 
+    ) all_clusters;
 
-  print_endline "";
-  end;
-  summary
-  end
+  
+    summary
+    end
