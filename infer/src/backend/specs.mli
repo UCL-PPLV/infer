@@ -139,6 +139,7 @@ type payload =
   ; threadsafety: ThreadSafetyDomain.summary option
   ; buffer_overrun: BufferOverrunDomain.Summary.t option }
 
+
 (** Procedure summary *)
 type summary =
   { nodes: Procdesc.Node.id list  (** ids of cfg nodes of the procedure *)

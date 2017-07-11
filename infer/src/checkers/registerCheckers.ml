@@ -59,8 +59,7 @@ let checkers =
       ; (Cluster ThreadSafety.file_analysis, Config.Clang)
       ; (Cluster ThreadSafety.file_analysis, Config.Java)]) 
   ; (
-   "my new checker", true, [Procedure MyNewChecker.checker, Config.Clang] )
-  ]
+   "my new checker", true, [Procedure MyNewChecker.checker, Config.Clang] ) ]
 
 let register () =
   let register_one (_, active, callbacks) =
