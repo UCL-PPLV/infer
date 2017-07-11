@@ -690,19 +690,6 @@ let store_summary (summ1: summary) =
     ~data:final_summary
 
 let empty_payload =
-<<<<<<< HEAD
-  {
-    preposts = None;
-    typestate = None;
-    annot_map = None;
-    crashcontext_frame = None;
-    quandary = None;
-    siof = None;
-    threadsafety = None;
-    buffer_overrun = None;
-    permsafety = None;
-  }
-=======
   { preposts= None
   ; typestate= None
   ; annot_map= None
@@ -712,7 +699,6 @@ let empty_payload =
   ; siof= None
   ; threadsafety= None
   ; buffer_overrun= None }
->>>>>>> upstream/master
 
 (** [init_summary (depend_list, nodes,
     proc_flags, calls, in_out_calls_opt, proc_attributes)]
