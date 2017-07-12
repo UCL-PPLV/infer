@@ -25,7 +25,8 @@ let command_to_name =
   ; (Compile, "compile")
   ; (Report, "report")
   ; (ReportDiff, "reportdiff")
-  ; (Run, "run") ]
+  ; (Run, "run")
+  ; (Synthesize, "synthesize") ]
 
 let name_of_command = List.Assoc.find_exn ~equal:CLOpt.equal_command command_to_name
 
@@ -248,6 +249,14 @@ $(b,infer) $(i,[options]) $(b,--) $(i,compile command)|}
 $(b,infer) $(b,analyze) $(i,[options])|} ]
     ~see_also:CLOpt.([Analyze; Capture; Report])
 
+let synthesize = 
+  mk_command_doc ~title:"Synthesize a procedure"
+  ~short_description:"synthesize a procedure given pre and posts"
+  ~synopsis: {|$(b,infer) $(b,synthesize)|}
+  ~description: []
+  ~see_also:CLOpt.([Run])
+
+
 let command_to_data =
   let mk cmd mk_doc =
     let name = name_of_command cmd in
@@ -260,7 +269,8 @@ let command_to_data =
   ; mk Compile compile
   ; mk Report report
   ; mk ReportDiff reportdiff
-  ; mk Run run ]
+  ; mk Run run 
+  ; mk Synthesize synthesize ]
 
 let data_of_command command =
   List.Assoc.find_exn ~equal:CLOpt.equal_command command_to_data command

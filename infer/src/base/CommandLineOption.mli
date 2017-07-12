@@ -36,6 +36,7 @@ type command =
   | Report  (** post-process infer results and reports *)
   | ReportDiff  (** compute the difference of two infer reports *)
   | Run  (** orchestrate the capture, analysis, and reporting of a compilation command *)
+  | Synthesize 
   [@@deriving compare]
 
 val equal_command : command -> command -> bool

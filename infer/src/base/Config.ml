@@ -355,7 +355,7 @@ let startup_action =
     match initial_command with
     | Some Clang
      -> NoParse
-    | None | Some (Analyze | Capture | Compile | Report | ReportDiff | Run)
+    | None | Some (Analyze | Capture | Compile | Report | ReportDiff | Run | Synthesize)
      -> InferCommand
 
 let exe_usage =
@@ -409,7 +409,7 @@ let () =
      -> assert false (* filtered out *)
     | Report
      -> `Add
-    | Analyze | Capture | Compile | ReportDiff | Run
+    | Analyze | Capture | Compile | ReportDiff | Run | Synthesize
      -> `Reject
   in
   (* make sure we generate doc for all the commands we know about *)

@@ -92,11 +92,12 @@ type command =
   | Report
   | ReportDiff
   | Run
+  | Synthesize
   [@@deriving compare]
 
 let equal_command = [%compare.equal : command]
 
-let all_commands = [Analyze; Capture; Clang; Compile; Report; ReportDiff; Run]
+let all_commands = [Analyze; Capture; Clang; Compile; Report; ReportDiff; Run; Synthesize]
 
 type command_doc =
   { title: Cmdliner.Manpage.title
