@@ -2,6 +2,9 @@ open! IStd
 
 module F = Format
 
+let path_to_source = "/home/ben/Desktop/swap/swap-proto.c"
+let synth_proc_name = "swap"
+
 let print_sigma sigma = 
   List.iter ~f:(fun s -> 
     Sil.pp_hpred Pp.text F.std_formatter s;
@@ -93,12 +96,8 @@ let create_new_post tenv (pre: Prop.normal Prop.t) =
   let my_new_sigma = my_new_hpred1 :: my_new_hpred2 :: [] in
   Prop.from_sigma my_new_sigma
 
-let rec run () = 
-  let clang_cmd = (ClangCommand.mk ClangQuotes.EscapedDoubleQuotes 
-    ~prog:"clang" ~args:["/home/ben/Desktop/swap/swap-proto.c"]) in
-  Capture.capture clang_cmd;
-
-  ClangWrapper.exe ~prog:"clang" ~args:["/home/ben/Desktop/swap/swap-proto.c"];
+let rec synthesize queue = 
+  ClangWrapper.exe ~prog:"clang" ~args:[path_to_source];
 
   let all_clusters = DB.find_source_dirs () in 
   let one_cluster = List.hd all_clusters in
@@ -147,11 +146,24 @@ let rec run () =
     | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
       frame_fld, missing_fld, frame_typ, missing_typ) -> 
       print_endline "post = given post: Yes";
+      
+      let file = In_channel.read_all path_to_source in
+      let regexp = Str.regexp "/* ?? */.*\n" in
+      let new_file = Str.replace_first regexp "" file in
+      Out_channel.write_all ~data:new_file path_to_source;
+
     | ImplFail _ -> print_endline "post = given post: No";
 
     List.iter ~f:(fun hpred1 -> 
       List.iter ~f:(fun hpred2 ->
-        if Sil.equal_hpred hpred1 hpred2 then print_string "Match found - ";
+        if Sil.equal_hpred hpred1 hpred2 then begin
+        print_string "Match found - ";
+        let file = In_channel.read_all path_to_source in
+        let regexp = Str.regexp_string "/* ?? */" in
+        let new_prog_line = (List.hd_exn queue) ^ ";\n  /* ?? */" in
+        let new_file = Str.replace_first regexp new_prog_line file in
+        Out_channel.write_all ~data:new_file path_to_source;
+        end;
         print_string "hpred1 is: ";
         Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred1;
         print_string " and hpred2 is: ";
@@ -160,18 +172,61 @@ let rec run () =
       ) my_new_post.sigma;
     ) post.sigma;
 
+    let file = In_channel.read_all path_to_source in
+    let regexp = Str.regexp_string "/* ?? */" in
+    let split_file = Str.split regexp file in
+    let head = List.hd_exn split_file in
+    let tail = List.nth_exn split_file 1 in
+    let trimmed_tail = Str.string_after tail ((String.index_exn tail '}') + 1) in
+    let new_prog_line = "/* ?? */\n  " ^ (List.nth_exn queue 1) ^ ";\n}" in
+    let new_file = head ^ new_prog_line ^ trimmed_tail in
+    Out_channel.write_all path_to_source ~data:new_file;
 
-    
+    print_string (In_channel.read_all path_to_source);
     F.print_string ("End proc: " ^ proc_name_readable ^ "\n\n");
 
     (* Recursive call to run - after the source file has been changed? *)
-    (* run (); *)
+    let new_queue = List.tl queue in 
+    match new_queue with
+    | None -> failwith "Nothing left in synthesis queue"
+    | Some nq -> synthesize nq
     end
-  ) procs_to_analyze;
+  ) procs_to_analyze
+
+let possible_reads (prog_vars: string list) = 
+  let local_vars = 
+    let varnames = 
+      let make_varname (n: int) = Some ("t" ^ (string_of_int n)) in
+      Stream.from make_varname in
+    let len = List.length prog_vars in
+    Stream.npeek len varnames
+  in
+  let read_stem = format_of_string "%s = *%s" in
+  let reads = List.map2_exn ~f:(fun tv pv -> 
+    Printf.sprintf read_stem tv pv
+  ) local_vars prog_vars in
+  (reads, local_vars)
   
 
+let possible_writes temp_vars prog_vars = 
+  let write_stem = format_of_string "*%s = %s" in
+  List.concat (List.map ~f:(fun pv -> 
+    List.map ~f:(fun tv -> 
+      Printf.sprintf write_stem pv tv
+    ) temp_vars
+  ) prog_vars)
 
-
-
-
-   
+let run () = 
+  let prog_var_names = ["x"; "y"] in
+  let reads, temp_vars = possible_reads prog_var_names in
+  let writes = possible_writes temp_vars prog_var_names in
+  
+  let local_decls = String.concat (List.map ~f:(fun t -> "int " ^ t ^ "; ") temp_vars) in
+  let chained_reads = ((String.concat ~sep:"; " reads) ^ ";\n  /* ?? */") in
+  let decls_and_reads = local_decls ^ "\n  " ^ chained_reads in
+  let file = In_channel.read_all path_to_source in
+  let regexp = Str.regexp_string "/* ?? */" in
+  let new_file = Str.replace_first regexp decls_and_reads file in
+  Out_channel.write_all path_to_source ~data:new_file;
+  synthesize writes;  
+  
