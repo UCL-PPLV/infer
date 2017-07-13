@@ -138,7 +138,7 @@ EXTRA_DEPS = opensource
 endif
 
 DEPENDENCIES = \
-  absint backend base bufferoverrun checkers eradicate harness integration IR labs quandary unit \
+  absint backend base bufferoverrun checkers eradicate harness integration IR labs quandary unit synthesis \
   $(EXTRA_DEPS)
 
 # ocamlbuild command with options common to all build targets
