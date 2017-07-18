@@ -430,7 +430,7 @@ let create_node pdesc loc kind instrs =
     ; succs= []
     ; exn= [] }
   in
-  pdesc.nodes <- node :: pdesc.nodes ;
+  pdesc.nodes <- node :: pdesc.nodes;
   node
 
 (** Set the successor and exception nodes.

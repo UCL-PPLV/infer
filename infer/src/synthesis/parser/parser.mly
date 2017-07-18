@@ -3,27 +3,29 @@
 %token <string> TYPE
 %token LPAREN
 %token RPAREN
-%token LSQBRAC
-%token RSQBRAC
+%token LBRACKET
+%token RBRACKET
 %token POINTSTO
-%token ADDRESSOF
 %token STAR
 %token AND
 %token EOF
 %token SEMICOLON
+%token COLON
 %token COMMA
 %token EMP
 
-%start <Procspec.t> start
+%start <Parsetree.procspec> start
 
 %%
 
 start: 
-| pre = prop; func = proc; post = prop            { Procspec (pre, func, post)}
+| EOF                                             { None }
+| pre = prop; func = proc; post = prop EOF        { Procspec (pre, func, post) }
 ;
 
 proc:
-| id = ID; LPAREN; pl = param_list; RPAREN        { Proc (ID, param_list) }
+| id = ID; LPAREN; pl = param_list; RPAREN        { Proc (id, pl) }
+;
 
 param_list:
 | /* empty */                                     { [] }
@@ -36,12 +38,12 @@ param:
 ;
 
 prop: 
-| LSQBRAC p = pi; SEMICOLON; s = sigma; RSQBRAC   { Prop (p, s) }
+| LBRACKET p = pi; SEMICOLON; s = sigma; RBRACKET { Aprop (p, s) }
 ;
 
 sigma:
-| h = hpred                                       { [Hpred (h)] }
-| h = hpred; STAR; s = sigma                      { Hpred (h) :: s }
+| h = hpred                                       { [h] }
+| h = hpred; STAR; s = sigma                      { h :: s }
 ;
 
 hpred:
@@ -52,8 +54,8 @@ hpred:
 /* Hpointsto Exp.t (strexp0 'inst) Exp.t */
 
 pi: 
-| a = atom                                        { [Atom (a)] }
-| a = atom; AND; p = pi                           { Atom (a) :: p }
+| a = atom                                        { [a] }
+| a = atom; AND; p = pi                           { a :: p }
 ;
 
 atom: 

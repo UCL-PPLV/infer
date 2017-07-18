@@ -322,7 +322,9 @@ let potential_exception_message = "potential exception at line"
 module IssuesJson = struct
   let is_first_item = ref true
 
-  let pp_json_open fmt () = F.fprintf fmt "[@?"
+  let pp_json_open fmt () =
+    is_first_item := true ;
+    F.fprintf fmt "[@?"
 
   let pp_json_close fmt () = F.fprintf fmt "]@\n@?"
 
@@ -1106,5 +1108,3 @@ let main ~report_csv ~report_json =
     ; (Summary, init_summary_format_list ()) ]
   in
   register_perf_stats_report () ; print_issues formats_by_report_kind
-
-let main_from_config () = main ~report_csv:Config.bugs_csv ~report_json:Config.bugs_json

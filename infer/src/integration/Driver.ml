@@ -143,13 +143,15 @@ let clean_results_dir () =
     List.mem ~equal:String.equal dirs_to_delete
   in
   let should_delete_file =
+    let files_to_delete = [Config.log_file] in
     let suffixes_to_delete =
       ".txt" :: ".csv" :: ".json" :: (if Config.flavors then [] else [".cfg"; ".cg"])
     in
     fun name ->
       (* Keep the JSON report *)
-      not (String.equal (Filename.basename name) "report.json")
-      && List.exists ~f:(Filename.check_suffix name) suffixes_to_delete
+      not (String.equal (Filename.basename name) Config.report_json)
+      && ( List.mem ~equal:String.equal files_to_delete (Filename.basename name)
+         || List.exists ~f:(Filename.check_suffix name) suffixes_to_delete )
   in
   let rec clean name =
     let rec cleandir dir =
@@ -356,7 +358,7 @@ let report () =
   let report_csv =
     if Config.buck_cache_mode then None else Some (Config.results_dir ^/ "report.csv")
   in
-  let report_json = Some (Config.results_dir ^/ "report.json") in
+  let report_json = Some Config.(results_dir ^/ report_json) in
   InferPrint.main ~report_csv ~report_json ;
   (* Post-process the report according to the user config. By default, calls report.py to create a
      human-readable report.
@@ -405,7 +407,7 @@ let analyze_and_report ~changed_files driver_mode =
 (** as the Config.fail_on_bug flag mandates, exit with error when an issue is reported *)
 let fail_on_issue_epilogue () =
   let issues_json =
-    DB.Results_dir.(path_to_filename Abs_root ["report.json"]) |> DB.filename_to_string
+    DB.Results_dir.(path_to_filename Abs_root [Config.report_json]) |> DB.filename_to_string
   in
   match Utils.read_file issues_json with
   | Ok lines

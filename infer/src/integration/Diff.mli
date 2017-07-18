@@ -1,5 +1,5 @@
 (*
- * Copyright (c) 2016 - present Facebook, Inc.
+ * Copyright (c) 2017 - present Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD style license found in the
@@ -9,6 +9,5 @@
 
 open! IStd
 
-val exception_value : string
-
-val main : report_csv:string option -> report_json:string option -> unit
+val diff : Driver.mode -> unit
+(** orchestrates the analysis of a code change *)
