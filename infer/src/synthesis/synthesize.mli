@@ -1,1 +1,1 @@
-val run: unit -> unit
+val run: arg:string -> unit

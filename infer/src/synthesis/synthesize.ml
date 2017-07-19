@@ -2,8 +2,7 @@ open! IStd
 
 module F = Format
 
-let path_to_source = "/home/ben/Desktop/swap/swap-proto.c"
-let synth_pname = "swap"
+let path_to_source = "/home/ben/Desktop/swap/swap-proto.c" (* Should be put in /tmp/ *)
 
 let print_sigma sigma = 
   List.iter ~f:(fun s -> 
@@ -101,15 +100,12 @@ let insert_penultimate_node node proc_desc =
   Procdesc.node_set_succs_exn proc_desc node [(Procdesc.get_exit_node proc_desc)] []
 
 let remove_nullifys proc_desc = 
-  Procdesc.iter_instrs (fun n i -> match i with 
-    | Sil.Nullify _ -> 
-      let instrs = Procdesc.Node.get_instrs n in 
-      let new_instrs = List.filter ~f:(function
-        | Sil.Nullify _ -> false
-        | _ -> true) instrs in
-      Procdesc.Node.replace_instrs n new_instrs;
-
-    | _ -> ()
+  Procdesc.iter_nodes (fun n ->
+    let instrs = Procdesc.Node.get_instrs n in 
+    let new_instrs = List.filter ~f:(function
+      | Sil.Nullify _ -> false
+      | _ -> true) instrs in
+    Procdesc.Node.replace_instrs n new_instrs;
   ) proc_desc
 
 let print_node_instrs proc_desc = 
@@ -263,7 +259,21 @@ let synthesize proc_name exe_env =
   
   synthesize_writes callbacks write_node possible_writes
 
-let run () = 
+let run ~arg = 
+  let pspec = ParseMain.run arg in 
+  match pspec with
+  | None -> failwith "Input file is empty"
+  | Some procspec -> 
+  let proc_sig = procspec.proc in
+  let c_prog_of_sig {Parsetree.ret_typ; id; params} = 
+  let params_str = String.concat ~sep:", " 
+    (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
+  "#include <stdio.h>\n" ^ 
+  ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { }\n" ^ 
+  "int main() { return 0; }" in 
+  let c_prog = c_prog_of_sig proc_sig in 
+  Out_channel.write_all path_to_source ~data:c_prog;
+
   ClangWrapper.exe ~prog:"clang" ~args:[path_to_source];
 
   let all_clusters = DB.find_source_dirs () in 
@@ -275,8 +285,8 @@ let run () =
   let call_graph = Exe_env.get_cg exe_env in
   let procs_to_analyze = Cg.get_defined_nodes call_graph in
   match List.find ~f:(fun pn -> 
-    String.equal (Typ.Procname.to_string pn) synth_pname) procs_to_analyze with
-  | None -> failwith ("No proc found with name " ^ synth_pname)
+    String.equal (Typ.Procname.to_string pn) proc_sig.id) procs_to_analyze with
+  | None -> failwith ("No proc found with name " ^ proc_sig.id)
   | Some proc_name ->
   synthesize proc_name exe_env
   

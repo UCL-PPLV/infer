@@ -126,7 +126,9 @@ let () =
         ~previous_report:Config.report_previous
   | Capture | Compile | Run
    -> run (Lazy.force Driver.mode_from_command_line)
-  | Synthesize -> Synthesize.run ()
+  | Synthesize
+  -> let path = Config.synthesize in 
+      Synthesize.run ~arg:path
   | Diff
    -> Diff.diff (Lazy.force Driver.mode_from_command_line)
 

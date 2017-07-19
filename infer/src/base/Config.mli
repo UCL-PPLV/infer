@@ -602,6 +602,8 @@ val svg : bool
 
 val symops_per_iteration : int option
 
+val synthesize : string
+
 val test_filtering : bool
 
 val testing_mode : bool

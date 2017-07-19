@@ -9,19 +9,20 @@ let print_position outx lexbuf =
 
 let parse_with_error lexbuf =
   try Parser.start Lexer.token lexbuf with
-  | Lexer.SyntaxError s -> print_string ("error" ^ s); exit(-1)
+  | Lexer.LexerError s -> print_string ("lexer error" ^ s); exit(-1)
   | Parser.Error -> fprintf stderr "%a: parser error\n" print_position lexbuf;
     exit (-1)
 
-let run filename () =
+let run (filename: string) : Parsetree.procspec option =
   let inx = In_channel.create filename in
   let lexbuf = Lexing.from_channel inx in
   lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = filename };
-  parse_with_error lexbuf;
-  In_channel.close inx
+  let procspec = parse_with_error lexbuf in 
+  In_channel.close inx;
+  procspec
 
-let () =
+(* let () =
   Command.basic ~summary:""
     Command.Spec.(empty +> anon ("filename" %: file))
     run 
-  |> Command.run
+  |> Command.run *)

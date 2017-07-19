@@ -1509,6 +1509,10 @@ and symops_per_iteration =
   CLOpt.mk_int_opt ~deprecated:["symops_per_iteration"] ~long:"symops-per-iteration" ~meta:"int"
     "Set the number of symbolic operations per iteration (see $(b,--iterations))"
 
+and synthesize = 
+  CLOpt.mk_path ~long:"synth-path" ~default:""
+    "Path to the synthesis spec input file"
+
 and test_filtering =
   CLOpt.mk_bool ~deprecated:["test_filtering"] ~long:"test-filtering"
     "List all the files Infer can report on (should be called from the root of the project)"
@@ -2109,6 +2113,8 @@ and subtype_multirange = !subtype_multirange
 and svg = !svg
 
 and symops_per_iteration = !symops_per_iteration
+
+and synthesize = !synthesize
 
 and keep_going = !keep_going
 
