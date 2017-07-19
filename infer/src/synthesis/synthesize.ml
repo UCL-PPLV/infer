@@ -127,13 +127,19 @@ let print_node_instrs proc_desc =
   ) (Procdesc.get_nodes proc_desc);
   F.print_string "\n"
 
-let rec synthesize_writes callbacks node queue =
+let get_typ_from_ptr_exn (ptr_typ: Typ.t) = match ptr_typ.desc with
+  | Tptr (t, _) -> t 
+  | _ -> failwith "Not a pointer type"
+
+let rec synthesize_writes callbacks node (queue: Sil.instr list list) =
   let proc_desc = callbacks.Callbacks.proc_desc in 
   let proc_name = Procdesc.get_proc_name proc_desc in 
   let summary = Interproc.analyze_procedure callbacks in
-  Specs.pp_summary_text F.std_formatter summary;
-  let post = fst (List.hd_exn ((List.hd_exn (Specs.get_specs_from_payload summary)).Specs.posts)) in
-  let pre = Specs.Jprop.to_prop (List.hd_exn (Specs.get_specs_from_payload summary)).Specs.pre in 
+  (* Specs.pp_summary_text F.std_formatter summary; *)
+  let specs = Specs.get_specs_from_payload summary in 
+  print_specs specs;
+  let post = fst (List.hd_exn (List.hd_exn specs).Specs.posts) in
+  let pre = Specs.Jprop.to_prop (List.hd_exn specs).Specs.pre in 
   let my_new_post = create_new_post callbacks.Callbacks.tenv pre in 
 
   match Prover.check_implication_for_footprint proc_name callbacks.Callbacks.tenv post my_new_post with 
@@ -161,14 +167,16 @@ let rec synthesize_writes callbacks node queue =
   ) post.sigma;
   F.print_string "\n";
 
-  new_instrs := !new_instrs @ [List.hd_exn queue];
+  let abstract_inst = Sil.Abstract (Location.dummy) in 
+  let next_instrs = List.hd_exn queue in
+  new_instrs := !new_instrs @ next_instrs @ [abstract_inst];
   Procdesc.Node.replace_instrs node !new_instrs;
 
   F.print_string "Node instrs after\n";
   print_node_instrs proc_desc;
 
   
-  (* Recursive call to run - after the source file has been changed *)
+  (* Recursive call to run - after the instructions have been changed *)
   let new_queue = List.tl queue in 
   match new_queue with
   | None -> failwith "Nothing left in synthesis queue"
@@ -206,7 +214,7 @@ let synthesize proc_name exe_env =
   let post = List.hd posts in 
   match post with
   | None -> ()
-  | Some post ->
+  | Some _ ->
 
   F.print_string "formals: ";
   List.iter ~f:(fun f -> Mangled.pp F.std_formatter (fst f); F.print_string " ") (Procdesc.get_formals proc_desc);
@@ -218,22 +226,30 @@ let synthesize proc_name exe_env =
     (pvar, typ)
   ) (Procdesc.get_formals proc_desc) in 
 
-  let addr_vars = List.map ~f:(fun (_, typ) -> (Ident.create_fresh Ident.knormal, typ)) pvars in
-  let temp_vars = List.map ~f:(fun _ -> Ident.create_fresh Ident.knormal) pvars in
-  let read_instrs = List.map3_exn ~f:(fun (addr, _) (pvar, typ) tmp -> 
-    F.print_string "\n TYPE: "; Typ.pp_full Pp.text F.std_formatter typ; F.print_string "\n";
-    [ Sil.Load (addr, Exp.Lvar pvar, typ, Location.dummy);
-    Sil.Load (tmp, Exp.Var addr, typ, Location.dummy) ]
-  ) addr_vars pvars temp_vars in 
+  let local_vars = List.mapi ~f:(fun i _ -> Pvar.mk (Mangled.from_string ("l" ^ (string_of_int i))) proc_name) pvars in
+  let read_instrs = List.map2_exn ~f:(fun (pvar, p_typ) local -> 
+    let temp1 = Ident.create_fresh Ident.knormal in 
+    let temp2 = Ident.create_fresh Ident.knormal in 
+    let typ = get_typ_from_ptr_exn p_typ in 
+    [ Sil.Load (temp1, Exp.Lvar pvar, p_typ, Location.dummy);
+    Sil.Load (temp2, Exp.Var temp1, typ, Location.dummy);
+    Sil.Store (Exp.Lvar local, typ, Exp.Var temp2, Location.dummy) ]
+  ) pvars local_vars in 
+  let abstract_instr = Sil.Abstract (Location.dummy) in 
 
-  let read_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") (List.concat read_instrs) in
+  let read_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
+    ((List.concat read_instrs) @ [abstract_instr]) in
   insert_penultimate_node read_node proc_desc;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
-  let possible_writes = List.concat (List.map ~f:(fun (addr, typ) -> 
-    List.map ~f:(fun tmp -> 
-      Sil.Store (Exp.Var addr, typ, Exp.Var tmp, Location.dummy)
-    ) temp_vars) addr_vars) in
+  let possible_writes = List.concat (List.map ~f:(fun (pv, typ) -> 
+    List.map ~f:(fun local -> 
+      let temp1 = Ident.create_fresh Ident.knormal in 
+      let temp2 = Ident.create_fresh Ident.knormal in 
+      [Sil.Load (temp1, Exp.Lvar pv, get_typ_from_ptr_exn typ, Location.dummy);
+      Sil.Load (temp2, Exp.Lvar local, get_typ_from_ptr_exn typ, Location.dummy);
+      Sil.Store (Exp.Var temp1, get_typ_from_ptr_exn typ, Exp.Var temp2, Location.dummy)]
+    ) local_vars) pvars) in
 
   let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
     [] in
