@@ -125,7 +125,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
     | _ -> true) in
   let non_empty_post_sigma = filter_emp_hpreds raw_post.sigma in 
   match non_empty_post_sigma with 
-  | [] -> Prop.expose Prop.prop_emp
+  | [] -> F.printf "Making empty post\n"; Prop.expose Prop.prop_emp
   | _ -> 
   let non_empty_pre_sigma = filter_emp_hpreds raw_pre.sigma in
   let quantified_vars = List.map ~f:(function
@@ -163,7 +163,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           String.equal p name) param_pointsto_list in
         match found_param with 
         | None -> 
-          if not (String.equal p m) then 
+          if not (String.equal n q) then 
             failwithf "Var %s modified in preposts but not passed in function params" p
           else None
         | Some (_, param, _, _) -> 
@@ -171,8 +171,8 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
             String.equal m name) param_pointsto_list in
           match found_pointsto with 
           | None -> 
-            if not (String.equal p m) then 
-              failwithf "Var %s pointsto given in post but is not in pre" p
+            if not (String.equal n q) then 
+              assert false
             else None
           | Some (_, _, pointsto, typ) -> 
             Some (Prop.mk_ptsto tenv param (Sil.Eexp (pointsto, Sil.inst_none))
@@ -184,7 +184,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
         let found_in_params = List.find ~f:(fun (quant2, _, _, _) 
           -> String.equal q quant2) param_pointsto_list in 
         match found_in_params with
-        | None -> None (* Pointsto is in post but not in pre *)
+        | None -> failwithf "Var %s pointing to %s given in post but %s is not in pre" p q q
         | Some (_, param2, _, typ) ->
           let _, param1, _, _ = List.find_exn ~f:(fun (quant1, _, _, _) -> 
             String.equal quant1 p) param_pointsto_list in
