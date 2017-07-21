@@ -2,7 +2,7 @@ open! IStd
 
 module F = Format
 
-let path_to_source = "/home/ben/Desktop/swap/swap-proto.c" (* Should be put in /tmp/ *)
+let path_to_source = "/tmp/swap-proto.c" (* Should be put in /tmp/ *)
 
 let print_sigma sigma = 
   List.iter ~f:(fun s -> 
@@ -74,6 +74,43 @@ let print_node_instrs proc_desc =
   let start_node = Procdesc.get_start_node proc_desc in 
   print_nodes start_node;
   F.print_string "\n"
+
+let pprint_output proc_desc = 
+  let rec print_nodes node stmts = 
+    let stmt = match Procdesc.Node.get_instrs node with 
+    (* read *)
+    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+      ; Sil.Load (_, _, _, _)
+      ; Sil.Store (Exp.Lvar local, typ, _, _) 
+      ; Sil.Remove_temps _
+      ; Sil.Abstract _ ] ->
+      let local_name = Pvar.get_simplified_name local in 
+      let pvar_name = Pvar.get_simplified_name pvar in 
+      let typ_name = Typ.to_string typ in 
+      let stmt = F.sprintf "%s %s = %s;" typ_name local_name pvar_name in 
+      F.print_string stmt;
+      stmt
+    (* write *)
+    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+      ; Sil.Load (_, Exp.Lvar local, _, _)
+      ; Sil.Store _ 
+      ; Sil.Remove_temps _
+      ; Sil.Abstract _ ] -> 
+      let pvar_name = Pvar.get_simplified_name pvar in 
+      let local_name = Pvar.get_simplified_name local in 
+      let stmt = F.sprintf "%s = %s;" pvar_name local_name in 
+      F.print_string stmt;
+      stmt
+    | _ -> ""
+    in 
+    match Procdesc.Node.get_kind node with
+    | Procdesc.Node.Exit_node _ -> stmts
+    | _ -> print_nodes (List.hd_exn (Procdesc.Node.get_succs node)) (stmt::stmts)
+  in
+  let start_node = Procdesc.get_start_node proc_desc in 
+  let statements = print_nodes start_node [] in
+  F.print_string "\n";
+  statements
 
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
@@ -234,7 +271,8 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
     F.print_string "post = given post: Yes\n";
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
-    F.print_string "\n"
+    F.print_string "\n";
+    ignore(pprint_output proc_desc);
   | ImplFail _ -> 
   F.print_string "post = given post: No\n";
 
@@ -256,12 +294,11 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
   ) post.sigma;
   F.print_string "\n";
 
-  let abstract_inst = Sil.Abstract (Location.dummy) in 
   let next_instrs = List.hd queue in
   match next_instrs with 
   | None -> failwith "Nothing left in synthesis queue"
   | Some ni ->
-  let new_instrs = ni @ [abstract_inst] in 
+  let new_instrs = ni in 
 
   begin
   if !new_matches > matches then 
@@ -326,26 +363,28 @@ let synthesize proc_name exe_env procspec =
     let temp1 = Ident.create_fresh Ident.knormal in 
     let temp2 = Ident.create_fresh Ident.knormal in 
     let typ = get_typ_from_ptr_exn p_typ in 
-    [ Sil.Load (temp1, Exp.Lvar pvar, p_typ, Location.dummy);
-    Sil.Load (temp2, Exp.Var temp1, typ, Location.dummy);
-    Sil.Store (Exp.Lvar local, typ, Exp.Var temp2, Location.dummy);
-    Sil.Remove_temps ([temp1; temp2], Location.dummy) ]
+    [ Sil.Load (temp1, Exp.Lvar pvar, p_typ, Location.dummy)
+    ; Sil.Load (temp2, Exp.Var temp1, typ, Location.dummy)
+    ; Sil.Store (Exp.Lvar local, typ, Exp.Var temp2, Location.dummy)
+    ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
+    ; Sil.Abstract (Location.dummy) ]
   ) pvars local_vars in 
-  let abstract_instr = Sil.Abstract (Location.dummy) in 
 
-  let read_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
-    ((List.concat read_instrs) @ [abstract_instr]) in
-  insert_penultimate_node read_node proc_desc;
+  let read_nodes = List.rev_map ~f:(fun instrs -> 
+    Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") instrs)
+    read_instrs in
+  List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) read_nodes;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
   let possible_writes = List.concat (List.map ~f:(fun (pv, typ) -> 
     List.map ~f:(fun local -> 
       let temp1 = Ident.create_fresh Ident.knormal in 
       let temp2 = Ident.create_fresh Ident.knormal in 
-      [ Sil.Load (temp1, Exp.Lvar pv, get_typ_from_ptr_exn typ, Location.dummy);
-      Sil.Load (temp2, Exp.Lvar local, get_typ_from_ptr_exn typ, Location.dummy);
-      Sil.Store (Exp.Var temp1, get_typ_from_ptr_exn typ, Exp.Var temp2, Location.dummy);
-      Sil.Remove_temps ([temp1; temp2], Location.dummy) ]
+      [ Sil.Load (temp1, Exp.Lvar pv, get_typ_from_ptr_exn typ, Location.dummy)
+      ; Sil.Load (temp2, Exp.Lvar local, get_typ_from_ptr_exn typ, Location.dummy)
+      ; Sil.Store (Exp.Var temp1, get_typ_from_ptr_exn typ, Exp.Var temp2, Location.dummy)
+      ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
+      ; Sil.Abstract (Location.dummy) ]
     ) local_vars) pvars) in
 
   let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
@@ -398,9 +437,9 @@ let run ~arg =
   let c_prog_of_sig {Parsetree.ret_typ; id; params} = 
   let params_str = String.concat ~sep:", " 
     (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
-  "#include <stdio.h>\n" ^ 
-  ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { }\n" ^ 
-  "int main() { return 0; }" in 
+    "#include <stdio.h>\n" ^ 
+    ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { }\n" ^  
+    "int main() { return 0; }" in 
   let c_prog = c_prog_of_sig proc_sig in 
   Out_channel.write_all path_to_source ~data:c_prog;
 
