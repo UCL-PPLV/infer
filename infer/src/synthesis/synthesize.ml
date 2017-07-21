@@ -163,21 +163,36 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           String.equal p name) param_pointsto_list in
         match found_param with 
         | None -> 
-          if not (String.equal n q) then 
-            failwithf "Var %s modified in preposts but not passed in function params" p
-          else None
-        | Some (_, param, _, _) -> 
+          begin
+          let find_matching_pre = List.find ~f:(function
+            | Parsetree.Hpred_hpointsto (m, _) -> String.equal m p
+            | _ -> failwith "Case not handled - not pointsto"
+          ) non_empty_pre_sigma in 
+          match find_matching_pre with
+          | Some Parsetree.Hpred_hpointsto (_, n) -> 
+            if not (String.equal n q) then 
+              failwithf "Var %s modified in post but not passed in function params" p
+            else 
+              None
+          | None -> failwithf "Var %s exists in post but is not in pre" p
+           (* TODO: Have synthesis procedure for making new variable pointing to *)
+          | _ -> failwith "Case not handled - not pointsto"
+          end
+        | Some (_, param, _, _) ->
+          begin 
           let found_pointsto = List.find ~f:(fun (name, _, _, _) -> 
             String.equal m name) param_pointsto_list in
           match found_pointsto with 
           | None -> 
-            if not (String.equal n q) then 
-              assert false
+            if not (String.equal p m) then 
+              failwithf "Var %s pointing to %s is in post but %s does not exist in pre" p q q
+              (* TODO: Have sythesis procedure for pointing to fresh variables *)
             else None
           | Some (_, _, pointsto, typ) -> 
             Some (Prop.mk_ptsto tenv param (Sil.Eexp (pointsto, Sil.inst_none))
             (Exp.Sizeof {typ=(get_typ_from_ptr_exn typ); nbytes=None; 
               dynamic_length=None; subtype=Subtype.exact}))
+          end
         end
 
       | None -> begin
