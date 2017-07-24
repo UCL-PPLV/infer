@@ -176,7 +176,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
   let quantified_vars = List.map ~f:(function
     | Parsetree.Hpred_hpointsto (s, _) -> s
     | _ -> failwith "Case not handled - not pointsto"
-  ) non_empty_pre_sigma in
+  ) non_empty_post_sigma in
 
   (* Get alias, pointsto, and typ of each quantified variable *)
   let exp_replace_list = create_pvar_env_list actual_pre.sigma in
@@ -197,10 +197,10 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
   ) quantified_vars) in 
 
   let hpred_list = List.filter_map ~f:(ident) (List.map ~f:(function 
-    | Parsetree.Hpred_hpointsto (p, q) -> begin
+    | Parsetree.Hpred_hpointsto (p, Parsetree.Location (q)) -> begin
       let found_in_pre = List.find ~f:(function 
-        | Parsetree.Hpred_hpointsto (_, n) -> String.equal n q
-        | _ -> failwith "Case not handled - not pointsto"
+        | Parsetree.Hpred_hpointsto (_, Parsetree.Location(n)) -> String.equal n q
+        | _ -> false
       ) non_empty_pre_sigma in
       match found_in_pre with 
       | Some Parsetree.Hpred_hpointsto (m, _) -> begin
@@ -211,17 +211,17 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           begin
           let find_matching_pre = List.find ~f:(function
             | Parsetree.Hpred_hpointsto (m, _) -> String.equal m p
-            | _ -> failwith "Case not handled - not pointsto"
+            | _ -> false
           ) non_empty_pre_sigma in 
           match find_matching_pre with
-          | Some Parsetree.Hpred_hpointsto (_, n) -> 
+          | Some Parsetree.Hpred_hpointsto (_, Parsetree.Location(n)) -> 
             if not (String.equal n q) then 
               failwithf "Var %s modified in post but not passed in function params" p
             else 
               None
-          | None -> failwithf "Var %s exists in post but is not in pre" p
-           (* TODO: Have synthesis procedure for making new variable pointing to *)
-          | _ -> failwith "Case not handled - not pointsto"
+          | None -> failwithf "Var %s exists in post but is not in pre or params" p
+           
+          | _ -> failwith "Case should never be reached"
           end
         | Some (_, param, _, _) ->
           begin 
@@ -230,8 +230,8 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           match found_pointsto with 
           | None -> 
             if not (String.equal p m) then 
-              failwithf "Var %s pointing to %s is in post but %s does not exist in pre" p q q
-              (* TODO: Have sythesis procedure for pointing to fresh variables *)
+              failwithf "Var %s pointing to %s is in post but %s does not exist in pre" p q p
+              (* TODO: Have synthesis procedure for making new variable pointing to *)
             else None
           | Some (_, _, pointsto, typ) -> 
             Some (Prop.mk_ptsto tenv param (Sil.Eexp (pointsto, Sil.inst_none))
@@ -245,6 +245,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           -> String.equal q quant2) param_pointsto_list in 
         match found_in_params with
         | None -> failwithf "Var %s pointing to %s given in post but %s is not in pre" p q q
+          (* TODO: Have sythesis procedure for pointing to fresh variables *)
         | Some (_, param2, _, typ) ->
           let _, param1, _, _ = List.find_exn ~f:(fun (quant1, _, _, _) -> 
             String.equal quant1 p) param_pointsto_list in
@@ -253,8 +254,15 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
               dynamic_length=None; subtype=Subtype.exact}))
         end
         
-      | _ -> failwith "Case not handled - not pointsto"
+      | _ -> failwith "Case should never be reached"
       end
+    (* 
+    | Parsetree.Hpred_hpointsto (p, Parsetree.Int (q)) -> begin
+      Some (Prop.mk_ptsto tenv p (Sil.Eexp (Exp.Const Const.Cint(q), Sil.inst_none))
+            (Exp.Sizeof {typ=Typ.mk ({Typ.Tint, Typ.IInt}); nbytes=None; 
+              dynamic_length=None; subtype=Subtype.exact}))
+      end
+    *)
 
     | _ -> failwith "Case not handled - not pointsto"
   ) non_empty_post_sigma) in 
@@ -274,8 +282,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
   (* This section is duplicated in the initial synthesize to count initial matches *)
   let my_new_post = make_post procspec pre callbacks.Callbacks.tenv proc_desc in 
   match Prover.check_implication_for_footprint proc_name callbacks.Callbacks.tenv post my_new_post with 
-  | ImplOK (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-    frame_fld, missing_fld, frame_typ, missing_typ) -> 
+  | ImplOK _ -> 
     F.print_string "post = given post: Yes\n";
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;

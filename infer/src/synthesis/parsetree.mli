@@ -1,6 +1,10 @@
+type value = 
+| Int of int
+| Location of string
+
 type hpred = 
 | Hpred_empty
-| Hpred_hpointsto of string * string
+| Hpred_hpointsto of string * value
 
 type atom = 
 | Atom_empty

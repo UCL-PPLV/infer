@@ -9,8 +9,8 @@ let print_position outx lexbuf =
 
 let parse_with_error lexbuf =
   try Parser.start Lexer.token lexbuf with
-  | Lexer.LexerError s -> print_string ("lexer error" ^ s); exit(-1)
-  | Parser.Error -> fprintf stderr "%a: parser error\n" print_position lexbuf;
+  | Lexer.LexerError s -> fprintf stderr "Lexer error: %s\n" s; exit(-1)
+  | Parser.Error -> fprintf stderr "%a: Parser error\n" print_position lexbuf;
     exit (-1)
 
 let run (filename: string) : Parsetree.procspec option =

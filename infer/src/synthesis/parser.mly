@@ -25,7 +25,7 @@ start:
 ;
 
 proc:
-| ret_typ = RET_TYPE; id = ID; LPAREN; params = param_list; RPAREN    { {ret_typ; id; params} }
+| ret_typ = RET_TYPE; id = ID; LPAREN; params = param_list; RPAREN    { {Parsetree.ret_typ; id; params} }
 ;
 
 param_list:
@@ -35,11 +35,11 @@ param_list:
 ;
 
 param:
-| typ = TYPE; id = ID                                          { {typ; id} }
+| typ = TYPE; id = ID                                          { {Parsetree.typ; id} }
 ;
 
 prop: 
-| LBRACKET pi = pi; SEMICOLON; sigma = sigma; RBRACKET            { {pi; sigma} }
+| LBRACKET pi = pi; SEMICOLON; sigma = sigma; RBRACKET            { {Parsetree.pi; sigma} }
 ;
 
 sigma:
@@ -49,7 +49,8 @@ sigma:
 
 hpred:
 | EMP                                                        { Parsetree.Hpred_empty }
-| id1 = ID; POINTSTO; id2 = ID                               { Parsetree.Hpred_hpointsto (id1, id2) }
+| id1 = ID; POINTSTO; id2 = ID                               { Parsetree.Hpred_hpointsto (id1, Parsetree.Location (id2)) }
+| id = ID; POINTSTO; int = INT                               { Parsetree.Hpred_hpointsto (id, Parsetree.Int (int)) }
 ;
 
 /* Hpointsto Exp.t (strexp0 'inst) Exp.t */
