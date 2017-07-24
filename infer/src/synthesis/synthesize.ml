@@ -230,7 +230,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           match found_pointsto with 
           | None -> 
             if not (String.equal p m) then 
-              failwithf "Var %s pointing to %s is in post but %s does not exist in pre" p q p
+              failwithf "Var %s pointing to %s is in post but var %s holding %s is not in passed in params" p q m q
               (* TODO: Have synthesis procedure for making new variable pointing to *)
             else None
           | Some (_, _, pointsto, typ) -> 
@@ -241,8 +241,8 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
         end
 
       | None -> begin
-        let found_in_params = List.find ~f:(fun (quant2, _, _, _) 
-          -> String.equal q quant2) param_pointsto_list in 
+        let found_in_params = List.find ~f:(fun (quant2, _, _, _) -> 
+          String.equal q quant2) param_pointsto_list in 
         match found_in_params with
         | None -> failwithf "Var %s pointing to %s given in post but %s is not in pre" p q q
           (* TODO: Have sythesis procedure for pointing to fresh variables *)
@@ -256,13 +256,32 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
         
       | _ -> failwith "Case should never be reached"
       end
-    (* 
+    
     | Parsetree.Hpred_hpointsto (p, Parsetree.Int (q)) -> begin
-      Some (Prop.mk_ptsto tenv p (Sil.Eexp (Exp.Const Const.Cint(q), Sil.inst_none))
-            (Exp.Sizeof {typ=Typ.mk ({Typ.Tint, Typ.IInt}); nbytes=None; 
+      let found_in_params = List.find ~f:(fun (name, _, _, _) ->
+        String.equal p name) param_pointsto_list in 
+      match found_in_params with 
+      | None -> 
+        begin
+        let found_in_pre = List.find ~f:(function
+          | Parsetree.Hpred_hpointsto (m, Parsetree.Int(n)) ->
+            String.equal m p && phys_equal n q
+          | _ -> false
+        ) non_empty_pre_sigma in 
+        match found_in_pre with
+        | None -> failwithf "Var %s is in post but is not in params" p
+          (* TODO: Have synthesis procedure for making new variable pointing to *)
+        | Some _ ->  None
+        end
+      | Some (_, param, _, _) ->
+        Some (Prop.mk_ptsto tenv param (Sil.Eexp (
+          (Exp.Const (Const.Cint (IntLit.of_int(q)))), Sil.inst_none)) 
+            (Exp.Sizeof {typ=(Typ.mk (Typ.Tint (Typ.IInt))); nbytes=None;
               dynamic_length=None; subtype=Subtype.exact}))
+
+
       end
-    *)
+   
 
     | _ -> failwith "Case not handled - not pointsto"
   ) non_empty_post_sigma) in 
