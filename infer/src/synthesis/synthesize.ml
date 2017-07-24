@@ -104,7 +104,7 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
       ; Sil.Abstract _ ] -> 
       let pvar_name = Pvar.get_simplified_name pvar in 
       let local_name = Pvar.get_simplified_name local in 
-      let stmt = F.sprintf "%s = %s;" pvar_name local_name in 
+      let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
       stmt
     | _ -> ""
     in 
@@ -203,7 +203,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
         | _ -> failwith "Case not handled - not pointsto"
       ) non_empty_pre_sigma in
       match found_in_pre with 
-      | Some Parsetree.Hpred_hpointsto (m, n) -> begin
+      | Some Parsetree.Hpred_hpointsto (m, _) -> begin
         let found_param = List.find ~f:(fun (name, _, _, _) ->
           String.equal p name) param_pointsto_list in
         match found_param with 
@@ -249,7 +249,7 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           let _, param1, _, _ = List.find_exn ~f:(fun (quant1, _, _, _) -> 
             String.equal quant1 p) param_pointsto_list in
           Some (Prop.mk_ptsto tenv param1 (Sil.Eexp (param2, Sil.inst_none))
-            (Exp.Sizeof {typ=typ; nbytes=None; 
+            (Exp.Sizeof {typ=(get_typ_from_ptr_exn typ); nbytes=None; 
               dynamic_length=None; subtype=Subtype.exact}))
         end
         
@@ -283,6 +283,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
     pprint_output proc_desc procspec
   | ImplFail _ -> 
   F.print_string "post = given post: No\n";
+  Specs.pp_summary_text F.std_formatter summary;
 
   let new_matches = ref 0 in
   
@@ -291,13 +292,13 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
       if Sil.equal_hpred hpred1 hpred2 then 
         begin
         new_matches := !new_matches + 1;
-        F.print_string "Match found! - ";
-        F.print_string "hpred1: ";
-        Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred1;
-        F.print_string " && hpred2: ";
-        Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred2;
-        F.print_string "\n"
+        F.print_string "Match found - "
         end;
+      F.print_string "hpred actual: ";
+      Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred1;
+      F.print_string " && hpred made: ";
+      Sil.pp_hpred {Pp.text with opt = SIM_WITH_TYP} F.std_formatter hpred2;
+      F.print_string "\n"
     ) my_new_post.sigma;
   ) post.sigma;
   F.print_string "\n";
@@ -357,16 +358,19 @@ let synthesize proc_name exe_env procspec =
   let pre = Specs.Jprop.to_prop spec.pre in
 
   F.print_string "formals: ";
-  List.iter ~f:(fun f -> Mangled.pp F.std_formatter (fst f); F.print_string " ") (Procdesc.get_formals proc_desc);
+  List.iter ~f:(fun f -> 
+    Mangled.pp F.std_formatter (fst f); F.print_string " ") (Procdesc.get_formals proc_desc);
   F.print_string "\n";
   
   let exp_replace_list = create_pvar_env_list pre.sigma in
   let pvars = List.map ~f:(fun (mang, typ) -> 
-    let pvar = snd (List.find_exn ~f:(fun p -> Mangled.equal (Pvar.get_name (snd p)) mang) exp_replace_list) in
+    let pvar = snd (List.find_exn ~f:(fun p -> 
+      Mangled.equal (Pvar.get_name (snd p)) mang) exp_replace_list) in
     (pvar, typ)
   ) (Procdesc.get_formals proc_desc) in 
 
-  let local_vars = List.mapi ~f:(fun i _ -> Pvar.mk (Mangled.from_string ("l" ^ (string_of_int i))) proc_name) pvars in
+  let local_vars = List.mapi ~f:(fun i _ -> 
+    Pvar.mk (Mangled.from_string ("l" ^ (string_of_int i))) proc_name) pvars in
   let read_instrs = List.map2_exn ~f:(fun (pvar, p_typ) local -> 
     let temp1 = Ident.create_fresh Ident.knormal in 
     let temp2 = Ident.create_fresh Ident.knormal in 
@@ -389,11 +393,11 @@ let synthesize proc_name exe_env procspec =
       let temp1 = Ident.create_fresh Ident.knormal in 
       let temp2 = Ident.create_fresh Ident.knormal in 
       [ Sil.Load (temp1, Exp.Lvar pv, get_typ_from_ptr_exn typ, Location.dummy)
-      ; Sil.Load (temp2, Exp.Lvar local, get_typ_from_ptr_exn typ, Location.dummy)
-      ; Sil.Store (Exp.Var temp1, get_typ_from_ptr_exn typ, Exp.Var temp2, Location.dummy)
+      ; Sil.Load (temp2, Exp.Lvar local, typ, Location.dummy)
+      ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
       ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
       ; Sil.Abstract (Location.dummy) ]
-    ) local_vars) pvars) in
+    ) (local_vars @ (fst (List.unzip pvars)))) pvars) in
 
   let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
     [] in
