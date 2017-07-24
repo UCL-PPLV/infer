@@ -75,7 +75,14 @@ let print_node_instrs proc_desc =
   print_nodes start_node;
   F.print_string "\n"
 
-let pprint_output proc_desc = 
+let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} = 
+  let params_str = String.concat ~sep:", " 
+    (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
+  "#include <stdio.h>\n" ^ 
+  ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { \n  " ^ body ^ "\n}\n" ^  
+  "int main() { return 0; }\n"
+
+let pprint_output proc_desc (procspec: Parsetree.procspec) = 
   let rec print_nodes node stmts = 
     let stmt = match Procdesc.Node.get_instrs node with 
     (* read *)
@@ -87,8 +94,7 @@ let pprint_output proc_desc =
       let local_name = Pvar.get_simplified_name local in 
       let pvar_name = Pvar.get_simplified_name pvar in 
       let typ_name = Typ.to_string typ in 
-      let stmt = F.sprintf "%s %s = %s;" typ_name local_name pvar_name in 
-      F.print_string stmt;
+      let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
       stmt
     (* write *)
     | [ Sil.Load (_, Exp.Lvar pvar, _, _)
@@ -99,18 +105,20 @@ let pprint_output proc_desc =
       let pvar_name = Pvar.get_simplified_name pvar in 
       let local_name = Pvar.get_simplified_name local in 
       let stmt = F.sprintf "%s = %s;" pvar_name local_name in 
-      F.print_string stmt;
       stmt
     | _ -> ""
     in 
     match Procdesc.Node.get_kind node with
     | Procdesc.Node.Exit_node _ -> stmts
+    | Procdesc.Node.Start_node _ -> print_nodes (List.hd_exn (Procdesc.Node.get_succs node)) (stmts)
     | _ -> print_nodes (List.hd_exn (Procdesc.Node.get_succs node)) (stmt::stmts)
   in
   let start_node = Procdesc.get_start_node proc_desc in 
-  let statements = print_nodes start_node [] in
+  let statements = List.rev (print_nodes start_node []) in
   F.print_string "\n";
-  statements
+  let statements_str = String.concat ~sep:"\n  " statements in
+  let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
+  c_prog_str
 
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
@@ -272,7 +280,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
     F.print_string "\n";
-    ignore(pprint_output proc_desc);
+    pprint_output proc_desc procspec
   | ImplFail _ -> 
   F.print_string "post = given post: No\n";
 
@@ -409,7 +417,8 @@ let synthesize proc_name exe_env procspec =
     F.print_string "post = given post: Yes\n";
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
-    F.print_string "\n"
+    F.print_string "\n";
+    failwith "Nothing to synthesize"
   | ImplFail _ -> 
   F.print_string "post = given post: No\n";
 
@@ -424,8 +433,6 @@ let synthesize proc_name exe_env procspec =
   ) post.sigma;
   F.print_string "\n";
 
-  F.printf "INITIAL MATCHES: %d\n" !new_matches;
-  
   synthesize_writes callbacks procspec possible_writes !new_matches
 
 let run ~arg = 
@@ -434,13 +441,7 @@ let run ~arg =
   | None -> failwith "Input file is empty"
   | Some procspec -> 
   let proc_sig = procspec.proc in
-  let c_prog_of_sig {Parsetree.ret_typ; id; params} = 
-  let params_str = String.concat ~sep:", " 
-    (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
-    "#include <stdio.h>\n" ^ 
-    ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { }\n" ^  
-    "int main() { return 0; }" in 
-  let c_prog = c_prog_of_sig proc_sig in 
+    let c_prog = c_prog_of_sig proc_sig in 
   Out_channel.write_all path_to_source ~data:c_prog;
 
   ClangWrapper.exe ~prog:"clang" ~args:[path_to_source];
@@ -457,7 +458,12 @@ let run ~arg =
     String.equal (Typ.Procname.to_string pn) proc_sig.id) procs_to_analyze with
   | None -> failwith ("No proc found with name " ^ proc_sig.id)
   | Some proc_name ->
-  synthesize proc_name exe_env procspec
+  let c_prog_str = synthesize proc_name exe_env procspec in 
+  let out_path = (Str.string_before arg 
+    (Str.search_backward (Str.regexp_string "/") arg (String.length arg)))
+      ^ "/result.c" in 
+  F.printf "Synthesis result is stored in %s \n" out_path;
+  Out_channel.write_all ~data:c_prog_str out_path
   
 
   
