@@ -60,16 +60,6 @@ type path_pos = Typ.Procname.t * int [@@deriving compare]
 
 let equal_path_pos = [%compare.equal : path_pos]
 
-type taint_kind =
-  | Tk_unverified_SSL_socket
-  | Tk_shared_preferences_data
-  | Tk_privacy_annotation
-  | Tk_integrity_annotation
-  | Tk_unknown
-  [@@deriving compare]
-
-type taint_info = {taint_source: Typ.Procname.t; taint_kind: taint_kind} [@@deriving compare]
-
 (** acquire/release action on a resource *)
 type res_action =
   { ra_kind: res_act_kind  (** kind of action *)
@@ -108,9 +98,6 @@ type t =
   | Aautorelease
   | Adangling of dangling_kind  (** dangling pointer *)
   | Aundef of Typ.Procname.t * _annot_item * _location * _path_pos
-      (** undefined value obtained by calling the given procedure, plus its return value annots *)
-  | Ataint of taint_info
-  | Auntaint of taint_info
   | Alocked
   | Aunlocked
   | Adiv0 of path_pos  (** value appeared in second argument of division at given path position *)
@@ -121,6 +108,7 @@ type t =
   | Aobserver  (** denotes an object registered as an observers to a notification center *)
   | Aunsubscribed_observer
       (** denotes an object unsubscribed from observers of a notification center *)
+  | Awont_leak  (** value do not participate in memory leak analysis *)
   [@@deriving compare]
 
 let equal = [%compare.equal : t]
@@ -151,13 +139,13 @@ let mem_dealloc_pname = function
 type category =
   | ACresource
   | ACautorelease
-  | ACtaint
   | AClock
   | ACdiv0
   | ACobjc_null
   | ACundef
   | ACretval
   | ACobserver
+  | ACwontleak
   [@@deriving compare]
 
 let equal_category = [%compare.equal : category]
@@ -166,8 +154,6 @@ let to_category att =
   match att with
   | Aresource _ | Adangling _
    -> ACresource
-  | Ataint _ | Auntaint _
-   -> ACtaint
   | Alocked | Aunlocked
    -> AClock
   | Aautorelease
@@ -182,8 +168,12 @@ let to_category att =
    -> ACundef
   | Aobserver | Aunsubscribed_observer
    -> ACobserver
+  | Awont_leak
+   -> ACwontleak
 
 let is_undef = function Aundef _ -> true | _ -> false
+
+let is_wont_leak = function Awont_leak -> true | _ -> false
 
 (** convert the attribute to a string *)
 let to_string pe = function
@@ -236,10 +226,6 @@ let to_string pe = function
   | Aundef (pn, _, loc, _)
    -> "UND" ^ Binop.str pe Lt ^ Typ.Procname.to_string pn ^ Binop.str pe Gt ^ ":"
       ^ string_of_int loc.Location.line
-  | Ataint {taint_source}
-   -> "TAINTED[" ^ Typ.Procname.to_string taint_source ^ "]"
-  | Auntaint _
-   -> "UNTAINTED"
   | Alocked
    -> "LOCKED"
   | Aunlocked
@@ -254,6 +240,8 @@ let to_string pe = function
    -> "OBSERVER"
   | Aunsubscribed_observer
    -> "UNSUBSCRIBED_OBSERVER"
+  | Awont_leak
+   -> "WONT_LEAK"
 
 (** dump an attribute *)
 let d_attribute (a: t) = L.add_print_action (L.PTattribute, Obj.repr a)
