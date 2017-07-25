@@ -96,7 +96,7 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
       let typ_name = Typ.to_string typ in 
       let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
       stmt
-    (* write *)
+    (* write ptr *)
     | [ Sil.Load (_, Exp.Lvar pvar, _, _)
       ; Sil.Load (_, Exp.Lvar local, _, _)
       ; Sil.Store _ 
@@ -105,6 +105,15 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
       let pvar_name = Pvar.get_simplified_name pvar in 
       let local_name = Pvar.get_simplified_name local in 
       let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
+      stmt
+    (* write const *)
+    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+      ; Sil.Store (_, _, Exp.Const const, _)
+      ; Sil.Remove_temps _
+      ; Sil.Abstract _ ] ->
+      let pvar_name = Pvar.get_simplified_name pvar in
+      let const = Const.to_string const in
+      let stmt = F.sprintf "*%s = %s;" pvar_name const in
       stmt
     | _ -> ""
     in 
@@ -278,11 +287,8 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
           (Exp.Const (Const.Cint (IntLit.of_int(q)))), Sil.inst_none)) 
             (Exp.Sizeof {typ=(Typ.mk (Typ.Tint (Typ.IInt))); nbytes=None;
               dynamic_length=None; subtype=Subtype.exact}))
-
-
       end
    
-
     | _ -> failwith "Case not handled - not pointsto"
   ) non_empty_post_sigma) in 
 
@@ -300,24 +306,47 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
 
   (* This section is duplicated in the initial synthesize to count initial matches *)
   let my_new_post = make_post procspec pre callbacks.Callbacks.tenv proc_desc in 
-  match Prover.check_implication_for_footprint proc_name callbacks.Callbacks.tenv post my_new_post with 
-  | ImplOK _ -> 
+  match Prover.check_implication_for_footprint 
+    proc_name callbacks.Callbacks.tenv post my_new_post with 
+  | ImplOK (_, _, _, _, [], [], _, _, _, _) -> 
     F.print_string "post = given post: Yes\n";
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
     F.print_string "\n";
     pprint_output proc_desc procspec
+
+  | ImplOK _
+    (* (checks, sub1, sub2, frame, missing_pi, missing_sigma,
+      frame_fld, missing_fld, frame_typ, missing_typ) *)
+    (* -> F.print_string "Given post: \n";
+    Prop.pp_prop Pp.text F.std_formatter my_new_post;
+    F.print_string "\n";
+
+    F.print_string "sub1: \n";
+    List.iter ~f:(fun (id, e) -> F.printf "%s * %s\n" 
+      (Ident.to_string id) (Exp.to_string e)) (Sil.sub_to_list sub1);
+    F.print_string "sub2: \n";
+    List.iter ~f:(fun (id, e) -> F.printf "%s * %s\n" 
+      (Ident.to_string id) (Exp.to_string e)) (Sil.sub_to_list sub2);
+    F.print_string "\nframe: \n";
+    Prop.pp_sigma Pp.text F.std_formatter frame;
+    F.print_string "\nmissing pi: \n";
+    Prop.pp_pi Pp.text F.std_formatter missing_pi;
+    F.print_string "\nmissing sigma: \n"; 
+    Prop.pp_sigma Pp.text F.std_formatter missing_sigma;
+    failwith "Not empty missing pi/sigma" *)
   | ImplFail _ -> 
   F.print_string "post = given post: No\n";
-  Specs.pp_summary_text F.std_formatter summary;
 
   let new_matches = ref 0 in
+  let matched_pvar_aliases = ref [] in
   
   List.iter ~f:(fun hpred1 -> 
     List.iter ~f:(fun hpred2 ->
       if Sil.equal_hpred hpred1 hpred2 then 
         begin
         new_matches := !new_matches + 1;
+        matched_pvar_aliases := (Sil.hpred_get_lhs hpred1) :: !matched_pvar_aliases;
         F.print_string "Match found - "
         end;
       F.print_string "hpred actual: ";
@@ -327,7 +356,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
       F.print_string "\n"
     ) my_new_post.sigma;
   ) post.sigma;
-  F.print_string "\n";
+  F.print_string "\n"; 
 
   let next_instrs = List.hd queue in
   match next_instrs with 
@@ -350,11 +379,26 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
   F.print_string "Node instrs after\n";
   print_node_instrs proc_desc;
 
+  let exp_replace_list = create_pvar_env_list pre.sigma in
+  let matched_pvars = List.map ~f:(fun v -> 
+    (snd (List.find_exn ~f:(fun (e, _) -> Exp.equal e v) exp_replace_list))
+  ) !matched_pvar_aliases in
+  let rec get_new_queue queue = 
+    match List.hd queue with 
+    | None -> failwith "Nothing left in synthesis queue"
+    | Some instrs ->
+      match instrs with 
+      | Sil.Load (_, Exp.Lvar pv, _, _) :: _ -> 
+        if List.mem matched_pvars pv ~equal:Pvar.equal then get_new_queue (List.tl_exn queue)
+        else queue
+      | _ -> queue  
+  in
+  let new_queue = get_new_queue (List.tl_exn queue) in
+
   (* Recursive call to run - after the instructions have been changed *)
-  let new_queue = List.tl_exn queue in 
   synthesize_writes callbacks procspec new_queue (max !new_matches matches)
 
-let synthesize proc_name exe_env procspec = 
+let synthesize proc_name exe_env (procspec: Parsetree.procspec) = 
   let proc_name_readable = Typ.Procname.to_string proc_name in
   F.print_string ("Begin proc: " ^ proc_name_readable ^ "\n");
   let get_proc_desc proc_name = Exe_env.get_proc_desc exe_env proc_name in
@@ -414,16 +458,35 @@ let synthesize proc_name exe_env procspec =
   List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) read_nodes;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
-  let possible_writes = List.concat (List.map ~f:(fun (pv, typ) -> 
+  let constants = List.filter_map ~f:(function
+    | Parsetree.Hpred_hpointsto (_, Parsetree.Int(value)) -> 
+      Some (Const.Cint(IntLit.of_int value))
+    | _ -> None
+  ) (procspec.post.sigma @ procspec.pre.sigma) in
+
+  let constant_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
+    List.map ~f:(fun const -> 
+      let temp = Ident.create_fresh Ident.knormal in 
+      let typ = get_typ_from_ptr_exn p_typ in 
+      [ Sil.Load (temp, Exp.Lvar pv, p_typ, Location.dummy)
+      ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
+      ; Sil.Remove_temps ([temp], Location.dummy)
+      ; Sil.Abstract (Location.dummy) ]
+    ) constants) pvars) in
+
+  let pointer_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
     List.map ~f:(fun local -> 
       let temp1 = Ident.create_fresh Ident.knormal in 
       let temp2 = Ident.create_fresh Ident.knormal in 
-      [ Sil.Load (temp1, Exp.Lvar pv, get_typ_from_ptr_exn typ, Location.dummy)
+      let typ = get_typ_from_ptr_exn p_typ in 
+      [ Sil.Load (temp1, Exp.Lvar pv, p_typ, Location.dummy)
       ; Sil.Load (temp2, Exp.Lvar local, typ, Location.dummy)
       ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
       ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
       ; Sil.Abstract (Location.dummy) ]
     ) (local_vars @ (fst (List.unzip pvars)))) pvars) in
+
+  let possible_writes = constant_writes @ pointer_writes in 
 
   let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
     [] in
@@ -442,14 +505,14 @@ let synthesize proc_name exe_env procspec =
 
   (* This section is duplicated from synthesize_writes in order to get the initial number of matches *)
   let my_new_post = make_post procspec pre callbacks.Callbacks.tenv callbacks.Callbacks.proc_desc in 
-  match Prover.check_implication_for_footprint proc_name callbacks.Callbacks.tenv post my_new_post with 
-  | ImplOK _ -> 
+  match Prover.check_implication proc_name callbacks.Callbacks.tenv post my_new_post with 
+  | true -> 
     F.print_string "post = given post: Yes\n";
     F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
     F.print_string "\n";
     failwith "Nothing to synthesize"
-  | ImplFail _ -> 
+  | false -> 
   F.print_string "post = given post: No\n";
 
   let new_matches = ref 0 in
