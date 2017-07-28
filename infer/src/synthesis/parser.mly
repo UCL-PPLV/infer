@@ -9,9 +9,12 @@
 %token POINTSTO
 %token STAR
 %token AND
+%token EQ
+%token NOT
+%token GT
+%token LT
 %token EOF
 %token SEMICOLON
-%token COLON
 %token COMMA
 %token EMP
 
@@ -62,6 +65,13 @@ pi:
 
 atom: 
 | /* empty */                                                { Atom_empty }
+| NOT a = atom                                               { Atom_not (a) }
+| id1 = ID; EQ; id2 = ID                                     { Atom_eq (id1, Parsetree.Location (id2)) }
+| id1 = ID; LT; id2 = ID                                     { Atom_lt (id1, Parsetree.Location (id2)) }
+| id1 = ID; GT; id2 = ID                                     { Atom_gt (id1, Parsetree.Location (id2)) }
+| id = ID; EQ; int = INT                                     { Atom_eq (id, Parsetree.Int (int)) }
+| id = ID; LT; int = INT                                     { Atom_lt (id, Parsetree.Int (int)) }
+| id = ID; GT; int = INT                                     { Atom_gt (id, Parsetree.Int (int)) }
 ;
 
 

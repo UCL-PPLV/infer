@@ -32,9 +32,12 @@ rule token = parse
   | "]"       { RBRACKET }
   | ")"       { RPAREN }
   | ";"       { SEMICOLON }
-  | ":"       { COLON }
   | "*"       { STAR }
   | "&&"      { AND }
+  | "="       { EQ }
+  | "!"       { NOT }
+  | ">"       { GT }
+  | "<"       { LT }
   | "emp"     { EMP }
   | ret_type  { RET_TYPE (Lexing.lexeme lexbuf) }
   | type      { TYPE (Lexing.lexeme lexbuf) }
