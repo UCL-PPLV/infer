@@ -171,12 +171,16 @@ let get_typ_from_ptr_exn (ptr_typ: Typ.t) = match ptr_typ.desc with
   | Tptr (t, _) -> t 
   | _ -> failwith "Not a pointer type"
 
-let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) tenv proc_desc = 
+let (initial_post: Prop.normal Prop.t ref) = ref Prop.prop_emp
+
+let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) (actual_post: Prop.normal Prop.t) tenv proc_desc = 
   let raw_pre = procspec.pre in 
   let raw_post = procspec.post in
   let filter_emp_hpreds = List.filter ~f:(function
     | Parsetree.Hpred_empty -> false
     | _ -> true) in
+
+  (* Construct Spatial part *)
   let non_empty_post_sigma = filter_emp_hpreds raw_post.sigma in 
   match non_empty_post_sigma with 
   | [] -> F.printf "Making empty post\n"; Prop.expose Prop.prop_emp
@@ -291,8 +295,87 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) te
    
     | _ -> failwith "Case not handled - not pointsto"
   ) non_empty_post_sigma) in 
+  let prop = Prop.from_sigma hpred_list in 
 
-  Prop.from_sigma hpred_list
+  (* Construct Pure part *)
+  let exp_list = 
+    List.map ~f:(fun raw_atom ->
+      let rec parse_atom (atom: Parsetree.atom): Exp.t = 
+        let find_in_post_sigma s = List.find ~f:(function 
+          | Parsetree.Hpred_hpointsto (_, Parsetree.Location q) -> String.equal s q
+          | _ -> false
+        ) raw_post.sigma in 
+        match atom with
+        | Parsetree.Atom_empty -> Exp.Const (Const.Cint(IntLit.one))
+        | Parsetree.Atom_not a -> Exp.UnOp (Unop.LNot, parse_atom a, None)
+        | Parsetree.Atom_eq (a, Parsetree.Location b) 
+        | Parsetree.Atom_neq (a, Parsetree.Location b) -> 
+          begin
+          match find_in_post_sigma a with 
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, Parsetree.Location _) -> 
+            begin
+            match find_in_post_sigma b with 
+            | None -> failwith "Not found"
+            | Some Parsetree.Hpred_hpointsto (y, Parsetree.Location _) ->
+              let exp_replace_list = create_pvar_env_list actual_pre.sigma in 
+              let val_of_a = 
+                find_pointsto (fst (find_exp_replacement x exp_replace_list)) actual_post.sigma in 
+              let val_of_b = 
+                find_pointsto (fst (find_exp_replacement y exp_replace_list)) actual_post.sigma in
+              begin
+              match atom with 
+              | Parsetree.Atom_eq _ ->
+                Exp.BinOp (Binop.Eq, val_of_a, val_of_b)
+              | Parsetree.Atom_neq _ ->
+                Exp.BinOp (Binop.Ne, val_of_a, val_of_b)
+              | _ -> failwith "Unreachable"
+              end
+              
+            | _ -> failwith "Unsupported 1"
+            end
+          | _ -> failwith "Unsupported 2"
+          end 
+        | Parsetree.Atom_eq (a, Parsetree.Int b) 
+        | Parsetree.Atom_neq (a, Parsetree.Int b) -> 
+          begin
+          match find_in_post_sigma a with
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, _) ->
+            let val_of_a = 
+              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
+            begin 
+            match atom with 
+            | Parsetree.Atom_eq _ -> 
+              Exp.BinOp (Binop.Eq, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+            | Parsetree.Atom_neq _ -> 
+              Exp.BinOp (Binop.Ne, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+            | _ -> failwith "Unreachable"
+            end
+          | _ -> failwith "Unsupported 3"
+          end
+        | Parsetree.Atom_lt (a, Parsetree.Int b) -> 
+          begin
+          match find_in_post_sigma a with
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, _) ->
+            let val_of_a = 
+              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
+            Exp.BinOp (Binop.Lt, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+          | _ -> failwith "Unsupported 4"
+          end
+        | _ -> failwith "Unsupported 5"
+      in
+      parse_atom raw_atom
+    ) raw_post.pi
+  in 
+  let atom_list = List.map ~f:(fun exp ->
+    Sil.Aeq (exp, Exp.Const (Const.Cint(IntLit.one)))
+  ) exp_list in 
+  let my_post = Prop.set ~pi:atom_list prop in 
+  Prop.pp_prop Pp.text F.std_formatter my_post;
+  my_post
+  
 
 let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matches =
   let proc_desc = callbacks.Callbacks.proc_desc in 
@@ -305,7 +388,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
   let pre = Specs.Jprop.to_prop (List.hd_exn specs).Specs.pre in 
 
   (* This section is duplicated in the initial synthesize to count initial matches *)
-  let my_new_post = make_post procspec pre callbacks.Callbacks.tenv proc_desc in 
+  let my_new_post = make_post procspec pre post callbacks.Callbacks.tenv proc_desc in 
   match Prover.check_implication_for_footprint 
     proc_name callbacks.Callbacks.tenv post my_new_post with 
   | ImplOK (_, _, _, _, [], [], _, _, _, _) -> 
@@ -317,8 +400,8 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
 
   | ImplOK _
     (* (checks, sub1, sub2, frame, missing_pi, missing_sigma,
-      frame_fld, missing_fld, frame_typ, missing_typ) *)
-    (* -> F.print_string "Given post: \n";
+      frame_fld, missing_fld, frame_typ, missing_typ) -> 
+    F.print_string "Given post: \n";
     Prop.pp_prop Pp.text F.std_formatter my_new_post;
     F.print_string "\n";
 
@@ -385,7 +468,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
   ) !matched_pvar_aliases in
   let rec get_new_queue queue = 
     match List.hd queue with 
-    | None -> failwith "Nothing left in synthesis queue"
+    | None -> failwith "Nothing left in queue"
     | Some instrs ->
       match instrs with 
       | Sil.Load (_, Exp.Lvar pv, _, _) :: _ -> 
@@ -393,7 +476,7 @@ let rec synthesize_writes callbacks procspec (queue: Sil.instr list list) matche
         else queue
       | _ -> queue  
   in
-  let new_queue = get_new_queue (List.tl_exn queue) in
+  let new_queue = (* get_new_queue *) (List.tl_exn queue) in
 
   (* Recursive call to run - after the instructions have been changed *)
   synthesize_writes callbacks procspec new_queue (max !new_matches matches)
@@ -417,7 +500,6 @@ let synthesize proc_name exe_env (procspec: Parsetree.procspec) =
   let new_summary = Interproc.analyze_procedure { get_proc_desc; 
     get_procs_in_file; idenv; tenv; summary; proc_desc; } in
   let specs = Specs.get_specs_from_payload new_summary in
-  print_specs specs;
 
   let num_specs = List.length specs in
   if num_specs > 1 then failwith "Too many specs!";
@@ -458,11 +540,17 @@ let synthesize proc_name exe_env (procspec: Parsetree.procspec) =
   List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) read_nodes;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
-  let constants = List.filter_map ~f:(function
+  let sigma_constants = List.filter_map ~f:(function
     | Parsetree.Hpred_hpointsto (_, Parsetree.Int(value)) -> 
       Some (Const.Cint(IntLit.of_int value))
     | _ -> None
-  ) (procspec.post.sigma @ procspec.pre.sigma) in
+  ) procspec.post.sigma in
+
+  let pi_constants = List.filter_map ~f:(function
+    | Parsetree.Atom_eq (_, Parsetree.Int(value)) ->
+      Some (Const.Cint(IntLit.of_int value))
+    | _ -> None
+  ) procspec.post.pi in 
 
   let constant_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
     List.map ~f:(fun const -> 
@@ -472,7 +560,7 @@ let synthesize proc_name exe_env (procspec: Parsetree.procspec) =
       ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
       ; Sil.Remove_temps ([temp], Location.dummy)
       ; Sil.Abstract (Location.dummy) ]
-    ) constants) pvars) in
+    ) sigma_constants) pvars) in
 
   let pointer_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
     List.map ~f:(fun local -> 
@@ -486,7 +574,9 @@ let synthesize proc_name exe_env (procspec: Parsetree.procspec) =
       ; Sil.Abstract (Location.dummy) ]
     ) (local_vars @ (fst (List.unzip pvars)))) pvars) in
 
-  let possible_writes = constant_writes @ pointer_writes in 
+  F.printf "Length of constant_writes: %d" (List.length constant_writes);
+
+  let possible_writes = pointer_writes @ constant_writes in 
 
   let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
     [] in
@@ -502,9 +592,10 @@ let synthesize proc_name exe_env (procspec: Parsetree.procspec) =
   let specs = Specs.get_specs_from_payload (Interproc.analyze_procedure callbacks) in
   let pre = Specs.Jprop.to_prop (List.hd_exn specs).Specs.pre in 
   let post = fst (List.hd_exn (List.hd_exn specs).Specs.posts) in 
+  initial_post := post;
 
   (* This section is duplicated from synthesize_writes in order to get the initial number of matches *)
-  let my_new_post = make_post procspec pre callbacks.Callbacks.tenv callbacks.Callbacks.proc_desc in 
+  let my_new_post = make_post procspec pre post callbacks.Callbacks.tenv callbacks.Callbacks.proc_desc in 
   match Prover.check_implication proc_name callbacks.Callbacks.tenv post my_new_post with 
   | true -> 
     F.print_string "post = given post: Yes\n";

@@ -10,6 +10,7 @@ type atom =
 | Atom_empty
 | Atom_not of atom
 | Atom_eq of string * value 
+| Atom_neq of string * value 
 | Atom_lt of string * value
 | Atom_gt of string * value
 

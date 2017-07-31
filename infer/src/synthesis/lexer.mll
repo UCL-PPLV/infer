@@ -35,6 +35,7 @@ rule token = parse
   | "*"       { STAR }
   | "&&"      { AND }
   | "="       { EQ }
+  | "!="      { NEQ }
   | "!"       { NOT }
   | ">"       { GT }
   | "<"       { LT }
