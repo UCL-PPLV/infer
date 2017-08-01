@@ -27,7 +27,7 @@ type mode =
   | XcodeXcpretty of string * string list
   [@@deriving compare]
 
-val equal_driver_mode : mode -> mode -> bool
+val equal_mode : mode -> mode -> bool
 
 val mode_from_command_line : mode Lazy.t
 (** driver mode computed from the command-line arguments and settings in Config *)
@@ -43,3 +43,6 @@ val analyze_and_report : changed_files:SourceFile.Set.t option -> mode -> unit
 
 val run_epilogue : mode -> unit
 (** cleanup infer-out/ for Buck, generate stats, and generally post-process the results of a run *)
+
+val read_config_changed_files : unit -> SourceFile.Set.t option
+(** return the list of changed files as read from Config.changed_files_index and passed to SourceFile.changed_sources_from_changed_files *)

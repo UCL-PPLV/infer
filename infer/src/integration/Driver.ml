@@ -77,9 +77,9 @@ type mode =
   | XcodeXcpretty of string * string list
   [@@deriving compare]
 
-let equal_driver_mode = [%compare.equal : mode]
+let equal_mode = [%compare.equal : mode]
 
-let pp_driver_mode fmt driver_mode =
+let pp_mode fmt mode =
   let log_argfile_arg fname =
     try
       F.fprintf fmt "-- Contents of '%s'@\n" fname ;
@@ -87,7 +87,7 @@ let pp_driver_mode fmt driver_mode =
       F.fprintf fmt "-- /Contents of '%s'@." fname
     with exn -> F.fprintf fmt "  Error reading file '%s':@\n  %a@." fname Exn.pp exn
   in
-  match driver_mode with
+  match mode with
   | Analyze
   | BuckGenrule _
   | BuckCompilationDB _
@@ -117,8 +117,8 @@ let pp_driver_mode fmt driver_mode =
 
 (* A clean command for each driver mode to be suggested to the user
    in case nothing got captured. *)
-let clean_compilation_command driver_mode =
-  match driver_mode with
+let clean_compilation_command mode =
+  match mode with
   | BuckCompilationDB (prog, _) | Clang (_, prog, _)
    -> Some (prog ^ " clean")
   | XcodeXcpretty (prog, args)
@@ -178,8 +178,8 @@ let clean_results_dir () =
   in
   clean Config.results_dir
 
-let check_captured_empty driver_mode =
-  let clean_command_opt = clean_compilation_command driver_mode in
+let check_captured_empty mode =
+  let clean_command_opt = clean_compilation_command mode in
   (* if merge is passed, the captured folder will be empty at this point,
      but will be filled later on. *)
   if Utils.directory_is_empty Config.captured_dir && not Config.merge then (
@@ -216,7 +216,19 @@ let touch_start_file_unless_continue () =
   if not (Sys.file_exists start = `Yes) then create ()
   else if not Config.continue_capture then ( delete () ; create () )
 
-let run_command ~prog ~args cleanup =
+exception Infer_error of string
+
+let default_error_handling : Unix.Exit_or_signal.t -> unit = function
+  | Ok _
+   -> ()
+  | Error _ as status when Config.keep_going
+   -> (* Log error and proceed past the failure when keep going mode is on *)
+      L.external_error "%s" (Unix.Exit_or_signal.to_string_hum status) ;
+      ()
+  | Error _ as status
+   -> raise (Infer_error (Unix.Exit_or_signal.to_string_hum status))
+
+let run_command ?(cleanup= default_error_handling) ~prog ~args () =
   Unix.waitpid (Unix.fork_exec ~prog ~argv:(prog :: args) ())
   |> fun status ->
   cleanup status ;
@@ -316,13 +328,17 @@ let capture ~changed_files = function
                    Buck.add_flavors_to_buck_command build_cmd
                else build_cmd ) )
       in
-      run_command ~prog:infer_py ~args (function
-        | Result.Error `Exit_non_zero exit_code
-         -> if Int.equal exit_code Config.infer_py_argparse_error_exit_code then
-              (* swallow infer.py argument parsing error *)
-              Config.print_usage_exit ()
-        | _
-         -> () )
+      run_command ~prog:infer_py ~args
+        ~cleanup:(function
+            | Error `Exit_non_zero exit_code
+              when Int.equal exit_code Config.infer_py_argparse_error_exit_code
+             -> (* swallow infer.py argument parsing error *)
+                Config.print_usage_exit ()
+            | Error _ as status
+             -> raise (Infer_error (Unix.Exit_or_signal.to_string_hum status))
+            | Ok _
+             -> ())
+        ()
   | XcodeXcpretty (prog, args)
    -> L.progress "Capturing using xcodebuild and xcpretty...@." ;
       check_xcpretty () ;
@@ -331,22 +347,23 @@ let capture ~changed_files = function
       in
       capture_with_compilation_database ~changed_files json_cdb
 
-let run_parallel_analysis ~changed_files =
+let run_parallel_analysis ~changed_files : unit =
   let multicore_dir = Config.results_dir ^/ Config.multicore_dir_name in
   Utils.rmtree multicore_dir ;
   Unix.mkdir_p multicore_dir ;
   InferAnalyze.main ~changed_files ~makefile:(multicore_dir ^/ "Makefile") ;
   run_command ~prog:"make"
     ~args:
-      ( "-C"
+      ( "--directory"
         :: multicore_dir
-           :: "-k"
-              :: "-j"
+           :: (if Config.keep_going then "--keep-going" else "--no-keep-going")
+              :: "--jobs"
                  :: string_of_int Config.jobs
                     :: Option.value_map
-                         ~f:(fun l -> ["-l"; string_of_float l])
+                         ~f:(fun l -> ["--load-average"; string_of_float l])
                          ~default:[] Config.load_average
-      @ if Config.debug_mode then [] else ["-s"] ) (fun _ -> () )
+      @ if Config.debug_mode then [] else ["--silent"] )
+    ()
 
 let execute_analyze ~changed_files =
   if Int.equal Config.jobs 1 || Config.cluster_cmdline <> None then
@@ -357,8 +374,8 @@ let report () =
   let report_csv =
     if Config.buck_cache_mode then None else Some (Config.results_dir ^/ "report.csv")
   in
-  let report_json = Some Config.(results_dir ^/ report_json) in
-  InferPrint.main ~report_csv ~report_json ;
+  let report_json = Config.(results_dir ^/ report_json) in
+  InferPrint.main ~report_csv ~report_json:(Some report_json) ;
   (* Post-process the report according to the user config. By default, calls report.py to create a
      human-readable report.
 
@@ -369,20 +386,27 @@ let report () =
   | false, Some prog
    -> let if_some key opt args = match opt with None -> args | Some arg -> key :: arg :: args in
       let if_true key opt args = if not opt then args else key :: args in
+      let bugs_txt = Option.value ~default:(Config.results_dir ^/ "bugs.txt") Config.bugs_txt in
       let args =
-        if_some "--issues-csv" report_csv @@ if_some "--issues-json" report_json
-        @@ if_some "--issues-txt" Config.bugs_txt
+        if_some "--issues-csv" report_csv
         @@ if_true "--pmd-xml" Config.pmd_xml
-             ["--project-root"; Config.project_root; "--results-dir"; Config.results_dir]
+             [ "--issues-json"
+             ; report_json
+             ; "--issues-txt"
+             ; bugs_txt
+             ; "--project-root"
+             ; Config.project_root
+             ; "--results-dir"
+             ; Config.results_dir ]
       in
       if is_error (Unix.waitpid (Unix.fork_exec ~prog ~argv:(prog :: args) ())) then
         L.external_error
           "** Error running the reporting script:@\n**   %s %s@\n** See error above@." prog
           (String.concat ~sep:" " args)
 
-let analyze_and_report ~changed_files driver_mode =
+let analyze_and_report ~changed_files mode =
   let should_analyze, should_report =
-    match (driver_mode, Config.analyzer) with
+    match (mode, Config.analyzer) with
     | PythonCapture (BBuck, _), _
      -> (* In Buck mode when compilation db is not used, analysis is invoked either from capture or
            a separate Analyze invocation is necessary, depending on the buck flavor used. *)
@@ -398,7 +422,7 @@ let analyze_and_report ~changed_files driver_mode =
      -> (false, true)
   in
   if (should_analyze || should_report)
-     && (Sys.file_exists Config.captured_dir <> `Yes || check_captured_empty driver_mode)
+     && (Sys.file_exists Config.captured_dir <> `Yes || check_captured_empty mode)
   then L.user_error "There was nothing to analyze.@\n@."
   else if should_analyze then execute_analyze ~changed_files ;
   if should_report && Config.report then report ()
@@ -415,14 +439,14 @@ let fail_on_issue_epilogue () =
   | Error error
    -> L.internal_error "Failed to read report file '%s': %s@." issues_json error ; ()
 
-let log_infer_args driver_mode =
+let log_infer_args mode =
   L.environment_info "INFER_ARGS = %s@\n"
     (Option.value (Sys.getenv CLOpt.args_env_var) ~default:"<not found>") ;
   List.iter ~f:(L.environment_info "anon arg: %s@\n") Config.anon_args ;
   List.iter ~f:(L.environment_info "rest arg: %s@\n") Config.rest ;
   L.environment_info "Project root = %s@\n" Config.project_root ;
   L.environment_info "CWD = %s@\n" (Sys.getcwd ()) ;
-  L.environment_info "Driver mode:@\n%a@." pp_driver_mode driver_mode
+  L.environment_info "Driver mode:@\n%a@." pp_mode mode
 
 let assert_supported_mode required_analyzer requested_mode_string =
   let analyzer_enabled =
@@ -471,7 +495,7 @@ let assert_supported_build_system build_system =
   | BAnalyze
    -> ()
 
-let driver_mode_of_build_cmd build_cmd =
+let mode_of_build_command build_cmd =
   match build_cmd with
   | []
    -> if not (List.is_empty !Config.clang_compilation_dbs) then (
@@ -503,18 +527,6 @@ let driver_mode_of_build_cmd build_cmd =
       | BAnt | BBuck | BGradle | BNdk | BXcode as build_system
        -> PythonCapture (build_system, build_cmd)
 
-let get_driver_mode () =
-  match Config.generated_classes with
-  | _ when Config.maven
-   -> (* infer is pretending to be javac in the Maven integration *)
-      let build_args = match Array.to_list Sys.argv with _ :: args -> args | [] -> [] in
-      Javac (Javac.Javac, "javac", build_args)
-  | Some path
-   -> assert_supported_mode `Java "Buck genrule" ;
-      BuckGenrule path
-  | None
-   -> driver_mode_of_build_cmd (List.rev Config.rest)
-
 let mode_from_command_line =
   ( lazy
   ( match Config.generated_classes with
@@ -526,11 +538,11 @@ let mode_from_command_line =
    -> assert_supported_mode `Java "Buck genrule" ;
       BuckGenrule path
   | None
-   -> driver_mode_of_build_cmd (List.rev Config.rest) ) )
+   -> mode_of_build_command (List.rev Config.rest) ) )
 
-let run_prologue driver_mode =
+let run_prologue mode =
   if CLOpt.is_originator then L.environment_info "%a@\n" Config.pp_version () ;
-  if Config.debug_mode || Config.stats_mode then log_infer_args driver_mode ;
+  if Config.debug_mode || Config.stats_mode then log_infer_args mode ;
   if Config.dump_duplicate_symbols then reset_duplicates_file () ;
   (* infer might be called from a Makefile and itself uses `make` to run the analysis in parallel,
      but cannot communicate with the parent make command. Since infer won't interfere with them
@@ -541,12 +553,24 @@ let run_prologue driver_mode =
   if not Config.buck_cache_mode then touch_start_file_unless_continue () ;
   ()
 
-let run_epilogue driver_mode =
+let run_epilogue mode =
   ( if CLOpt.is_originator then
-      let in_buck_mode = match driver_mode with PythonCapture (BBuck, _) -> true | _ -> false in
+      let in_buck_mode = match mode with PythonCapture (BBuck, _) -> true | _ -> false in
       StatsAggregator.generate_files () ;
       if Config.equal_analyzer Config.analyzer Config.Crashcontext then
         Crashcontext.crashcontext_epilogue ~in_buck_mode ;
-      if Config.fail_on_bug then fail_on_issue_epilogue () ) ;
+      if CLOpt.(equal_command Run) Config.command && Config.fail_on_bug then
+        fail_on_issue_epilogue () ) ;
   if Config.buck_cache_mode then clean_results_dir () ;
   ()
+
+let read_config_changed_files () =
+  match Config.changed_files_index with
+  | None
+   -> None
+  | Some index ->
+    match Utils.read_file index with
+    | Ok lines
+     -> Some (SourceFile.changed_sources_from_changed_files lines)
+    | Error error
+     -> L.external_error "Error reading the changed files index '%s': %s@." index error ; None

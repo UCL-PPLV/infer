@@ -762,7 +762,7 @@ and bugs_tests =
 and bugs_txt =
   CLOpt.mk_path_opt ~deprecated:["bugs_txt"] ~long:"issues-txt"
     ~in_help:CLOpt.([(Report, manual_generic)])
-    ~meta:"file" "Write a list of issues in text format to $(i,file)"
+    ~meta:"file" "Write a list of issues in text format to $(i,file) (default: infer-out/bugs.txt)"
 
 and calls_csv =
   CLOpt.mk_path_opt ~deprecated:["calls"] ~long:"calls-csv"
@@ -771,7 +771,7 @@ and calls_csv =
 
 and changed_files_index =
   CLOpt.mk_path_opt ~long:"changed-files-index"
-    ~in_help:CLOpt.([(Analyze, manual_generic)])
+    ~in_help:CLOpt.([(Analyze, manual_generic); (Diff, manual_generic)])
     ~meta:"file"
     "Specify the file containing the list of source files from which reactive analysis should start. Source files should be specified relative to project root or be absolute"
 
@@ -1918,6 +1918,8 @@ and debug_exceptions = !debug_exceptions
 
 and debug_mode = !debug
 
+and default_checkers = !default_checkers
+
 and default_linters = !default_linters
 
 and dependency_mode = !dependencies
@@ -2101,7 +2103,7 @@ and quandary_sinks = !quandary_sinks
 
 and quiet = !quiet
 
-and reactive_mode = !reactive
+and reactive_mode = !reactive || CLOpt.(equal_command Diff) command
 
 and reactive_capture = !reactive_capture
 

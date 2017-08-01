@@ -44,22 +44,20 @@ let save_report revision =
   report_name
 
 let diff driver_mode =
+  Driver.run_prologue driver_mode ;
+  let changed_files = Driver.read_config_changed_files () in
   (* TODO(t15553258) run gen-build script if specified *)
   (* run capture *)
-  Driver.capture driver_mode ~changed_files:None ;
-  (* run analysis TODO(t15553258) add --reactive and --changed_files_index *)
-  Driver.analyze_and_report driver_mode ~changed_files:None ;
+  Driver.capture driver_mode ~changed_files ;
+  Driver.analyze_and_report driver_mode ~changed_files ;
   let current_report = Some (save_report Current) in
   (* TODO(t15553258) bail if nothing to analyze (configurable, some people might care about bugs
      fixed more than about time to analyze) *)
   checkout Previous ;
   (* TODO(t15553258) run gen-build script if specified *)
-  (* run capture TODO(t15553258) add --reactive and --continue *)
-  Driver.capture driver_mode ~changed_files:None ;
-  (* run analysis TODO(t15553258) add --reactive and --changed_files_index *)
-  Driver.analyze_and_report driver_mode ~changed_files:None ;
+  Driver.capture driver_mode ~changed_files ;
+  Driver.analyze_and_report driver_mode ~changed_files ;
   checkout Current ;
   let previous_report = Some (save_report Previous) in
   (* compute differential *)
-  ReportDiff.reportdiff ~current_report ~previous_report ; (* TODO(t15553258) report new bugs! *)
-                                                           ()
+  ReportDiff.reportdiff ~current_report ~previous_report ; Driver.run_epilogue driver_mode ; ()
