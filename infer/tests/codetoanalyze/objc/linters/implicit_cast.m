@@ -51,4 +51,22 @@ extern NSString* const key;
   func_with_integer_param(self.p);
 }
 
+typedef NS_ENUM(NSUInteger, MyEnum) {
+  MyEnumItem,
+};
+
+- (void)enum_param:(MyEnum)s {
+}
+
+- (void)call_with_string {
+  [self enum_param:@"s"];
+}
+
+- (void)param_int:(int)s {
+}
+
+- (void)call_with_boxed_int {
+  [self param_int:@0];
+}
+
 @end

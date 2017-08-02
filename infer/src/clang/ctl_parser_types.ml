@@ -69,6 +69,15 @@ let rec ast_node_name an =
           match decl_ref.dr_name with Some name -> name.ni_name | None -> ""
       in
       ast_node_name (Stmt stmt) ^ "." ^ property_str
+  | Stmt StringLiteral (_, _, _, s)
+   -> s
+  | Stmt ObjCStringLiteral (_, [stmt], _)
+   -> "@" ^ ast_node_name (Stmt stmt)
+  | Stmt ObjCBoxedExpr (_, [stmt], _, objc_boxed_expr_info)
+   -> let selector =
+        match objc_boxed_expr_info.obei_boxing_method with Some sel -> sel | None -> ""
+      in
+      selector ^ ast_node_name (Stmt stmt)
   | _
    -> ""
 

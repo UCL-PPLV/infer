@@ -902,14 +902,14 @@ let add_constraints_on_retval tenv pdesc prop ret_exp ~has_nullable_annot typ ca
       (* TODO: (t7147096) extend this to detect mutual recursion *)
       Typ.Procname.equal pname (Procdesc.get_proc_name pdesc)
     in
-    let already_has_abduced_retval p abduced_ret_pv =
-      List.exists
+    let lookup_abduced_expression p abduced_ret_pv =
+      List.find_map
         ~f:(fun hpred ->
           match hpred with
-          | Sil.Hpointsto (Exp.Lvar pv, _, _)
-           -> Pvar.equal pv abduced_ret_pv
+          | Sil.Hpointsto (Exp.Lvar pv, _, exp) when Pvar.equal pv abduced_ret_pv
+           -> Some exp
           | _
-           -> false)
+           -> None)
         p.Prop.sigma_fp
     in
     (* find an hpred [abduced] |-> A in [prop] and add [exp] = A to prop *)
@@ -931,19 +931,24 @@ let add_constraints_on_retval tenv pdesc prop ret_exp ~has_nullable_annot typ ca
     in
     if Config.angelic_execution && not (is_rec_call callee_pname) then
       (* introduce a fresh program variable to allow abduction on the return value *)
-      let abduced_ret_pv = Pvar.mk_abduced_ret callee_pname callee_loc in
-      (* prevent introducing multiple abduced retvals for a single call site in a loop *)
-      if already_has_abduced_retval prop abduced_ret_pv then prop
-      else
-        let prop' =
-          if !Config.footprint then
-            let prop', fresh_fp_var = add_to_footprint tenv abduced_ret_pv typ prop in
-            Prop.conjoin_eq tenv ~footprint:true ret_exp fresh_fp_var prop'
-          else
-            (* bind return id to the abduced value pointed to by the pvar we introduced *)
-            bind_exp_to_abduced_val ret_exp abduced_ret_pv prop
+      let prop_with_abduced_var =
+        let abduced_ret_pv =
+          (* in Java, always re-use the same abduced ret var to prevent false alarms with repeated method calls *)
+          let loc = if Typ.Procname.is_java callee_pname then Location.dummy else callee_loc in
+          Pvar.mk_abduced_ret callee_pname loc
         in
-        add_ret_non_null ret_exp typ prop'
+        if !Config.footprint then
+          match lookup_abduced_expression prop abduced_ret_pv with
+          | None
+           -> let p, fp_var = add_to_footprint tenv abduced_ret_pv typ prop in
+              Prop.conjoin_eq tenv ~footprint:true ret_exp fp_var p
+          | Some exp
+           -> Prop.conjoin_eq tenv ~footprint:true ret_exp exp prop
+        else
+          (* bind return id to the abduced value pointed to by the pvar we introduced *)
+          bind_exp_to_abduced_val ret_exp abduced_ret_pv prop
+      in
+      add_ret_non_null ret_exp typ prop_with_abduced_var
     else add_ret_non_null ret_exp typ prop
 
 let execute_load ?(report_deref_errors= true) pname pdesc tenv id rhs_exp typ loc prop_ =
@@ -1668,24 +1673,6 @@ and proc_call callee_summary
     {Builtin.pdesc; tenv; prop_= pre; path; ret_id; args= actual_pars; loc} =
   let caller_pname = Procdesc.get_proc_name pdesc in
   let callee_pname = Specs.get_proc_name callee_summary in
-  let ret_typ = Specs.get_ret_type callee_summary in
-  let check_return_value_ignored () =
-    (* check if the return value of the call is ignored, and issue a warning *)
-    let is_ignored =
-      match (ret_typ.Typ.desc, ret_id) with
-      | Typ.Tvoid, _
-       -> false
-      | _, None
-       -> true
-      | _, Some (id, _)
-       -> Errdesc.id_is_assigned_then_dead (State.get_node ()) id
-    in
-    if is_ignored && is_none (Specs.get_flag callee_summary ProcAttributes.proc_flag_ignore_return)
-    then
-      let err_desc = Localise.desc_return_value_ignored callee_pname loc in
-      let exn = Exceptions.Return_value_ignored (err_desc, __POS__) in
-      Reporting.log_warning_deprecated caller_pname exn
-  in
   check_inherently_dangerous_function caller_pname callee_pname ;
   let formal_types = List.map ~f:snd (Specs.get_formals callee_summary) in
   let rec comb actual_pars formal_types =
@@ -1717,12 +1704,11 @@ and proc_call callee_summary
         L.d_ln () ;
         raise (Exceptions.Wrong_argument_number __POS__)
   in
-  let actual_params = comb actual_pars formal_types in
   (* Actual parameters are associated to their formal
        parameter type if there are enough formal parameters, and
        to their actual type otherwise. The latter case happens
        with variable - arguments functions *)
-  check_return_value_ignored () ;
+  let actual_params = comb actual_pars formal_types in
   (* In case we call an objc instance method we add and extra spec *)
   (* were the receiver is null and the semantics of the call is nop*)
   (* let callee_attrs = Specs.get_attributes callee_summary in *)
