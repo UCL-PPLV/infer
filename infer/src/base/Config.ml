@@ -566,7 +566,7 @@ and analyzer =
     ~in_help:CLOpt.([(Analyze, manual_generic); (Run, manual_generic)])
     {|Specify which analyzer to run (only one at a time is supported):
 - $(b,infer): run the bi-abduction based checker, in particular to check for memory errors (activated by default)
-- $(b,checkers), $(b,eradicate): run the specified analysis
+- $(b,checkers): run the checkers
 - $(b,capture): similar to specifying the $(b,capture) subcommand (DEPRECATED)
 - $(b,compile): similar to specifying the $(b,compile) subcommand (DEPRECATED)
 - $(b,crashcontext): experimental (see $(b,--crashcontext))
@@ -1125,6 +1125,12 @@ and frontend_debug =
 and frontend_stats =
   CLOpt.mk_bool ~deprecated:["fs"] ~deprecated_no:["nfs"] ~long:"frontend-stats"
     "Output statistics about the capture phase to *.o.astlog (clang only)"
+
+and gen_previous_build_command_script =
+  CLOpt.mk_string_opt ~long:"gen-previous-build-command-script"
+    ~in_help:CLOpt.([(Diff, manual_generic)])
+    ~meta:"shell"
+    "Specify a script that outputs the build command to capture in the previous version of the project. The script should output the command on stdout. For example \"echo make\"."
 
 and generated_classes =
   CLOpt.mk_path_opt ~long:"generated-classes"
@@ -1865,6 +1871,8 @@ and bufferoverrun = !bufferoverrun
 and bugs_csv = !bugs_csv
 
 and frontend_tests = !frontend_tests
+
+and gen_previous_build_command_script = !gen_previous_build_command_script
 
 and generated_classes = !generated_classes
 

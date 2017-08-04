@@ -24,6 +24,7 @@ BUILD_SYSTEMS_TESTS += \
   clang_with_MD_flag \
   delete_results_dir \
   diff \
+  diff_gen_build_script \
   fail_on_issue \
   j1 \
   linters \
@@ -38,7 +39,7 @@ DIRECT_TESTS += \
   cpp_bufferoverrun cpp_errors cpp_frontend  cpp_liveness cpp_quandary cpp_siof cpp_threadsafety \
 
 ifneq ($(BUCK),no)
-BUILD_SYSTEMS_TESTS += buck-clang-db buck_flavors buck_flavors_deterministic
+BUILD_SYSTEMS_TESTS += buck-clang-db buck_flavors buck_flavors_run buck_flavors_deterministic
 endif
 ifneq ($(CMAKE),no)
 BUILD_SYSTEMS_TESTS += clang_compilation_db cmake inferconfig

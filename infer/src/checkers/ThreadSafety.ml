@@ -73,7 +73,10 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     and is_cpp_unlock =
       let matcher =
         QualifiedCppName.Match.of_fuzzy_qual_names
-          ["std::mutex::unlock"; "std::unique_lock::unlock"]
+          [ "std::mutex::unlock"
+          ; "std::unique_lock::unlock"
+          ; "std::lock_guard::~lock_guard"
+          ; "std::unique_lock::~unique_lock" ]
       in
       fun pname ->
         QualifiedCppName.Match.match_qualifiers matcher (Typ.Procname.get_qualifiers pname)
@@ -858,7 +861,8 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
        -> astate
 end
 
-module Analyzer = AbstractInterpreter.Make (ProcCfg.Normal) (LowerHil.Make (TransferFunctions))
+module Analyzer =
+  AbstractInterpreter.Make (ProcCfg.Normal) (LowerHil.MakeDefault (TransferFunctions))
 
 (* similarly, we assume that immutable classes safely encapsulate their state *)
 let is_immutable_collection_class class_name tenv =
@@ -1002,28 +1006,8 @@ let analyze_procedure {Callbacks.proc_desc; tenv; summary} =
           try AttributeMapDomain.find return_var_ap attribute_map
           with Not_found -> AttributeSetDomain.empty
         in
-        (* A hack for modeling lock_guard by releasing a
-             lock at the end of the procedure, as destructors are not modeled yet *)
-        let update_locks =
-          match Procdesc.get_proc_name proc_desc with
-          | ObjC_Cpp _ when locks
-           -> let matcher =
-                QualifiedCppName.Match.of_fuzzy_qual_names ["std::lock_guard"; "std::unique_lock"]
-              in
-              (* Unlock, if the procedure contains a local field
-                   of type std::lock_guard or std::unique_lock *)
-              not
-                (List.exists (Procdesc.get_locals proc_desc) ~f:(fun (_, ft) ->
-                     Option.exists (Typ.name ft) ~f:(fun name ->
-                         QualifiedCppName.Match.match_qualifiers matcher (Typ.Name.qual_name name)
-                     ) ))
-          | _
-           -> locks
-        in
         let escapee_formals = FormalsDomain.of_escapees escapees in
-        let post =
-          (thumbs_up, threads, update_locks, accesses, return_attributes, escapee_formals)
-        in
+        let post = (thumbs_up, threads, locks, accesses, return_attributes, escapee_formals) in
         Summary.update_summary post summary
     | None
      -> summary )
@@ -1497,12 +1481,12 @@ let may_alias tenv p1 p2 =
   | FieldAccess f1, FieldAccess f2
    -> Typ.Fieldname.equal f1 f2
   (* if arrays of objects that have an inheritance rel then they can alias *)
-  | ( ArrayAccess {desc= Tptr ({desc= Tstruct tn1}, _)}
-    , ArrayAccess {desc= Tptr ({desc= Tstruct tn2}, _)} )
+  | ( ArrayAccess ({desc= Tptr ({desc= Tstruct tn1}, _)}, _)
+    , ArrayAccess ({desc= Tptr ({desc= Tstruct tn2}, _)}, _) )
    -> if sound then PatternMatch.is_subtype tenv tn1 tn2 || PatternMatch.is_subtype tenv tn2 tn1
       else may_alias_container tenv p1 p2
   (* primitive type arrays can alias if the prim. type is the same *)
-  | ArrayAccess t1, ArrayAccess t2
+  | ArrayAccess (t1, _), ArrayAccess (t2, _)
    -> if sound then equal_desc t1.desc t2.desc else may_alias_container tenv p1 p2
 
 (* take a results table and quotient it by the may_alias relation *)

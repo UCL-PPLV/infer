@@ -309,6 +309,7 @@ let capture ~changed_files = function
                    -> ["-l"; string_of_float l] )
           @ (if not Config.pmd_xml then [] else ["--pmd-xml"])
           @ ["--project-root"; Config.project_root]
+          @ (if not Config.quiet then [] else ["--quiet"])
           @ (if not Config.reactive_mode then [] else ["--reactive"])
           @ "--out"
             :: Config.results_dir
@@ -370,7 +371,7 @@ let execute_analyze ~changed_files =
     InferAnalyze.main ~changed_files ~makefile:""
   else run_parallel_analysis ~changed_files
 
-let report () =
+let report ?(suppress_console= false) () =
   let report_csv =
     if Config.buck_cache_mode then None else Some (Config.results_dir ^/ "report.csv")
   in
@@ -379,8 +380,8 @@ let report () =
   (* Post-process the report according to the user config. By default, calls report.py to create a
      human-readable report.
 
-     Do not bother calling the report hook when called from within Buck or in quiet mode. *)
-  match (Config.quiet || Config.buck_cache_mode, Config.report_hook) with
+     Do not bother calling the report hook when called from within Buck. *)
+  match (Config.buck_cache_mode, Config.report_hook) with
   | true, _ | false, None
    -> ()
   | false, Some prog
@@ -388,8 +389,8 @@ let report () =
       let if_true key opt args = if not opt then args else key :: args in
       let bugs_txt = Option.value ~default:(Config.results_dir ^/ "bugs.txt") Config.bugs_txt in
       let args =
-        if_some "--issues-csv" report_csv
-        @@ if_true "--pmd-xml" Config.pmd_xml
+        if_some "--issues-csv" report_csv @@ if_true "--pmd-xml" Config.pmd_xml
+        @@ if_true "--quiet" (Config.quiet || suppress_console)
              [ "--issues-json"
              ; report_json
              ; "--issues-txt"
@@ -404,12 +405,11 @@ let report () =
           "** Error running the reporting script:@\n**   %s %s@\n** See error above@." prog
           (String.concat ~sep:" " args)
 
-let analyze_and_report ~changed_files mode =
+let analyze_and_report ?suppress_console_report ~changed_files mode =
   let should_analyze, should_report =
     match (mode, Config.analyzer) with
-    | PythonCapture (BBuck, _), _
-     -> (* In Buck mode when compilation db is not used, analysis is invoked either from capture or
-           a separate Analyze invocation is necessary, depending on the buck flavor used. *)
+    | PythonCapture (BBuck, _), _ when not Config.flavors
+     -> (* In Buck mode when compilation db is not used, analysis is invoked from capture if buck flavors are not used *)
         (false, false)
     | _ when Config.maven
      -> (* Called from Maven, only do capture. *)
@@ -421,11 +421,20 @@ let analyze_and_report ~changed_files mode =
     | _, Linters
      -> (false, true)
   in
+  let should_merge =
+    match mode with
+    | PythonCapture (BBuck, _) when Config.flavors && CLOpt.(equal_command Run) Config.command
+     -> (* if doing capture + analysis of buck with flavors, we always need to merge targets before the analysis phase *)
+        true
+    | _
+     -> (* else rely on the command line value *) Config.merge
+  in
+  if should_merge then MergeCapture.merge_captured_targets () ;
   if (should_analyze || should_report)
      && (Sys.file_exists Config.captured_dir <> `Yes || check_captured_empty mode)
   then L.user_error "There was nothing to analyze.@\n@."
   else if should_analyze then execute_analyze ~changed_files ;
-  if should_report && Config.report then report ()
+  if should_report && Config.report then report ?suppress_console:suppress_console_report ()
 
 (** as the Config.fail_on_bug flag mandates, exit with error when an issue is reported *)
 let fail_on_issue_epilogue () =

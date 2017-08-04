@@ -32,13 +32,17 @@ val equal_mode : mode -> mode -> bool
 val mode_from_command_line : mode Lazy.t
 (** driver mode computed from the command-line arguments and settings in Config *)
 
+val mode_of_build_command : string list -> mode
+(** driver mode computed from the build command alone, eg [["buck"; "build"; ...]] gives [PythonCapture (BBuck, ["buck"; "build"; ...])] *)
+
 val run_prologue : mode -> unit
 (** prepare the environment for running the given mode *)
 
 val capture : changed_files:SourceFile.Set.t option -> mode -> unit
 (** run the capture for the given mode *)
 
-val analyze_and_report : changed_files:SourceFile.Set.t option -> mode -> unit
+val analyze_and_report :
+  ?suppress_console_report:bool -> changed_files:SourceFile.Set.t option -> mode -> unit
 (** run the analysis for the given mode *)
 
 val run_epilogue : mode -> unit
