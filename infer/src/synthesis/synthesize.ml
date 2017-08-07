@@ -16,33 +16,15 @@ let print_pi pi =
     F.print_string " " 
   ) pi
 
-let print_specs specs = 
+let print_specs specs =
   List.iter ~f:(fun (s: Prop.normal Specs.spec) -> 
-    let joined_pre = s.pre in
-    let pre = Specs.Jprop.to_prop joined_pre in
-    let sigma = pre.sigma
-    and pi = pre.pi
-    and sigma_fp = pre.sigma_fp
-    and pi_fp = pre.pi_fp in
-    F.print_string "pre: \n";
-    F.print_string "sigma: \n";
-    print_sigma sigma;
-    F.print_string "\npi: \n";
-    print_pi pi;
-    F.print_string "\nsigma_fp: \n";
-    print_sigma sigma_fp;
-    F.print_string "\npi_fp: \n";
-    print_pi pi_fp;
-    F.print_string "\n";
-
-    let posts = s.posts in 
-    List.iter ~f:(fun (p: Prop.normal Prop.t * Paths.Path.t) -> 
-      let post = fst p in 
-      let sigma = post.sigma
-      and pi = post.pi
-      and sigma_fp = post.sigma_fp
-      and pi_fp = post.pi_fp in
-      F.print_string "post: \n";
+      let joined_pre = s.pre in
+      let pre = Specs.Jprop.to_prop joined_pre in
+      let sigma = pre.sigma
+      and pi = pre.pi
+      and sigma_fp = pre.sigma_fp
+      and pi_fp = pre.pi_fp in
+      F.print_string "pre: \n";
       F.print_string "sigma: \n";
       print_sigma sigma;
       F.print_string "\npi: \n";
@@ -52,9 +34,27 @@ let print_specs specs =
       F.print_string "\npi_fp: \n";
       print_pi pi_fp;
       F.print_string "\n";
-    ) posts;
-  ) specs
 
+      let posts = s.posts in 
+      List.iter ~f:(fun (p: Prop.normal Prop.t * Paths.Path.t) -> 
+          let post = fst p in 
+          let sigma = post.sigma
+          and pi = post.pi
+          and sigma_fp = post.sigma_fp
+          and pi_fp = post.pi_fp in
+          F.print_string "post: \n";
+          F.print_string "sigma: \n";
+          print_sigma sigma;
+          F.print_string "\npi: \n";
+          print_pi pi;
+          F.print_string "\nsigma_fp: \n";
+          print_sigma sigma_fp;
+          F.print_string "\npi_fp: \n";
+          print_pi pi_fp;
+          F.print_string "\n";
+        ) posts;
+    ) specs
+    
 let print_node_instrs proc_desc = 
   let rec print_nodes node = 
     Procdesc.Node.pp_instrs Pp.text ~sub_instrs:true None F.std_formatter node;
@@ -75,6 +75,7 @@ let print_node_instrs proc_desc =
   print_nodes start_node;
   F.print_string "\n"
 
+
 let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} = 
   let params_str = String.concat ~sep:", " 
     (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
@@ -85,37 +86,37 @@ let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} =
 let pprint_output proc_desc (procspec: Parsetree.procspec) = 
   let rec print_nodes node stmts = 
     let stmt = match Procdesc.Node.get_instrs node with 
-    (* read *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Load (_, _, _, _)
-      ; Sil.Store (Exp.Lvar local, typ, _, _) 
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] ->
-      let local_name = Pvar.get_simplified_name local in 
-      let pvar_name = Pvar.get_simplified_name pvar in 
-      let typ_name = Typ.to_string typ in 
-      let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
-      stmt
-    (* write ptr *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Load (_, Exp.Lvar local, _, _)
-      ; Sil.Store _ 
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] -> 
-      let pvar_name = Pvar.get_simplified_name pvar in 
-      let local_name = Pvar.get_simplified_name local in 
-      let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
-      stmt
-    (* write const *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Store (_, _, Exp.Const const, _)
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] ->
-      let pvar_name = Pvar.get_simplified_name pvar in
-      let const = Const.to_string const in
-      let stmt = F.sprintf "*%s = %s;" pvar_name const in
-      stmt
-    | _ -> ""
+      (* read *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Load (_, _, _, _)
+        ; Sil.Store (Exp.Lvar local, typ, _, _) 
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] ->
+          let local_name = Pvar.get_simplified_name local in 
+          let pvar_name = Pvar.get_simplified_name pvar in 
+          let typ_name = Typ.to_string typ in 
+          let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
+          stmt
+      (* write ptr *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Load (_, Exp.Lvar local, _, _)
+        ; Sil.Store _ 
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] -> 
+          let pvar_name = Pvar.get_simplified_name pvar in 
+          let local_name = Pvar.get_simplified_name local in 
+          let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
+          stmt
+      (* write const *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Store (_, _, Exp.Const const, _)
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] ->
+          let pvar_name = Pvar.get_simplified_name pvar in
+          let const = Const.to_string const in
+          let stmt = F.sprintf "*%s = %s;" pvar_name const in
+          stmt
+      | _ -> ""
     in 
     match Procdesc.Node.get_kind node with
     | Procdesc.Node.Exit_node _ -> stmts
@@ -128,7 +129,7 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
   let statements_str = String.concat ~sep:"\n  " statements in
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
-
+    
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   let env = ref [] in
@@ -173,7 +174,87 @@ let get_typ_from_ptr_exn (ptr_typ: Typ.t) = match ptr_typ.desc with
 
 let (initial_post: Prop.normal Prop.t ref) = ref Prop.prop_emp
 
-let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) (actual_post: Prop.normal Prop.t) tenv proc_desc = 
+(* Construct Pure part *)
+let pure_part (raw_post : Parsetree.a_prop)
+    (actual_pre: Prop.normal Prop.t)
+    (actual_post: Prop.normal Prop.t)
+    exp_replace_list = 
+    List.map ~f:(fun raw_atom ->
+      let rec parse_atom (atom: Parsetree.atom): Exp.t = 
+        let find_in_post_sigma s = List.find ~f:(function 
+          | Parsetree.Hpred_hpointsto (_, Parsetree.Location q) -> String.equal s q
+          | _ -> false
+        ) raw_post.sigma in 
+        match atom with
+
+        | Parsetree.Atom_empty -> Exp.Const (Const.Cint(IntLit.one))
+        | Parsetree.Atom_not a -> Exp.UnOp (Unop.LNot, parse_atom a, None)
+        | Parsetree.Atom_eq (a, Parsetree.Location b) 
+        | Parsetree.Atom_neq (a, Parsetree.Location b) -> 
+          begin
+          match find_in_post_sigma a with 
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, Parsetree.Location _) -> 
+            begin
+            match find_in_post_sigma b with 
+            | None -> failwith "Not found"
+            | Some Parsetree.Hpred_hpointsto (y, Parsetree.Location _) ->
+              let exp_replace_list = create_pvar_env_list actual_pre.sigma in 
+              let val_of_a = 
+                find_pointsto (fst (find_exp_replacement x exp_replace_list)) actual_post.sigma in 
+              let val_of_b = 
+                find_pointsto (fst (find_exp_replacement y exp_replace_list)) actual_post.sigma in
+              begin
+              match atom with 
+              | Parsetree.Atom_eq _ ->
+                Exp.BinOp (Binop.Eq, val_of_a, val_of_b)
+              | Parsetree.Atom_neq _ ->
+                Exp.BinOp (Binop.Ne, val_of_a, val_of_b)
+              | _ -> failwith "Unreachable"
+              end
+              
+            | _ -> failwith "Unsupported 1"
+            end
+          | _ -> failwith "Unsupported 2"
+          end 
+        | Parsetree.Atom_eq (a, Parsetree.Int b) 
+        | Parsetree.Atom_neq (a, Parsetree.Int b) -> 
+          begin
+          match find_in_post_sigma a with
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, _) ->
+            let val_of_a = 
+              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
+            begin 
+            match atom with 
+            | Parsetree.Atom_eq _ -> 
+              Exp.BinOp (Binop.Eq, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+            | Parsetree.Atom_neq _ -> 
+              Exp.BinOp (Binop.Ne, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+            | _ -> failwith "Unreachable"
+            end
+          | _ -> failwith "Unsupported 3"
+          end
+        | Parsetree.Atom_lt (a, Parsetree.Int b) -> 
+          begin
+          match find_in_post_sigma a with
+          | None -> failwith "Not found"
+          | Some Parsetree.Hpred_hpointsto (x, _) ->
+            let val_of_a = 
+              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
+            Exp.BinOp (Binop.Lt, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
+          | _ -> failwith "Unsupported 4"
+          end
+        | _ -> failwith "Unsupported 5"
+      in
+      parse_atom raw_atom
+    ) raw_post.pi
+
+(* Make the postcondition *)
+let make_post (procspec: Parsetree.procspec)
+    (actual_pre: Prop.normal Prop.t)
+    (actual_post: Prop.normal Prop.t) tenv proc_desc = 
+
   let raw_pre = procspec.pre in 
   let raw_post = procspec.post in
   let filter_emp_hpreds = List.filter ~f:(function
@@ -185,30 +266,31 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) (a
   match non_empty_post_sigma with 
   | [] -> F.printf "Making empty post\n"; Prop.expose Prop.prop_emp
   | _ -> 
-  let non_empty_pre_sigma = filter_emp_hpreds raw_pre.sigma in
-  let quantified_vars = List.map ~f:(function
-    | Parsetree.Hpred_hpointsto (s, _) -> s
-    | _ -> failwith "Case not handled - not pointsto"
-  ) non_empty_post_sigma in
+      let non_empty_pre_sigma = filter_emp_hpreds raw_pre.sigma in
+      let quantified_vars = List.map ~f:(function
+          | Parsetree.Hpred_hpointsto (s, _) -> s
+          | _ -> failwith "Case not handled - not pointsto"
+        ) non_empty_post_sigma in
 
   (* Get alias, pointsto, and typ of each quantified variable *)
-  let exp_replace_list = create_pvar_env_list actual_pre.sigma in
-  let pvars = List.map ~f:(fun (mang, typ) -> 
-    let pvar = (snd (List.find_exn ~f:(fun p -> 
-      Mangled.equal (Pvar.get_name (snd p)) mang) exp_replace_list)) in
-    (pvar, typ)
-  ) (Procdesc.get_formals proc_desc) in 
-  let param_pointsto_list = List.filter_map ~f:(ident) (List.map ~f:(fun quant -> 
-    let found_alias = List.find ~f:(fun (_, p) -> 
-      String.equal (Pvar.get_simplified_name p) quant) exp_replace_list in
-    match found_alias with 
-    | None -> None (* Prop in spec is not in proc params - ignore *)
-    | Some (param, pvar) -> 
-      let pointsto = find_pointsto param actual_pre.sigma in 
-      let typ = snd (List.find_exn ~f:(fun p -> Pvar.equal (fst p) pvar) pvars) in 
+      let exp_replace_list = create_pvar_env_list actual_pre.sigma in
+      let pvars = List.map ~f:(fun (mang, typ) -> 
+          let pvar = (snd (List.find_exn ~f:(fun p -> 
+              Mangled.equal (Pvar.get_name (snd p)) mang) exp_replace_list)) in
+          (pvar, typ)
+        ) (Procdesc.get_formals proc_desc) in 
+      let param_pointsto_list = List.filter_map ~f:(ident) (List.map ~f:(fun quant -> 
+          let found_alias = List.find ~f:(fun (_, p) -> 
+              String.equal (Pvar.get_simplified_name p) quant) exp_replace_list in
+          match found_alias with 
+          | None -> None (* Prop in spec is not in proc params - ignore *)
+          | Some (param, pvar) -> 
+              let pointsto = find_pointsto param actual_pre.sigma in 
+              let typ = snd (List.find_exn ~f:(fun p -> Pvar.equal (fst p) pvar) pvars) in 
       Some (quant, param, pointsto, typ)
-  ) quantified_vars) in 
+        ) quantified_vars) in 
 
+  (* Constructing the spatial part of the assertion *)
   let hpred_list = List.filter_map ~f:(ident) (List.map ~f:(function 
     | Parsetree.Hpred_hpointsto (p, Parsetree.Location (q)) -> begin
       let found_in_pre = List.find ~f:(function 
@@ -295,83 +377,11 @@ let make_post (procspec: Parsetree.procspec) (actual_pre: Prop.normal Prop.t) (a
    
     | _ -> failwith "Case not handled - not pointsto"
   ) non_empty_post_sigma) in 
-  let prop = Prop.from_sigma hpred_list in 
-
-  (* Construct Pure part *)
-  let exp_list = 
-    List.map ~f:(fun raw_atom ->
-      let rec parse_atom (atom: Parsetree.atom): Exp.t = 
-        let find_in_post_sigma s = List.find ~f:(function 
-          | Parsetree.Hpred_hpointsto (_, Parsetree.Location q) -> String.equal s q
-          | _ -> false
-        ) raw_post.sigma in 
-        match atom with
-        | Parsetree.Atom_empty -> Exp.Const (Const.Cint(IntLit.one))
-        | Parsetree.Atom_not a -> Exp.UnOp (Unop.LNot, parse_atom a, None)
-        | Parsetree.Atom_eq (a, Parsetree.Location b) 
-        | Parsetree.Atom_neq (a, Parsetree.Location b) -> 
-          begin
-          match find_in_post_sigma a with 
-          | None -> failwith "Not found"
-          | Some Parsetree.Hpred_hpointsto (x, Parsetree.Location _) -> 
-            begin
-            match find_in_post_sigma b with 
-            | None -> failwith "Not found"
-            | Some Parsetree.Hpred_hpointsto (y, Parsetree.Location _) ->
-              let exp_replace_list = create_pvar_env_list actual_pre.sigma in 
-              let val_of_a = 
-                find_pointsto (fst (find_exp_replacement x exp_replace_list)) actual_post.sigma in 
-              let val_of_b = 
-                find_pointsto (fst (find_exp_replacement y exp_replace_list)) actual_post.sigma in
-              begin
-              match atom with 
-              | Parsetree.Atom_eq _ ->
-                Exp.BinOp (Binop.Eq, val_of_a, val_of_b)
-              | Parsetree.Atom_neq _ ->
-                Exp.BinOp (Binop.Ne, val_of_a, val_of_b)
-              | _ -> failwith "Unreachable"
-              end
-              
-            | _ -> failwith "Unsupported 1"
-            end
-          | _ -> failwith "Unsupported 2"
-          end 
-        | Parsetree.Atom_eq (a, Parsetree.Int b) 
-        | Parsetree.Atom_neq (a, Parsetree.Int b) -> 
-          begin
-          match find_in_post_sigma a with
-          | None -> failwith "Not found"
-          | Some Parsetree.Hpred_hpointsto (x, _) ->
-            let val_of_a = 
-              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
-            begin 
-            match atom with 
-            | Parsetree.Atom_eq _ -> 
-              Exp.BinOp (Binop.Eq, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
-            | Parsetree.Atom_neq _ -> 
-              Exp.BinOp (Binop.Ne, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
-            | _ -> failwith "Unreachable"
-            end
-          | _ -> failwith "Unsupported 3"
-          end
-        | Parsetree.Atom_lt (a, Parsetree.Int b) -> 
-          begin
-          match find_in_post_sigma a with
-          | None -> failwith "Not found"
-          | Some Parsetree.Hpred_hpointsto (x, _) ->
-            let val_of_a = 
-              find_pointsto (fst (find_exp_replacement x exp_replace_list)) !initial_post.sigma in 
-            Exp.BinOp (Binop.Lt, val_of_a, Exp.Const (Const.Cint (IntLit.of_int b)))
-          | _ -> failwith "Unsupported 4"
-          end
-        | _ -> failwith "Unsupported 5"
-      in
-      parse_atom raw_atom
-    ) raw_post.pi
-  in 
+  let prop = Prop.from_sigma hpred_list in
+  let exp_list' = pure_part raw_post actual_pre actual_post exp_replace_list in 
   let atom_list = List.map ~f:(fun exp ->
     Sil.Aeq (exp, Exp.Const (Const.Cint(IntLit.one)))
-  ) exp_list in 
+  ) exp_list' in 
   let my_post = Prop.set ~pi:atom_list prop in 
   Prop.pp_prop Pp.text F.std_formatter my_post;
   my_post
@@ -624,30 +634,30 @@ let run ~arg =
   match pspec with
   | None -> failwith "Input file is empty"
   | Some procspec -> 
-  let proc_sig = procspec.proc in
-    let c_prog = c_prog_of_sig proc_sig in 
-  Out_channel.write_all path_to_source ~data:c_prog;
+      let proc_sig = procspec.proc in
+      let c_prog = c_prog_of_sig proc_sig in 
+      Out_channel.write_all path_to_source ~data:c_prog;
+      
+      ClangWrapper.exe ~prog:"clang" ~args:[path_to_source];
+      
+      let all_clusters = DB.find_source_dirs () in 
+      let one_cluster = List.hd all_clusters in
+      match one_cluster with
+      | None -> failwith "No clusters in source dir"
+      | Some cluster -> 
+          let exe_env = Exe_env.from_cluster cluster in 
+          let call_graph = Exe_env.get_cg exe_env in
+          let procs_to_analyze = Cg.get_defined_nodes call_graph in
+          match List.find ~f:(fun pn -> 
+              String.equal (Typ.Procname.to_string pn) proc_sig.id) procs_to_analyze with
+          | None -> failwith ("No proc found with name " ^ proc_sig.id)
+          | Some proc_name ->
+              let c_prog_str = synthesize proc_name exe_env procspec in 
+              let out_path = (Str.string_before arg 
+                                (Str.search_backward (Str.regexp_string "/") arg (String.length arg)))
+                             ^ "/result.c" in 
+              F.printf "Synthesis result is stored in %s \n" out_path;
+              Out_channel.write_all ~data:c_prog_str out_path
+                
 
-  ClangWrapper.exe ~prog:"clang" ~args:[path_to_source];
 
-  let all_clusters = DB.find_source_dirs () in 
-  let one_cluster = List.hd all_clusters in
-  match one_cluster with
-  | None -> failwith "No clusters in source dir"
-  | Some cluster -> 
-  let exe_env = Exe_env.from_cluster cluster in 
-  let call_graph = Exe_env.get_cg exe_env in
-  let procs_to_analyze = Cg.get_defined_nodes call_graph in
-  match List.find ~f:(fun pn -> 
-    String.equal (Typ.Procname.to_string pn) proc_sig.id) procs_to_analyze with
-  | None -> failwith ("No proc found with name " ^ proc_sig.id)
-  | Some proc_name ->
-  let c_prog_str = synthesize proc_name exe_env procspec in 
-  let out_path = (Str.string_before arg 
-    (Str.search_backward (Str.regexp_string "/") arg (String.length arg)))
-      ^ "/result.c" in 
-  F.printf "Synthesis result is stored in %s \n" out_path;
-  Out_channel.write_all ~data:c_prog_str out_path
-  
-
-  
