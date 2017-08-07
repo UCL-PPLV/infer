@@ -48,7 +48,7 @@ let colormap_red (_: Obj.t) = Red
 
 (** Default text print environment *)
 let text =
-  { opt= SIM_DEFAULT
+  { opt= SIM_WITH_TYP
   ; kind= TEXT
   ; cmap_norm= colormap_black
   ; cmap_foot= colormap_black
