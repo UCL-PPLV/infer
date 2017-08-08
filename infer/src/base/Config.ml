@@ -823,10 +823,6 @@ and continue =
     ~in_help:CLOpt.([(Analyze, manual_generic)])
     "Continue the capture for the reactive analysis, increasing the changed files/procedures. (If a procedure was changed beforehand, keep the changed marking.)"
 
-and copy_propagation =
-  CLOpt.mk_bool ~deprecated:["copy-propagation"] ~long:"copy-propagation"
-    "Perform copy-propagation on the IR"
-
 and current_to_previous_script =
   CLOpt.mk_string_opt ~long:"current-to-previous-script"
     ~in_help:CLOpt.([(Diff, manual_generic)])
@@ -1237,9 +1233,16 @@ and linters_def_file =
     ~meta:"file" "Specify the file containing linters definition (e.g. 'linters.al')"
 
 and linters_def_folder =
-  CLOpt.mk_path_list ~default:[] ~long:"linters-def-folder"
-    ~in_help:CLOpt.([(Capture, manual_clang_linters)])
-    ~meta:"dir" "Specify the folder containing linters files with extension .al"
+  let linters_def_folder =
+    CLOpt.mk_path_list ~default:[] ~long:"linters-def-folder"
+      ~in_help:CLOpt.([(Capture, manual_clang_linters)])
+      ~meta:"dir" "Specify the folder containing linters files with extension .al"
+  in
+  let _ =
+    CLOpt.mk_set linters_def_folder [] ~long:"reset-linters-def-folder"
+      "Reset the list of folders containing linters definitions to be empty (see $(b,linters-def-folder))."
+  in
+  linters_def_folder
 
 and linters_ignore_clang_failures =
   CLOpt.mk_bool ~long:"linters-ignore-clang-failures"
@@ -1926,8 +1929,6 @@ and compute_analytics = !compute_analytics
 and continue_capture = !continue
 
 and current_to_previous_script = !current_to_previous_script
-
-and copy_propagation = !copy_propagation
 
 and crashcontext = !crashcontext
 
