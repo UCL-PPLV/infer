@@ -129,6 +129,7 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
 
+
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   let env = ref [] in
@@ -139,7 +140,7 @@ let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   in
   List.iter ~f:filter sigma;
   !env
-
+(*
 (* Find the Exp that a named variable was aliased to *)
 let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list) = 
   match List.find ~f:(fun p -> String.equal (Pvar.get_simplified_name (snd p)) name) 
@@ -152,6 +153,7 @@ let find_pointsto (e: Exp.t) sigma =
   match List.find ~f:(fun h -> Exp.equal (Sil.hpred_get_lhs h) (e)) sigma with 
   | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> Exp.Var v
   | _ -> failwith "find_pointsto: No value found"
+*)
 
 let insert_penultimate_node node proc_desc = 
   let pred_nodes = Procdesc.Node.get_preds (Procdesc.get_exit_node proc_desc) in 
