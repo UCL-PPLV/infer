@@ -265,9 +265,31 @@ type t =
 let from_proc_attributes ~called_from_cfg attributes =
   if not called_from_cfg then assert false ;
   let pname_opt = Some attributes.ProcAttributes.proc_name in
-  let start_node = Node.dummy pname_opt in
-  let exit_node = Node.dummy pname_opt in
-  {attributes; nodes= []; nodes_num= 0; start_node; exit_node; loop_heads= None}
+  match pname_opt with 
+  | None -> assert false
+  | Some pname -> 
+    let start_node = 
+      { Node.id= 1
+      ; dist_exit= None
+      ; instrs= []
+      ; kind= Node.Start_node (pname)
+      ; loc= Location.dummy
+      ; pname_opt
+      ; succs= []
+      ; preds= []
+      ; exn= [] } in
+    let exit_node = 
+      { Node.id= 2
+      ; dist_exit= None
+      ; instrs= []
+      ; kind= Node.Exit_node (pname)
+      ; loc= Location.dummy
+      ; pname_opt
+      ; succs= []
+      ; preds= [start_node]
+      ; exn= [] } in
+    start_node.succs <- [exit_node];
+    {attributes; nodes=[]; nodes_num=2; start_node; exit_node; loop_heads= None}
 
 (** Compute the distance of each node to the exit node, if not computed already *)
 let compute_distance_to_exit_node pdesc =

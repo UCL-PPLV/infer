@@ -1320,6 +1320,12 @@ let analyze_procedure {Callbacks.summary; proc_desc; tenv} : Specs.summary =
   ignore (analyze_procedure_aux None tenv proc_desc) ;
   Specs.get_summary_unsafe __FILE__ proc_name
 
+let analyze_procedure_s summary proc_desc tenv : Specs.summary =
+  let proc_name = Procdesc.get_proc_name proc_desc in
+  Specs.add_summary proc_name summary ;
+  ignore (analyze_procedure_aux None tenv proc_desc) ;
+  Specs.get_summary_unsafe __FILE__ proc_name
+
 (** Create closures to perform the analysis of an exe_env *)
 let do_analysis_closures exe_env : Tasks.closure list =
   let get_calls caller_pdesc =
