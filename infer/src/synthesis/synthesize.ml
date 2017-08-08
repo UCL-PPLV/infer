@@ -16,33 +16,15 @@ let print_pi pi =
     F.print_string " " 
   ) pi
 
-let print_specs specs = 
+let print_specs specs =
   List.iter ~f:(fun (s: Prop.normal Specs.spec) -> 
-    let joined_pre = s.pre in
-    let pre = Specs.Jprop.to_prop joined_pre in
-    let sigma = pre.sigma
-    and pi = pre.pi
-    and sigma_fp = pre.sigma_fp
-    and pi_fp = pre.pi_fp in
-    F.print_string "pre: \n";
-    F.print_string "sigma: \n";
-    print_sigma sigma;
-    F.print_string "\npi: \n";
-    print_pi pi;
-    F.print_string "\nsigma_fp: \n";
-    print_sigma sigma_fp;
-    F.print_string "\npi_fp: \n";
-    print_pi pi_fp;
-    F.print_string "\n";
-
-    let posts = s.posts in 
-    List.iter ~f:(fun (p: Prop.normal Prop.t * Paths.Path.t) -> 
-      let post = fst p in 
-      let sigma = post.sigma
-      and pi = post.pi
-      and sigma_fp = post.sigma_fp
-      and pi_fp = post.pi_fp in
-      F.print_string "post: \n";
+      let joined_pre = s.pre in
+      let pre = Specs.Jprop.to_prop joined_pre in
+      let sigma = pre.sigma
+      and pi = pre.pi
+      and sigma_fp = pre.sigma_fp
+      and pi_fp = pre.pi_fp in
+      F.print_string "pre: \n";
       F.print_string "sigma: \n";
       print_sigma sigma;
       F.print_string "\npi: \n";
@@ -52,9 +34,27 @@ let print_specs specs =
       F.print_string "\npi_fp: \n";
       print_pi pi_fp;
       F.print_string "\n";
-    ) posts;
-  ) specs
 
+      let posts = s.posts in 
+      List.iter ~f:(fun (p: Prop.normal Prop.t * Paths.Path.t) -> 
+          let post = fst p in 
+          let sigma = post.sigma
+          and pi = post.pi
+          and sigma_fp = post.sigma_fp
+          and pi_fp = post.pi_fp in
+          F.print_string "post: \n";
+          F.print_string "sigma: \n";
+          print_sigma sigma;
+          F.print_string "\npi: \n";
+          print_pi pi;
+          F.print_string "\nsigma_fp: \n";
+          print_sigma sigma_fp;
+          F.print_string "\npi_fp: \n";
+          print_pi pi_fp;
+          F.print_string "\n";
+        ) posts;
+    ) specs
+    
 let print_node_instrs proc_desc = 
   let rec print_nodes node = 
     Procdesc.Node.pp_instrs Pp.text ~sub_instrs:true None F.std_formatter node;
@@ -75,6 +75,7 @@ let print_node_instrs proc_desc =
   print_nodes start_node;
   F.print_string "\n"
 
+
 let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} = 
   let params_str = String.concat ~sep:", " 
     (List.map ~f:(fun {Parsetree.typ; id} -> typ ^ " " ^ id) params) in
@@ -85,37 +86,37 @@ let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} =
 let pprint_output proc_desc (procspec: Parsetree.procspec) = 
   let rec print_nodes node stmts = 
     let stmt = match Procdesc.Node.get_instrs node with 
-    (* read *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Load (_, _, _, _)
-      ; Sil.Store (Exp.Lvar local, typ, _, _) 
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] ->
-      let local_name = Pvar.get_simplified_name local in 
-      let pvar_name = Pvar.get_simplified_name pvar in 
-      let typ_name = Typ.to_string typ in 
-      let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
-      stmt
-    (* write ptr *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Load (_, Exp.Lvar local, _, _)
-      ; Sil.Store _ 
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] -> 
-      let pvar_name = Pvar.get_simplified_name pvar in 
-      let local_name = Pvar.get_simplified_name local in 
-      let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
-      stmt
-    (* write const *)
-    | [ Sil.Load (_, Exp.Lvar pvar, _, _)
-      ; Sil.Store (_, _, Exp.Const const, _)
-      ; Sil.Remove_temps _
-      ; Sil.Abstract _ ] ->
-      let pvar_name = Pvar.get_simplified_name pvar in
-      let const = Const.to_string const in
-      let stmt = F.sprintf "*%s = %s;" pvar_name const in
-      stmt
-    | _ -> ""
+      (* read *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Load (_, _, _, _)
+        ; Sil.Store (Exp.Lvar local, typ, _, _) 
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] ->
+          let local_name = Pvar.get_simplified_name local in 
+          let pvar_name = Pvar.get_simplified_name pvar in 
+          let typ_name = Typ.to_string typ in 
+          let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in 
+          stmt
+      (* write ptr *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Load (_, Exp.Lvar local, _, _)
+        ; Sil.Store _ 
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] -> 
+          let pvar_name = Pvar.get_simplified_name pvar in 
+          let local_name = Pvar.get_simplified_name local in 
+          let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
+          stmt
+      (* write const *)
+      | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+        ; Sil.Store (_, _, Exp.Const const, _)
+        ; Sil.Remove_temps _
+        ; Sil.Abstract _ ] ->
+          let pvar_name = Pvar.get_simplified_name pvar in
+          let const = Const.to_string const in
+          let stmt = F.sprintf "*%s = %s;" pvar_name const in
+          stmt
+      | _ -> ""
     in 
     match Procdesc.Node.get_kind node with
     | Procdesc.Node.Exit_node _ -> stmts
@@ -129,7 +130,6 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
 
-
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   let env = ref [] in
@@ -140,6 +140,7 @@ let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   in
   List.iter ~f:filter sigma;
   !env
+
 (*
 (* Find the Exp that a named variable was aliased to *)
 let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list) = 
@@ -414,9 +415,9 @@ let synthesize_writes tenv proc_desc (queue: Sil.instr list list)
           | None -> None 
           | Some (_, p) -> Some p
         ) (List.map ~f:(Sil.hpred_get_lhs) best_matches) in
-        (* F.printf "\nMatched pvars: \n";
+        F.printf "\nMatched pvars: \n";
         List.iter ~f:(Pvar.pp Pp.text F.std_formatter) matched_pvars;
-        F.printf "\n"; *)
+        F.printf "\n";
         (* Filter out writes that change parts of sigma that already match *)
         let rec get_new_queue queue = 
           match List.hd queue with 
@@ -428,7 +429,7 @@ let synthesize_writes tenv proc_desc (queue: Sil.instr list list)
               else queue
             | _ -> queue  
           in
-        let new_queue = (* get_new_queue *) (List.tl_exn queue) in      
+        let new_queue = get_new_queue (List.tl_exn queue) in      
         synth_writes best_matches new_queue post
   in 
   F.printf "\nGiven Post: \n";
@@ -572,28 +573,19 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
   F.printf "\n";
 
   match Prover.check_implication_for_footprint proc_name tenv post my_new_post with
-  | ImplFail _ -> failwith "Could not unify given post and actual post"
   | ImplOK (checks, post_sub1, post_sub2, frame, missing_pi, missing_sigma,
-      frame_fld, missing_fld, frame_typ, missing_typ) -> 
-  F.printf "Post: sub1: \n";
-  List.iter ~f:(fun (i, e) -> 
-    Ident.pp Pp.text F.std_formatter i; F.printf " * "; 
-    Exp.pp F.std_formatter e; F.printf "; ") (Sil.sub_to_list post_sub1);
-  F.printf "\nPost: sub2: \n";
-  List.iter ~f:(fun (i, e) -> 
-    Ident.pp Pp.text F.std_formatter i; F.printf " * "; 
-    Exp.pp F.std_formatter e; F.printf "; ") (Sil.sub_to_list post_sub2);
-  F.printf "\nPost: Frame: \n";
-  Prop.pp_sigma Pp.text F.std_formatter frame;
-  F.printf "\nPost: missing pi: \n";
-  Prop.pp_pi Pp.text F.std_formatter missing_pi;
-  F.printf "\nPost: missing sigma: \n";
-  Prop.pp_sigma Pp.text F.std_formatter missing_sigma;
-  F.printf "\n";
-
-  match Sil.equal_exp_subst pre_sub2 post_sub2 with
-  | true -> failwith "Nothing to synthesize: pre = post"
-  | false -> 
+    frame_fld, missing_fld, frame_typ, missing_typ) 
+    when (Sil.equal_exp_subst post_sub2 Sil.exp_sub_empty) ->
+    F.printf "\nPost: Frame: \n";
+    Prop.pp_sigma Pp.text F.std_formatter frame;
+    F.printf "\nPost: missing pi: \n";
+    Prop.pp_pi Pp.text F.std_formatter missing_pi;
+    F.printf "\nPost: missing sigma: \n";
+    Prop.pp_sigma Pp.text F.std_formatter missing_sigma;
+    F.printf "\n";
+    failwith "Nothing to synthesize"
+  | ImplFail _
+  | ImplOK _ -> 
   (* let sub_common, sub_r1, sub_r2 = Sil.sub_symmetric_difference pre_sub2 post_sub2 in  *)
   let pre_sub2 = Sil.subst_of_list (Sil.sub_to_list pre_sub2) in 
   (* let post_sub2 = Sil.subst_of_list (Sil.sub_to_list post_sub2) in *) 
@@ -617,6 +609,4 @@ let run ~arg =
       ^ "/result.c" in 
   F.printf "Synthesis result is stored in %s \n" out_path;
   Out_channel.write_all ~data:c_prog_str out_path
-  
-
   
