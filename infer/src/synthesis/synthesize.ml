@@ -354,31 +354,37 @@ type rule_result = RSuccess of Sil.instr list list | RFail
 
 let write_rule pvars_locals (actual_post: Prop.normal Prop.t) 
   (given_post: Prop.exposed Prop.t): rule_result = 
-  let find_pointsto sigma = List.filter_map ~f:(fun (exp, pv) ->
-    let found_ptsto = List.find ~f:(fun hpred ->
-      match hpred with 
-      | Sil.Hpointsto (e, _, _) -> Exp.equal exp e
-      | _ -> false
-    ) sigma in 
-    match found_ptsto with 
-    | None -> None
-    | Some Sil.Hpointsto (_, Eexp (v, _), _) -> Some (pv, v)
-    | _ -> assert false (* Should be unreachable *)
-  ) (create_pvar_env_list sigma) in 
+  let find_pointsto sigma = 
+    List.filter_map ~f:(fun (exp, pv) ->
+      let found_ptsto = List.find ~f:(fun hpred ->
+        match hpred with 
+        | Sil.Hpointsto (e, _, _) -> Exp.equal exp e
+        | _ -> false
+      ) sigma in 
+      match found_ptsto with 
+      | None -> None
+      | Some Sil.Hpointsto (_, Eexp (v, _), _) -> Some (pv, v)
+      | _ -> assert false (* Should be unreachable *)
+    ) (create_pvar_env_list sigma) @ 
+    List.filter_map ~f:(function
+      | Sil.Hpointsto (Lvar pv, Eexp (Const v, _), _)  -> Some (pv, Exp.Const v)
+      | _ -> None 
+    ) sigma
+  in 
   
   let curr_ptsto = find_pointsto actual_post.sigma in 
   let desired_ptsto = find_pointsto given_post.sigma in 
 
   let ptsto_diff_list = List.filter_map ~f:(fun (pv_curr, exp_curr) ->
-    match exp_curr with 
-    | Exp.Const _ as const -> Some (pv_curr, const)
-    | _ ->
-      let found_in_desired = List.find ~f:(fun (pv_des, _) -> 
-        Pvar.equal pv_curr pv_des
-      ) desired_ptsto in 
-      match found_in_desired with 
-      | None -> None
-      | Some (_, exp_des) -> 
+    let found_in_desired = List.find ~f:(fun (pv_des, _) -> 
+      Pvar.equal pv_curr pv_des
+    ) desired_ptsto in 
+    match found_in_desired with 
+    | None -> None
+    | Some (_, exp_des) -> 
+      match exp_des with 
+      | Exp.Const _ as const -> Some (pv_curr, const)
+      | _ -> 
         if Exp.equal exp_curr exp_des then None
         else 
         let found_original_ptsto = List.find ~f:(fun (_, exp_orig) ->
@@ -395,7 +401,7 @@ let write_rule pvars_locals (actual_post: Prop.normal Prop.t)
           | Some (_, local) -> Some (pv_curr, Exp.Lvar local)
   ) curr_ptsto in 
 
-  match ptsto_diff_list  with 
+  match ptsto_diff_list with 
   | [] -> RFail 
   | diff_list -> RSuccess (
       List.map ~f:(fun (pv, exp) ->
@@ -462,47 +468,6 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
     Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") instrs
   ) read_instrs in
   List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) read_nodes;
-  Procdesc.compute_distance_to_exit_node proc_desc;
-
-  let sigma_constants = List.filter_map ~f:(function
-    | Parsetree.Hpred_hpointsto (_, Parsetree.Int(value)) -> 
-      Some (Const.Cint(IntLit.of_int value))
-    | _ -> None
-  ) procspec.post.sigma in
-
-  let pi_constants = List.filter_map ~f:(function
-    | Parsetree.Atom_eq (_, Parsetree.Int(value)) ->
-      Some (Const.Cint(IntLit.of_int value))
-    | _ -> None
-  ) procspec.post.pi in 
-
-  let constant_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
-    List.map ~f:(fun const -> 
-      let temp = Ident.create_fresh Ident.knormal in 
-      let typ = get_typ_from_ptr_exn p_typ in 
-      [ Sil.Load (temp, Exp.Lvar pv, p_typ, Location.dummy)
-      ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
-      ; Sil.Remove_temps ([temp], Location.dummy)
-      ; Sil.Abstract (Location.dummy) ]
-    ) (sigma_constants @ pi_constants)) pvars) in
-
-  let pointer_writes = List.concat (List.map ~f:(fun (pv, p_typ) -> 
-    List.map ~f:(fun local -> 
-      let temp1 = Ident.create_fresh Ident.knormal in 
-      let temp2 = Ident.create_fresh Ident.knormal in 
-      let typ = get_typ_from_ptr_exn p_typ in 
-      [ Sil.Load (temp1, Exp.Lvar pv, p_typ, Location.dummy)
-      ; Sil.Load (temp2, Exp.Lvar local, typ, Location.dummy)
-      ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
-      ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
-      ; Sil.Abstract (Location.dummy) ]
-    ) local_vars) pvars) in
-
-  let possible_writes = pointer_writes @ constant_writes in 
-
-  let write_node = Procdesc.create_node proc_desc Location.dummy 
-    (Procdesc.Node.Stmt_node "") [] in
-  insert_penultimate_node write_node proc_desc;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
   let my_new_pre, my_new_post = make_spec procspec tenv proc_name in 
@@ -584,6 +549,7 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
         Procdesc.create_node proc_desc Location.dummy 
           (Procdesc.Node.Stmt_node "")) instr_lists)
     ) slns in 
+    
     List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) 
       (List.hd_exn new_nodes); 
     (* For now, only one rule so only one set of new nodes. *)
