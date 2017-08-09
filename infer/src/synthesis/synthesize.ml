@@ -1,59 +1,6 @@
 open! IStd
 
 module F = Format
-
-let path_to_source = "/tmp/swap-proto.c" (* Should be put in /tmp/ *)
-
-let print_sigma sigma = 
-  List.iter ~f:(fun s -> 
-    Sil.pp_hpred Pp.text F.std_formatter s;
-    F.print_string " "
-  ) sigma
-
-let print_pi pi = 
-  List.iter ~f:(fun p -> 
-    Sil.pp_atom Pp.text F.std_formatter p;
-    F.print_string " " 
-  ) pi
-
-let print_specs specs =
-  List.iter ~f:(fun (s: Prop.normal Specs.spec) -> 
-      let joined_pre = s.pre in
-      let pre = Specs.Jprop.to_prop joined_pre in
-      let sigma = pre.sigma
-      and pi = pre.pi
-      and sigma_fp = pre.sigma_fp
-      and pi_fp = pre.pi_fp in
-      F.print_string "pre: \n";
-      F.print_string "sigma: \n";
-      print_sigma sigma;
-      F.print_string "\npi: \n";
-      print_pi pi;
-      F.print_string "\nsigma_fp: \n";
-      print_sigma sigma_fp;
-      F.print_string "\npi_fp: \n";
-      print_pi pi_fp;
-      F.print_string "\n";
-
-      let posts = s.posts in 
-      List.iter ~f:(fun (p: Prop.normal Prop.t * Paths.Path.t) -> 
-          let post = fst p in 
-          let sigma = post.sigma
-          and pi = post.pi
-          and sigma_fp = post.sigma_fp
-          and pi_fp = post.pi_fp in
-          F.print_string "post: \n";
-          F.print_string "sigma: \n";
-          print_sigma sigma;
-          F.print_string "\npi: \n";
-          print_pi pi;
-          F.print_string "\nsigma_fp: \n";
-          print_sigma sigma_fp;
-          F.print_string "\npi_fp: \n";
-          print_pi pi_fp;
-          F.print_string "\n";
-        ) posts;
-    ) specs
     
 let print_node_instrs proc_desc = 
   let rec print_nodes node = 
@@ -74,7 +21,6 @@ let print_node_instrs proc_desc =
   let start_node = Procdesc.get_start_node proc_desc in 
   print_nodes start_node;
   F.print_string "\n"
-
 
 let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} = 
   let params_str = String.concat ~sep:", " 
@@ -130,7 +76,7 @@ let pprint_output proc_desc (procspec: Parsetree.procspec) =
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
 
-(* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma (of a pre) *)
+(* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   let env = ref [] in
   let filter = function
@@ -140,21 +86,6 @@ let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
   in
   List.iter ~f:filter sigma;
   !env
-
-(*
-(* Find the Exp that a named variable was aliased to *)
-let find_exp_replacement (name: string) (exp_replace_list: (Exp.t * Pvar.t) list) = 
-  match List.find ~f:(fun p -> String.equal (Pvar.get_simplified_name (snd p)) name) 
-      exp_replace_list with
-  | Some pair -> pair
-  | None -> failwith "find_exp_replacement: No var of that name found"
-
-(* Find the Exp that an Exp points to in a sigma *)
-let find_pointsto (e: Exp.t) sigma = 
-  match List.find ~f:(fun h -> Exp.equal (Sil.hpred_get_lhs h) (e)) sigma with 
-  | Some Sil.Hpointsto (_, Eexp (Var v, _), _) -> Exp.Var v
-  | _ -> failwith "find_pointsto: No value found"
-*)
 
 let insert_penultimate_node node proc_desc = 
   let pred_nodes = Procdesc.Node.get_preds (Procdesc.get_exit_node proc_desc) in 
@@ -323,26 +254,13 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
   (* Post: construct spatial part *)
   let made_post_sigma = make_sigma ~primed:true raw_post.sigma in 
   
-  (*   let made_post_sigma_flt = List.filter_map ~f:(fun hpred_post ->
-    match Sil.hpred_get_lhs hpred_post with 
-    | Exp.Lvar _ -> 
-      let found_in_pre = List.find ~f:(fun hpred_pre ->
-        if Sil.equal_hpred hpred_pre hpred_post then true else false
-      ) made_pre_sigma in
-      begin
-      match found_in_pre with 
-      | Some _ -> None
-      | None -> Some hpred_post
-      end
-    | _ -> Some hpred_post
-  ) made_post_sigma in  *)
-
   (* Post: construct pure part *)
   let made_post_pi = make_pi raw_post.pi in 
 
   let made_post = Prop.set ~sigma:made_post_sigma ~pi:made_post_pi Prop.prop_emp in
   made_pre, made_post  
 
+(* Legacy: to be removed *)
 let synthesize_writes tenv proc_desc (queue: Sil.instr list list)
   (pre: Prop.exposed Prop.t) (actual_post: Prop.normal Prop.t) (given_post: Prop.exposed Prop.t) = 
   F.printf "Begin synthesize writes\n";
@@ -394,17 +312,7 @@ let synthesize_writes tenv proc_desc (queue: Sil.instr list list)
         let new_summary = Interproc.analyze_procedure_s summary proc_desc tenv in 
         let post = fst (List.hd_exn ((List.hd_exn (Specs.get_specs_from_payload new_summary)).Specs.posts)) in 
 
-        (* let nodes = Procdesc.get_nodes proc_desc in
-        let all_instrs = List.concat (List.map ~f:(Procdesc.Node.get_instrs) nodes) in 
-        let post = fst (List.hd_exn (SymExec.instrs tenv proc_desc all_instrs 
-          [((Prop.normalize tenv pre), Paths.Path.start (Procdesc.get_start_node proc_desc))])) in  *)
-        
         F.printf "\nPost: \n";
-        F.printf "\nSigma: \n";
-        Prop.pp_sigma Pp.text F.std_formatter post.sigma;
-        F.printf "\nPi: \n";
-        Prop.pp_pi Pp.text F.std_formatter post.pi;
-        F.printf "\nall: \n";
         Prop.pp_prop Pp.text F.std_formatter post;
         F.print_newline ();        
 
@@ -422,22 +330,99 @@ let synthesize_writes tenv proc_desc (queue: Sil.instr list list)
         let rec get_new_queue queue = 
           match List.hd queue with 
           | None -> failwith "Nothing left in queue"
-          | Some instrs ->
+          | Some instrs -> 
             match instrs with 
             | Sil.Load (_, Exp.Lvar pv, _, _) :: _ -> 
               if List.mem matched_pvars pv ~equal:Pvar.equal then get_new_queue (List.tl_exn queue)
-              else queue
+              else queue 
             | _ -> queue  
           in
-        let new_queue = get_new_queue (List.tl_exn queue) in      
+        let new_queue = get_new_queue (List.tl_exn queue) in 
         synth_writes best_matches new_queue post
   in 
+  F.printf "\nPre: \n";
+  Prop.pp_prop Pp.text F.std_formatter pre;
   F.printf "\nGiven Post: \n";
   Prop.pp_prop Pp.text F.std_formatter given_post;
   F.print_newline ();
   F.printf "\nActual Post: \n";
   Prop.pp_prop Pp.text F.std_formatter actual_post;
   synth_writes (sigma_matches actual_post.sigma given_post.sigma) queue actual_post
+(* End legacy section *)
+
+type rule_result = RSuccess of Sil.instr list list | RFail
+
+let write_rule pvars_locals (actual_post: Prop.normal Prop.t) 
+  (given_post: Prop.exposed Prop.t): rule_result = 
+  let find_pointsto sigma = List.filter_map ~f:(fun (exp, pv) ->
+    let found_ptsto = List.find ~f:(fun hpred ->
+      match hpred with 
+      | Sil.Hpointsto (e, _, _) -> Exp.equal exp e
+      | _ -> false
+    ) sigma in 
+    match found_ptsto with 
+    | None -> None
+    | Some Sil.Hpointsto (_, Eexp (v, _), _) -> Some (pv, v)
+    | _ -> assert false (* Should be unreachable *)
+  ) (create_pvar_env_list sigma) in 
+  
+  let curr_ptsto = find_pointsto actual_post.sigma in 
+  let desired_ptsto = find_pointsto given_post.sigma in 
+
+  let ptsto_diff_list = List.filter_map ~f:(fun (pv_curr, exp_curr) ->
+    match exp_curr with 
+    | Exp.Const _ as const -> Some (pv_curr, const)
+    | _ ->
+      let found_in_desired = List.find ~f:(fun (pv_des, _) -> 
+        Pvar.equal pv_curr pv_des
+      ) desired_ptsto in 
+      match found_in_desired with 
+      | None -> None
+      | Some (_, exp_des) -> 
+        if Exp.equal exp_curr exp_des then None
+        else 
+        let found_original_ptsto = List.find ~f:(fun (_, exp_orig) ->
+          Exp.equal exp_des exp_orig 
+        ) curr_ptsto in 
+        match found_original_ptsto with 
+        | None -> None
+        | Some (pv_orig, _) -> 
+          let pv_orig_local = List.find ~f:(fun (pv, _) ->
+            Pvar.equal pv_orig pv
+          ) pvars_locals in 
+          match pv_orig_local with 
+          | None -> None
+          | Some (_, local) -> Some (pv_curr, Exp.Lvar local)
+  ) curr_ptsto in 
+
+  match ptsto_diff_list  with 
+  | [] -> RFail 
+  | diff_list -> RSuccess (
+      List.map ~f:(fun (pv, exp) ->
+        match exp with 
+        | Exp.Const const ->
+          let temp = Ident.create_fresh Ident.knormal in 
+          let p_typ = Typ.mk (Typ.Tptr 
+            (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in 
+          let typ = get_typ_from_ptr_exn p_typ in 
+          [ Sil.Load (temp, Exp.Lvar pv, p_typ, Location.dummy)
+          ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
+          ; Sil.Remove_temps ([temp], Location.dummy)
+          ; Sil.Abstract (Location.dummy) ]
+        | Exp.Lvar local ->
+          let temp1 = Ident.create_fresh Ident.knormal in 
+          let temp2 = Ident.create_fresh Ident.knormal in 
+          let p_typ = Typ.mk (Typ.Tptr 
+            (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in 
+          let typ = get_typ_from_ptr_exn p_typ in 
+          [ Sil.Load (temp1, Exp.Lvar pv, p_typ, Location.dummy)
+          ; Sil.Load (temp2, Exp.Lvar local, typ, Location.dummy)
+          ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
+          ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
+          ; Sil.Abstract (Location.dummy) ]
+        | _ -> assert false
+      ) diff_list
+    )
 
 
 let synthesize proc_name (procspec: Parsetree.procspec) = 
@@ -472,10 +457,6 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
     ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
     ; Sil.Abstract (Location.dummy) ]
   ) pvars local_vars in 
-
-  (* let read_instrs = 
-    [Sil.Declare_locals (List.map ~f:(fun local -> 
-      (local, Typ.mk (Typ.Tint(Typ.IInt)))) local_vars, Location.dummy)] :: read_instrs in  *)
 
   let read_nodes = List.map ~f:(fun instrs -> 
     Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") instrs
@@ -519,16 +500,16 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
 
   let possible_writes = pointer_writes @ constant_writes in 
 
-  let write_node = Procdesc.create_node proc_desc Location.dummy (Procdesc.Node.Stmt_node "") 
-    [] in
+  let write_node = Procdesc.create_node proc_desc Location.dummy 
+    (Procdesc.Node.Stmt_node "") [] in
   insert_penultimate_node write_node proc_desc;
   Procdesc.compute_distance_to_exit_node proc_desc;
 
   let my_new_pre, my_new_post = make_spec procspec tenv proc_name in 
-  F.printf "My new pre: \n";
+  F.printf "Given pre: \n";
   Prop.pp_prop_with_typ Pp.text F.std_formatter (Prop.normalize tenv my_new_pre);
   F.printf "\n";
-  F.printf "My new post: \n";
+  F.printf "Given post: \n";
   Prop.pp_prop_with_typ Pp.text F.std_formatter (Prop.normalize tenv my_new_post);
   F.printf "\n";
 
@@ -562,11 +543,6 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
   F.printf "\n";
 
   let pre = Prop.set ~pi:(pre.pi @ missing_pi) pre in 
-  
-  (* let nodes = Procdesc.get_nodes proc_desc in 
-  let all_instrs = List.concat (List.map ~f:(Procdesc.Node.get_instrs) nodes) in 
-  let post = fst (List.hd_exn (SymExec.instrs tenv proc_desc all_instrs 
-    [((Prop.normalize tenv my_new_pre), Paths.Path.start (Procdesc.get_start_node proc_desc))])) in  *)
 
   F.printf "Actual post: \n";
   Prop.pp_prop_with_typ Pp.text F.std_formatter post;
@@ -584,18 +560,35 @@ let synthesize proc_name (procspec: Parsetree.procspec) =
     Prop.pp_sigma Pp.text F.std_formatter missing_sigma;
     F.printf "\n";
     failwith "Nothing to synthesize"
-  | ImplFail _
+  | ImplFail _ 
   | ImplOK _ -> 
-  (* let sub_common, sub_r1, sub_r2 = Sil.sub_symmetric_difference pre_sub2 post_sub2 in  *)
-  let pre_sub2 = Sil.subst_of_list (Sil.sub_to_list pre_sub2) in 
-  (* let post_sub2 = Sil.subst_of_list (Sil.sub_to_list post_sub2) in *) 
-  let pre = Prop.prop_sub pre_sub2 pre in
-  let post = Prop.normalize tenv (Prop.prop_sub pre_sub2 post) in
-  let my_new_post = Prop.prop_sub pre_sub2 my_new_post in 
+    let pre_sub2 = Sil.subst_of_list (Sil.sub_to_list pre_sub2) in 
+    let pre = Prop.prop_sub pre_sub2 pre in 
+    let post = Prop.normalize tenv (Prop.prop_sub pre_sub2 post) in 
+    let my_new_post = Prop.prop_sub pre_sub2 my_new_post in 
+    
+    F.printf "Given sigma (after sub): \n";
+    Prop.pp_sigma Pp.text F.std_formatter my_new_post.sigma;
+    F.printf "\nActual post sigma (after sub): \n"; 
+    Prop.pp_sigma Pp.text F.std_formatter post.sigma;
+    
+    (* Unify here: This section would be put in a loop, with post |- my_new_post as 
+       the loop condition. *) 
+    let pvars_locals = List.zip_exn (List.map ~f:(fst) pvars) local_vars in 
+    let rules = [write_rule] in (* Rules are functions from prop to rule_result *)
+    let slns = List.map ~f:(fun rule -> rule pvars_locals post my_new_post) rules in 
+    
+    let new_nodes = List.map ~f:(function 
+      | RFail -> []
+      | RSuccess instr_lists -> (List.map ~f:(
+        Procdesc.create_node proc_desc Location.dummy 
+          (Procdesc.Node.Stmt_node "")) instr_lists)
+    ) slns in 
+    List.iter ~f:(fun n -> insert_penultimate_node n proc_desc) 
+      (List.hd_exn new_nodes); 
+    (* For now, only one rule so only one set of new nodes. *)
 
-  synthesize_writes tenv proc_desc possible_writes pre post my_new_post;
-  pprint_output proc_desc procspec
-
+    pprint_output proc_desc procspec
 
 let run ~arg = 
   let pspec = ParseMain.run arg in 
