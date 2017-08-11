@@ -33,6 +33,9 @@ public class Ownership {
 
   Obj field;
 
+  public Ownership() {
+  }
+
   public Ownership(Obj o) {
     field = o;
   }
@@ -281,7 +284,7 @@ public class Ownership {
   }
 
   // TODO: need to handle multiple ownership attributes in order to get this one
-  public void FP_ownAndConditionalOwnOk() {
+  public void ownAndConditionalOwnOk() {
     Obj owned = new Obj();
     Obj shouldBeOwned = returnOwnedOrConditionalOwned(owned);
     shouldBeOwned.f = new Object();
@@ -300,7 +303,7 @@ public class Ownership {
   }
 
   // need to handle multiple ownership attributes in order to get this one
-  public void FP_twoDifferentConditionalOwnsOk() {
+  public void twoDifferentConditionalOwnsOk() {
     Obj owned1 = new Obj();
     Obj owned2 = new Obj();
     Obj shouldBeOwned = twoDifferentConditionalOwns(owned1, owned2);
@@ -428,6 +431,76 @@ public class Ownership {
     m.g = new Obj();
     m.g.g = new Obj();
     m.g.g.g = new Obj();
+  }
+
+  private void reassignParamToOwned(Obj o) {
+    o = new Obj();
+    o.f = null; // we know the reassigned o is owned, mutating is ok
+  }
+
+  Obj unownedField1;
+  void reassignParamToOwnedOk() {
+    reassignParamToOwned(this.unownedField1); // ok even though this.unownedField1 isn't owned
+  }
+
+  Obj unownedField2;
+  private void reassignParamToUnowned(Obj o) {
+    o = this.unownedField2;
+    o.f = null; // don't know that this.unownedField2 is owned
+  }
+
+  void reassignParamToUnownedBad() {
+    reassignParamToUnowned(new Obj()); // although o is owned here, it gets reassigned in the callee
+  }
+
+  void ownedViaLocalAliasOk() {
+    Obj owned = new Obj();
+    Obj alias = owned;
+    alias.f = null;
+    owned.f = new Object();
+  }
+
+  private void ownedViaParamAlias(Obj o) {
+    Obj alias = o;
+    alias.f = null; // ok if o is owned in caller
+    o.f = new Object(); // ok if alias is owned in
+  }
+
+  public void ownedViaAliasOk() {
+    Obj owned = new Obj();
+    ownedViaParamAlias(owned);
+  }
+
+  Obj unownedField3;
+  private void ownedViaThisAlias() {
+    Ownership alias = this;
+    alias.unownedField3 = null; // ok if this owned in caller
+    this.unownedField3 = new Obj(); // also ok if this is owned in caller
+  }
+
+  public static void ownedViaThisAliasOk() {
+    Ownership owned = new Ownership();
+    owned.ownedViaThisAlias();
+  }
+
+  boolean nondet;
+
+  private void conditionalAlias(Obj o1, Obj o2) {
+    Obj alias;
+    if (nondet) {
+      alias = o1;
+    } else {
+      alias = o2;
+    }
+    alias.f = null; // ok if both o1 and o2 are owned
+  }
+
+  void conditionalAliasOk() {
+    conditionalAlias(new Obj(), new Obj());
+  }
+
+  void conditionalAliasBad(Obj unowned) {
+    conditionalAlias(new Obj(), unowned);
   }
 
 }

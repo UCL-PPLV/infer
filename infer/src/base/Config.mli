@@ -74,6 +74,8 @@ val anonymous_block_num_sep : string
 
 val anonymous_block_prefix : string
 
+val append_buck_flavors : string list
+
 val assign : string
 
 val attributes_dir_name : string
@@ -103,8 +105,6 @@ val duplicates_filename : string
 val relative_cpp_models_dir : string
 
 val csl_analysis : bool
-
-val default_checkers : bool
 
 val default_failure_name : string
 

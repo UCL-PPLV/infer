@@ -1,5 +1,5 @@
 open! Core
-open Lexer
+open Synlexer
 open Lexing
 
 let print_position outx lexbuf =
@@ -8,9 +8,9 @@ let print_position outx lexbuf =
     pos.pos_lnum (pos.pos_cnum - pos.pos_bol + 1)
 
 let parse_with_error lexbuf =
-  try Parser.start Lexer.token lexbuf with
-  | Lexer.LexerError s -> fprintf stderr "Lexer error: %s\n" s; exit(-1)
-  | Parser.Error -> fprintf stderr "%a: Parser error\n" print_position lexbuf;
+  try Synparser.start Synlexer.token lexbuf with
+  | Synlexer.LexerError s -> fprintf stderr "Synlexer error: %s\n" s; exit(-1)
+  | Synparser.Error -> fprintf stderr "%a: Synparser error\n" print_position lexbuf;
     exit (-1)
 
 let run (filename: string) : Parsetree.procspec option =
@@ -21,8 +21,3 @@ let run (filename: string) : Parsetree.procspec option =
   In_channel.close inx;
   procspec
 
-(* let () =
-  Command.basic ~summary:""
-    Command.Spec.(empty +> anon ("filename" %: file))
-    run 
-  |> Command.run *)

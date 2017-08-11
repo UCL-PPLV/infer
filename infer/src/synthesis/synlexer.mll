@@ -1,6 +1,6 @@
 {
   open Lexing
-  open Parser
+  open Synparser
 
   exception LexerError of string
 
