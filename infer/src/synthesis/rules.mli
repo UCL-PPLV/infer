@@ -1,11 +1,11 @@
 open! IStd
 
-type rule_result = RSuccess of Sil.instr list list | RFail
+type rule_result = 
+  | RSuccess of Sil.instr list list * Prop.exposed Prop.t * Prop.exposed Prop.t 
+  | RFail
 
-val write_rule : (Pvar.t * Pvar.t) list ->
-  Prop.normal Prop.t ->
-  Prop.exposed Prop.t ->
-  rule_result
+val read_rule : Typ.Procname.t -> (Pvar.t * Typ.t) list -> 
+  Prop.exposed Prop.t -> Prop.exposed Prop.t -> unit -> rule_result
 
 
 

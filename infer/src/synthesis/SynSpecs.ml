@@ -6,14 +6,12 @@ let get_typ_from_ptr_exn (ptr_typ: Typ.t) = match ptr_typ.desc with
 
 (* Create a alias list of Exp (temp var) * Pvar (real var) from a sigma *)
 let create_pvar_env_list (sigma: Prop.sigma) : (Exp.t * Pvar.t) list =
-  let env = ref [] in
-  let filter = function
+  let filter = (function
     | Sil.Hpointsto (Lvar pvar, Eexp (Var v, _), _) ->
-        if not (Pvar.is_global pvar) then env := (Exp.Var v, pvar) :: !env
-    | _ -> ()
+        if not (Pvar.is_global pvar) then Some (Exp.Var v, pvar) else None
+    | _ -> None)
   in
-  List.iter ~f:filter sigma;
-  !env
+  List.filter_map ~f:filter sigma
 
 let make_spec (procspec: Parsetree.procspec) tenv proc_name  = 
   let raw_pre = procspec.pre in 
