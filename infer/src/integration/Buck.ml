@@ -63,9 +63,14 @@ let add_flavors_to_buck_command build_cmd =
   if not found_one_target then no_targets_found_error_and_exit build_cmd ;
   cmd'
 
-let call_buck_query_for_dependencies targets =
+let get_dependency_targets_and_add_flavors targets ~depth =
   let build_deps_string targets =
-    List.map targets ~f:(fun target -> Printf.sprintf "deps('%s')" target)
+    List.map targets ~f:(fun target ->
+        match depth with
+        | None (* full depth *)
+         -> Printf.sprintf "deps('%s')" target
+        | Some n
+         -> Printf.sprintf "deps('%s', %d)" target n )
     |> String.concat ~sep:" union "
   in
   let buck_query =
@@ -75,6 +80,7 @@ let call_buck_query_for_dependencies targets =
       ^ build_deps_string targets ^ ")\"" ) ]
   in
   let buck_query_cmd = String.concat buck_query ~sep:" " in
+  Logging.(debug Linters Medium) "*** Executing command:@\n*** %s@." buck_query_cmd ;
   let output, exit_or_signal = Utils.with_process_in buck_query_cmd In_channel.input_lines in
   match exit_or_signal with
   | Error _ as status
@@ -82,9 +88,5 @@ let call_buck_query_for_dependencies targets =
         "*** command failed:@\n*** %s@\n*** %s@." buck_query_cmd
         (Unix.Exit_or_signal.to_string_hum status)
   | Ok ()
-   -> List.map ~f:(fun name -> string_of_target {name; flavors= Config.append_buck_flavors}) output
-
-let get_dependency_targets args =
-  let targets, no_targets = List.partition_tf ~f:is_target_string args in
-  let targets = call_buck_query_for_dependencies targets in
-  (targets, no_targets)
+   -> List.map output ~f:(fun name ->
+          string_of_target (add_flavor_to_target {name; flavors= Config.append_buck_flavors}) )

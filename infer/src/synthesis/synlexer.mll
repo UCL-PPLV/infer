@@ -12,7 +12,7 @@
       }
 }
 
-let newline = ('\010' | '\013' | "\013\010")
+let newline = ('\010' | '\013' | "\013\010" | "\n" | "\r\n")
 let blank = [' ' '\009' '\012']
 let letter = ['A'-'Z' '_' 'a'-'z']
 let digit = ['0'-'9']
@@ -32,6 +32,7 @@ rule token = parse
   | "]"       { RBRACKET }
   | ")"       { RPAREN }
   | ";"       { SEMICOLON }
+  | ";;"      { DOUBLESEMI }
   | "*"       { STAR }
   | "&&"      { AND }
   | "="       { EQ }

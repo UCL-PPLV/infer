@@ -16,16 +16,22 @@
 %token LT
 %token EOF
 %token SEMICOLON
+%token DOUBLESEMI
 %token COMMA
 %token EMP
 
-%start <Parsetree.procspec option> start
+%start <Parsetree.procspec list> start
 
 %%
 
 start: 
-| EOF                                                        { None }
-| pre = prop; proc = proc; post = prop EOF                   { Some {Parsetree.pre; proc; post} }
+| EOF                                                        { [] }
+| ps = procspec                                              { [ps] }
+| ps = procspec; st = start                                  { ps :: st }
+;
+
+procspec:
+| pre = prop; proc = proc; post = prop                       { {Parsetree.pre; proc; post} }
 ;
 
 proc:
@@ -39,11 +45,11 @@ param_list:
 ;
 
 param:
-| typ = TYPE; id = ID                                          { {Parsetree.typ; id} }
+| typ = TYPE; id = ID                                        { {Parsetree.typ; id} }
 ;
 
 prop: 
-| LBRACKET pi = pi; SEMICOLON; sigma = sigma; RBRACKET            { {Parsetree.pi; sigma} }
+| LBRACKET pi = pi; SEMICOLON; sigma = sigma; RBRACKET       { {Parsetree.pi; sigma} }
 ;
 
 sigma:

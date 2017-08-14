@@ -142,7 +142,7 @@ let copy_action_of_source source =
 (** The build stanzas to be passed to jbuilder *)
 let stanzas =
   ( if clang then
-      ["(ocamllex (types_lexer ctl_lexer))"; "(menhir ((modules (types_parser ctl_parser))))"]
+      ["(ocamllex (types_lexer ctl_lexer synlexer))"; "(menhir ((modules (types_parser ctl_parser synparser))))"]
   else [] )
   @ [ Format.sprintf
         {|

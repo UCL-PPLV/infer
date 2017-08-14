@@ -79,6 +79,13 @@ let issues_fields_symbols =
 
 type os_type = Unix | Win32 | Cygwin
 
+type compilation_database_dependencies =
+  | Deps of int option
+  (* get the compilation database of the dependencies up to depth n
+     by [Deps (Some n)], or all by [Deps None]  *)
+  | NoDeps
+  [@@deriving compare]
+
 (** Constant configuration values *)
 
 let anonymous_block_num_sep = "______"
@@ -351,7 +358,7 @@ let initial_command =
   (* Sys.executable_name tries to do clever things which we must avoid, use argv[0] instead *)
   let exe_basename = Filename.basename Sys.argv.(0) in
   let is_clang = List.mem ~equal:String.equal clang_exe_aliases in
-  match CommandDoc.command_of_exe_name exe_basename with
+  match CLOpt.command_of_exe_name exe_basename with
   | Some _ as command
    -> command
   | None when is_clang exe_basename
@@ -429,7 +436,7 @@ let exe_usage =
     | Some CLOpt.Clang
      -> None (* users cannot see this *)
     | Some command
-     -> Some (CommandDoc.name_of_command command)
+     -> Some (CLOpt.name_of_command command)
     | None
      -> None
   in
@@ -725,11 +732,17 @@ and buck_build_args =
     ~in_help:CLOpt.([(Capture, manual_buck_flavors)])
     "Pass values as command-line arguments to invocations of $(i,`buck build`)"
 
+and buck_compilation_database_depth =
+  CLOpt.mk_int_opt ~long:"buck-compilation-database-depth"
+    ~in_help:CLOpt.([(Capture, manual_buck_compilation_db)])
+    "Depth of dependencies used by the $(b,--buck-compilation-database deps) option. By default, all recursive dependencies are captured."
+    ~meta:"int"
+
 and buck_compilation_database =
   CLOpt.mk_symbol_opt ~long:"buck-compilation-database" ~deprecated:["-use-compilation-database"]
     ~in_help:CLOpt.([(Capture, manual_buck_compilation_db)])
     "Buck integration using the compilation database, with or without dependencies."
-    ~symbols:[("deps", `Deps); ("no-deps", `NoDeps)]
+    ~symbols:[("no-deps", `NoDeps); ("deps", `DepsTmp)]
 
 and buck_out =
   CLOpt.mk_path_opt ~long:"buck-out"
@@ -1882,7 +1895,14 @@ and buck_build_args = !buck_build_args
 
 and buck_cache_mode = !buck && not !debug
 
-and buck_compilation_database = !buck_compilation_database
+and buck_compilation_database =
+  match !buck_compilation_database with
+  | Some `DepsTmp
+   -> Some (Deps !buck_compilation_database_depth)
+  | Some `NoDeps
+   -> Some NoDeps
+  | None
+   -> None
 
 and buck_out = !buck_out
 

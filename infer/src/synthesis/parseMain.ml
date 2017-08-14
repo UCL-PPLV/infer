@@ -9,11 +9,11 @@ let print_position outx lexbuf =
 
 let parse_with_error lexbuf =
   try Synparser.start Synlexer.token lexbuf with
-  | Synlexer.LexerError s -> fprintf stderr "Synlexer error: %s\n" s; exit(-1)
-  | Synparser.Error -> fprintf stderr "%a: Synparser error\n" print_position lexbuf;
+  | Synlexer.LexerError s -> fprintf stderr "Lexer error on token %s\n" s; exit(-1)
+  | Synparser.Error -> fprintf stderr "Parser error at %a\n" print_position lexbuf;
     exit (-1)
 
-let run (filename: string) : Parsetree.procspec option =
+let run (filename: string) : Parsetree.procspec list =
   let inx = In_channel.create filename in
   let lexbuf = Lexing.from_channel inx in
   lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = filename };

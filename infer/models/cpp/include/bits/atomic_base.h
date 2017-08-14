@@ -1,21 +1,14 @@
-(*
+/*
  * Copyright (c) 2017 - present Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the BSD style license found in the
  * LICENSE file in the root directory of this source tree. An additional grant
  * of patent rights can be found in the PATENTS file in the same directory.
- *)
+ */
+#pragma once
 
-open! IStd
-module CLOpt = CommandLineOption
-
-type data = {name: string; command_doc: CLOpt.command_doc}
-
-val inferconfig_env_var : string
-
-val inferconfig_file : string
-
-val infer : CLOpt.command_doc
-
-val data_of_command : CLOpt.command -> data
+// <atomic> in libstdc++ is including 'bits/atomic_base.h', which gets included
+// by other library files as well. Override this header with <atmoic> to avoid
+// the problem
+#include <atomic>
