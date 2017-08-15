@@ -129,7 +129,7 @@ let synthesize proc_name (procspecs: Parsetree.procspec list) : string =
     let result = synthesize_with_rules 0 pvars tenv proc_desc my_new_pre my_new_post
     in match result with
     | Some r -> 
-      let real_post = pprint_output r procspec
+      pprint_output r procspec
     | None -> failwith "Synthesis failed"
 
 (**************************************)
