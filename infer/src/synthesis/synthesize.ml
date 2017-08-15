@@ -5,7 +5,7 @@ open! Rules
 
 module F = Format
 
-let syn_max_depth = 1
+let syn_max_depth = 6
    
 let insert_penultimate_node node proc_desc = 
   let pred_nodes = Procdesc.Node.get_preds (Procdesc.get_exit_node proc_desc) in 
@@ -71,27 +71,26 @@ let rec synthesize_with_rules depth gamma tenv proc_desc
   let proc_name = Procdesc.get_proc_name proc_desc in
   match Prover.check_implication_for_footprint proc_name tenv (Prop.normalize tenv pre) post with
   (* This means we are done: let's spit out the output as a string *)
-  | ImplOK (checks, sub1, sub2, frame, missing_sigma, missing_pi,
-            frame_fld, missing_fld, frame_typ, missing_typ)
+  | ImplOK (_, _, sub2, _, _, _, _, _, _, _)
       (* TODO: please, explain this check -- why we need empty substitutions? *)
     when (Sil.equal_exp_subst sub2 Sil.exp_sub_empty) ->
-      (* End of synthesis, return empy instruction list *)
+      (* End of synthesis, return empty instruction list *)
       Some []
-  | ImplOK _
+  | ImplOK _ 
   | ImplFail _ ->
       (* Apply all kinds of rules *)
       (* TODO: add write rule as well *)
-      let rules = [ read_rule proc_name gamma pre post ] in
+      let rules = [ read_rule proc_name gamma pre post
+                  ; write_rule gamma pre post ] in
       let rec try_rules rules : c_instr_type option =
         match rules with
         | [] ->
-            (* print_node_instrs proc_desc; *)
-            None
-        | sln :: tl -> match sln () with
+            Some []
+        | rule :: tl -> match rule () with
           | RFail -> try_rules tl
-          | RSuccess ((r_gamma, r_pre, r_post), instr_lists) ->
+          | RSuccess ((r_gamma, r_pre, r_post), instr_list) ->
               (* Run top-level synthesis recursively *)
-              proceed_with_prefix instr_lists (fun _ ->
+              proceed_with_prefix instr_list (fun _ ->
                   synthesize_with_rules (depth + 1) r_gamma tenv
                     proc_desc r_pre r_post)
       in try_rules rules
@@ -129,7 +128,8 @@ let synthesize proc_name (procspecs: Parsetree.procspec list) : string =
   else
     let result = synthesize_with_rules 0 pvars tenv proc_desc my_new_pre my_new_post
     in match result with
-    | Some r -> "TODO: add pretty-printing for the function"
+    | Some r -> 
+      let real_post = pprint_output r procspec
     | None -> failwith "Synthesis failed"
 
 (**************************************)

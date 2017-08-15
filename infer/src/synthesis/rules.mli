@@ -15,5 +15,8 @@ val read_rule : Typ.Procname.t -> ident_type list ->
   Prop.exposed Prop.t ->
   Prop.exposed Prop.t -> unit -> rule_result
 
+val write_rule : ident_type list -> 
+  Prop.exposed Prop.t ->
+  Prop.exposed Prop.t -> unit -> rule_result
 
 

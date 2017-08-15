@@ -1,6 +1,8 @@
 open! IStd
 open! SynSpecs
 
+module F = Format
+
 type c_instr_type = Sil.instr list   
 type subst_type = Ident.t * Exp.t
 type ident_type = Pvar.t * Typ.t
@@ -51,6 +53,7 @@ let find_ghost_pts = find_pointsto_cond (fun (i, e) ->
     | Exp.Var v when Ident.is_primed v -> true
     | _ -> false)
 
+
 (* Returns:
 - ident_type - a name for the new fresh local variable
 - c_instr - a list of low-level instructions representing the read
@@ -91,7 +94,6 @@ let read_rule proc_name gamma
     (given_post: Prop.exposed Prop.t) (): rule_result = 
   let ptsto = find_ghost_pts given_pre.sigma in
   match ptsto with
-  | None -> RFail
   | Some (pvar, Exp.Var v) -> 
       let lhs_typ, instrs, subst' = mk_c_read proc_name v pvar in
       let subst = Sil.subst_of_list [subst'] in
@@ -101,65 +103,71 @@ let read_rule proc_name gamma
       RSuccess ((new_gamma, new_pre, new_post), instrs)
   | _ -> RFail
 
-(* let write_rule pvars_locals (actual_post: Prop.normal Prop.t)
-  (given_post: Prop.exposed Prop.t): rule_result =
+let find_diff_pts ptsto_list1 ptsto_list2 = 
+  List.filter_map ~f:(fun (pv1, exp1) ->
+    List.hd (List.filter_map ~f:(fun (pv2, exp2) ->
+      if ((Pvar.equal pv1 pv2) && not (Exp.equal exp1 exp2)) then begin
+        Pvar.pp Pp.text F.std_formatter pv1; F.printf "\n";
+        Exp.pp F.std_formatter exp1; F.printf " * "; Exp.pp F.std_formatter exp2; F.printf "\n";
+        Some (pv1, exp1, exp2)
+        end
+      else None
+    ) ptsto_list2)
+  ) ptsto_list1
+
+let mk_c_write (lhs : Pvar.t) (new_v : Exp.t) 
+  (given_post : Prop.exposed Prop.t) : c_instr_type * Prop.exposed Prop.t = 
+  let new_post = 
+    let new_sigma = 
+      List.map ~f:(fun hpred -> 
+        if not (Exp.equal (Sil.hpred_get_lhs hpred) (Exp.Lvar lhs)) then hpred
+        else 
+          match hpred with 
+          | Sil.Hpointsto (lhs, Eexp (_, inst), typ) -> 
+            Sil.Hpointsto (lhs, Eexp (new_v, inst), typ)
+          | _ -> hpred
+      ) given_post.sigma
+    in Prop.set ~sigma:new_sigma given_post 
+  in 
+  let instrs = match new_v with 
+  | Exp.Var local -> 
+    let temp1 = Ident.create_fresh Ident.knormal in
+    let temp2 = Ident.create_fresh Ident.knormal in
+    let p_typ = Typ.mk (Typ.Tptr
+      (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in
+    let typ = get_typ_from_ptr_exn p_typ in
+    [ Sil.Load (temp1, Exp.Lvar lhs, p_typ, Location.dummy)
+    ; Sil.Load (temp2, Exp.Var local, typ, Location.dummy)
+    ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
+    ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
+    ; Sil.Abstract (Location.dummy) ]
+  | Exp.Const const ->
+    let temp = Ident.create_fresh Ident.knormal in
+    let p_typ = Typ.mk (Typ.Tptr
+      (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in
+    let typ = get_typ_from_ptr_exn p_typ in
+    [ Sil.Load (temp, Exp.Lvar lhs, p_typ, Location.dummy)
+    ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
+    ; Sil.Remove_temps ([temp], Location.dummy)
+    ; Sil.Abstract (Location.dummy) ]
+  | _ -> assert false
+  in 
+  (instrs, new_post)
+
+let write_rule gamma (given_pre: Prop.exposed Prop.t)
+  (given_post: Prop.exposed Prop.t) (): rule_result =
   
-  let curr_ptsto = find_pointsto actual_post.sigma in
-  let desired_ptsto = find_pointsto given_post.sigma in
+  let curr_ptsto = find_all_pointsto given_pre.sigma in
+  let desired_ptsto = find_all_pointsto given_post.sigma in
 
-  (* [TODO] Refactor all this into a separate function *)
-  let ptsto_diff_list = List.filter_map ~f:(fun (pv_curr, exp_curr) ->
-    let found_in_desired = List.find ~f:(fun (pv_des, _) ->
-      Pvar.equal pv_curr pv_des
-    ) desired_ptsto in
-    match found_in_desired with
-    | None -> None
-    | Some (_, exp_des) ->
-      match exp_des with
-      | Exp.Const _ as const -> Some (pv_curr, const)
-      | _ ->
-        if Exp.equal exp_curr exp_des then None
-        else
-        let found_original_ptsto = List.find ~f:(fun (_, exp_orig) ->
-          Exp.equal exp_des exp_orig
-        ) curr_ptsto in
-        match found_original_ptsto with
-        | None -> None
-        | Some (pv_orig, _) ->
-          let pv_orig_local = List.find ~f:(fun (pv, _) ->
-            Pvar.equal pv_orig pv
-          ) pvars_locals in
-          match pv_orig_local with
-          | None -> None
-          | Some (_, local) -> Some (pv_curr, Exp.Lvar local)
-  ) curr_ptsto in
+  let diff_ptsto = (find_diff_pts curr_ptsto desired_ptsto) in 
+  List.iter ~f:(fun (p, e1, e2) -> 
+    Pvar.pp Pp.text F.std_formatter p; F.printf "\n";
+    Exp.pp F.std_formatter e1; F.printf " * "; Exp.pp F.std_formatter e2; F.printf "\n";
+  ) diff_ptsto;
 
-  match ptsto_diff_list with
-  | [] -> RFail
-  | diff_list -> RSuccess (
-      (* Apply the rule to the list of diffs to synthesize all the writes *)
-      List.map ~f:(fun (pv, exp) ->
-        match exp with
-        | Exp.Const const ->
-          let temp = Ident.create_fresh Ident.knormal in
-          let p_typ = Typ.mk (Typ.Tptr
-            (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in
-          let typ = get_typ_from_ptr_exn p_typ in
-          [ Sil.Load (temp, Exp.Lvar pv, p_typ, Location.dummy)
-          ; Sil.Store (Exp.Var temp, typ, Exp.Const const, Location.dummy)
-          ; Sil.Remove_temps ([temp], Location.dummy)
-          ; Sil.Abstract (Location.dummy) ]
-        | Exp.Lvar local ->
-          let temp1 = Ident.create_fresh Ident.knormal in
-          let temp2 = Ident.create_fresh Ident.knormal in
-          let p_typ = Typ.mk (Typ.Tptr
-            (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in
-          let typ = get_typ_from_ptr_exn p_typ in
-          [ Sil.Load (temp1, Exp.Lvar pv, p_typ, Location.dummy)
-          ; Sil.Load (temp2, Exp.Lvar local, typ, Location.dummy)
-          ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
-          ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
-          ; Sil.Abstract (Location.dummy) ]
-        | _ -> assert false
-      ) diff_list
-    ) *)
+  match List.hd diff_ptsto with
+  | None -> RFail
+  | Some (pv, _, exp2) -> 
+    let instrs, new_post = mk_c_write pv exp2 given_post in
+    RSuccess ((gamma, given_pre, new_post), instrs)
