@@ -18,7 +18,7 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
   let raw_post = procspec.post in
   let known_vals = ref [] in
 
-  let make_sigma ?(primed=false) raw_sigma = List.concat (List.filter_map ~f:(fun pt_hpred ->
+  let make_sigma raw_sigma = List.concat (List.filter_map ~f:(fun pt_hpred ->
     match pt_hpred with 
     | Parsetree.Hpred_empty -> None
     | Parsetree.Hpred_hpointsto (pv_name, value) -> 
@@ -28,7 +28,7 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
           String.equal pv_name n) !known_vals in
         match found_pvar_loc with
         | None -> 
-          let new_loc_var = Ident.create_fresh Ident.kprimed (* Ident.knormal *) in
+          let new_loc_var = Ident.create_fresh (* Ident.kprimed *) Ident.knormal in
           known_vals := (pv_name, new_loc_var) :: !known_vals;
           new_loc_var
         | Some p -> snd p
@@ -47,8 +47,7 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
         match found_known with 
         | None ->
           let new_loc_var_ptsto = 
-            if primed then Ident.create_fresh Ident.kprimed 
-            else Ident.create_fresh Ident.kprimed (* Ident.knormal *) in 
+            Ident.create_fresh Ident.kprimed in 
           known_vals := (name, new_loc_var_ptsto) :: !known_vals;
           Some [
             (Prop.mk_ptsto tenv 
@@ -155,7 +154,7 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
   let made_pre = Prop.set ~sigma:made_pre_sigma ~pi:made_pre_pi Prop.prop_emp in
 
   (* Post: construct spatial part *)
-  let made_post_sigma = make_sigma ~primed:true raw_post.sigma in 
+  let made_post_sigma = make_sigma raw_post.sigma in 
   
   (* Post: construct pure part *)
   let made_post_pi = make_pi raw_post.pi in 

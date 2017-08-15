@@ -106,28 +106,43 @@ let read_rule proc_name gamma
 let find_diff_pts ptsto_list1 ptsto_list2 = 
   List.filter_map ~f:(fun (pv1, exp1) ->
     List.hd (List.filter_map ~f:(fun (pv2, exp2) ->
-      if ((Pvar.equal pv1 pv2) && not (Exp.equal exp1 exp2)) then begin
-        Pvar.pp Pp.text F.std_formatter pv1; F.printf "\n";
-        Exp.pp F.std_formatter exp1; F.printf " * "; Exp.pp F.std_formatter exp2; F.printf "\n";
+      if ((Pvar.equal pv1 pv2) && not (Exp.equal exp1 exp2)) then
         Some (pv1, exp1, exp2)
-        end
       else None
     ) ptsto_list2)
   ) ptsto_list1
 
-let mk_c_write (lhs : Pvar.t) (new_v : Exp.t) 
+let mk_c_write (lhs : Pvar.t) (new_v : Exp.t) (given_pre : Prop.exposed Prop.t)
   (given_post : Prop.exposed Prop.t) : c_instr_type * Prop.exposed Prop.t = 
-  let new_post = 
+  let new_pre = 
     let new_sigma = 
+      let pvar_ptsto = fst (List.hd_exn (List.filter ~f:(fun (_, pv) -> 
+        Pvar.equal lhs pv
+      ) (create_pvar_env_list given_pre.sigma))) in 
       List.map ~f:(fun hpred -> 
-        if not (Exp.equal (Sil.hpred_get_lhs hpred) (Exp.Lvar lhs)) then hpred
-        else 
-          match hpred with 
-          | Sil.Hpointsto (lhs, Eexp (_, inst), typ) -> 
-            Sil.Hpointsto (lhs, Eexp (new_v, inst), typ)
-          | _ -> hpred
-      ) given_post.sigma
-    in Prop.set ~sigma:new_sigma given_post 
+        match new_v with 
+        | Exp.Var _ -> 
+          begin
+          if not (Exp.equal pvar_ptsto (Sil.hpred_get_lhs hpred)) then hpred 
+          else 
+            match hpred with 
+            | Sil.Hpointsto (lh_alias, Eexp (_, inst), typ) -> 
+              Sil.Hpointsto (lh_alias, Eexp (new_v, inst), typ)
+            | _ -> hpred 
+          end
+        | Exp.Const _ -> 
+          begin
+          if not (Exp.equal (Exp.Lvar lhs) (Sil.hpred_get_lhs hpred)) then hpred 
+          else
+            match hpred with 
+            | Sil.Hpointsto (lh, Eexp (_, inst), typ) -> 
+              Sil.Hpointsto (lh, Eexp (new_v, inst), typ)
+            | _ -> hpred
+          end
+        | _ -> hpred
+      ) given_pre.sigma
+    in 
+    Prop.set ~sigma:new_sigma given_pre 
   in 
   let instrs = match new_v with 
   | Exp.Var local -> 
@@ -152,22 +167,25 @@ let mk_c_write (lhs : Pvar.t) (new_v : Exp.t)
     ; Sil.Abstract (Location.dummy) ]
   | _ -> assert false
   in 
-  (instrs, new_post)
+  (instrs, new_pre)
 
 let write_rule gamma (given_pre: Prop.exposed Prop.t)
   (given_post: Prop.exposed Prop.t) (): rule_result =
-  
+
   let curr_ptsto = find_all_pointsto given_pre.sigma in
   let desired_ptsto = find_all_pointsto given_post.sigma in
 
   let diff_ptsto = (find_diff_pts curr_ptsto desired_ptsto) in 
-  List.iter ~f:(fun (p, e1, e2) -> 
-    Pvar.pp Pp.text F.std_formatter p; F.printf "\n";
-    Exp.pp F.std_formatter e1; F.printf " * "; Exp.pp F.std_formatter e2; F.printf "\n";
-  ) diff_ptsto;
 
-  match List.hd diff_ptsto with
-  | None -> RFail
-  | Some (pv, _, exp2) -> 
-    let instrs, new_post = mk_c_write pv exp2 given_post in
-    RSuccess ((gamma, given_pre, new_post), instrs)
+  match (List.hd diff_ptsto) with
+  | None -> RFail 
+  | Some (pv, exp1, exp2) -> 
+    let instrs, new_pre = mk_c_write pv exp2 given_pre given_post in
+    RSuccess ((gamma, new_pre, given_post), instrs)
+
+(* let func_call_rule tenv proc_desc gamma (given_pre : Prop.exposed Prop.t)
+  (given_post : Prop.exposed Prop.t) (fun_pre : Prop.exposed Prop.t)
+  (fun_post : Prop.exposed Prop.t) (): rule_result = () *)
+  
+
+

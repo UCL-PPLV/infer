@@ -5,7 +5,7 @@ open! Rules
 
 module F = Format
 
-let syn_max_depth = 6
+let syn_max_depth = 20
    
 let insert_penultimate_node node proc_desc = 
   let pred_nodes = Procdesc.Node.get_preds (Procdesc.get_exit_node proc_desc) in 
@@ -72,9 +72,10 @@ let rec synthesize_with_rules depth gamma tenv proc_desc
   match Prover.check_implication_for_footprint proc_name tenv (Prop.normalize tenv pre) post with
   (* This means we are done: let's spit out the output as a string *)
   | ImplOK (_, _, sub2, _, _, _, _, _, _, _)
-      (* TODO: please, explain this check -- why we need empty substitutions? *)
     when (Sil.equal_exp_subst sub2 Sil.exp_sub_empty) ->
+      (* TODO: please, explain this check -- why we need empty substitutions? *)
       (* End of synthesis, return empty instruction list *)
+      F.printf "Synthesis success";
       Some []
   | ImplOK _ 
   | ImplFail _ ->
@@ -85,11 +86,16 @@ let rec synthesize_with_rules depth gamma tenv proc_desc
       let rec try_rules rules : c_instr_type option =
         match rules with
         | [] ->
-            Some []
+            None
         | rule :: tl -> match rule () with
           | RFail -> try_rules tl
           | RSuccess ((r_gamma, r_pre, r_post), instr_list) ->
               (* Run top-level synthesis recursively *)
+              F.printf "\npreposts: \n";
+              Prop.pp_sigma Pp.text F.std_formatter r_pre.sigma;
+              F.printf "\n";
+              Prop.pp_sigma Pp.text F.std_formatter r_post.sigma;
+              F.printf "\n"; 
               proceed_with_prefix instr_list (fun _ ->
                   synthesize_with_rules (depth + 1) r_gamma tenv
                     proc_desc r_pre r_post)
