@@ -107,13 +107,13 @@ let find_diff_pts ptsto_list1 ptsto_list2 =
   List.filter_map ~f:(fun (pv1, exp1) ->
     List.hd (List.filter_map ~f:(fun (pv2, exp2) ->
       if ((Pvar.equal pv1 pv2) && not (Exp.equal exp1 exp2)) then
-        Some (pv1, exp1, exp2)
+        Some (pv1, exp2)
       else None
     ) ptsto_list2)
   ) ptsto_list1
 
-let mk_c_write (lhs : Pvar.t) (new_v : Exp.t) (given_pre : Prop.exposed Prop.t)
-  (given_post : Prop.exposed Prop.t) : c_instr_type * Prop.exposed Prop.t = 
+let mk_c_write (lhs : Pvar.t) (new_v : Exp.t) 
+  (given_pre : Prop.exposed Prop.t) : c_instr_type * Prop.exposed Prop.t = 
   let new_pre = 
     let new_sigma = 
       let pvar_ptsto = fst (List.hd_exn (List.filter ~f:(fun (_, pv) -> 
@@ -179,13 +179,9 @@ let write_rule gamma (given_pre: Prop.exposed Prop.t)
 
   match (List.hd diff_ptsto) with
   | None -> RFail 
-  | Some (pv, exp1, exp2) -> 
-    let instrs, new_pre = mk_c_write pv exp2 given_pre given_post in
+  | Some (pv, exp2) -> 
+    let instrs, new_pre = mk_c_write pv exp2 given_pre in
     RSuccess ((gamma, new_pre, given_post), instrs)
 
-(* let func_call_rule tenv proc_desc gamma (given_pre : Prop.exposed Prop.t)
-  (given_post : Prop.exposed Prop.t) (fun_pre : Prop.exposed Prop.t)
-  (fun_post : Prop.exposed Prop.t) (): rule_result = () *)
-  
 
 
