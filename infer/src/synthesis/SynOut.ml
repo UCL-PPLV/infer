@@ -35,6 +35,7 @@ let pprint_output (start: Rules.c_instr_node) (procspec: Parsetree.procspec) =
     | None -> stmts
     | Some n -> 
       match n.instrs with 
+        | [] -> print_instrs n.fst_succ stmts
         (* read *)
         | [ Sil.Load (_, Exp.Lvar pvar, _, _) 
           ; Sil.Load (_, _, _, _)
@@ -65,7 +66,9 @@ let pprint_output (start: Rules.c_instr_node) (procspec: Parsetree.procspec) =
             let const = Const.to_string const in
             let stmt = F.sprintf "*%s = %s;" pvar_name const in
             print_instrs n.fst_succ (stmt :: stmts)
-        | _ -> print_instrs n.fst_succ (stmts)
+        | _ -> 
+          let stmt = "/* An unrecognised instruction: skip */" in 
+          print_instrs n.fst_succ (stmt :: stmts)
   in
   let statements_str = String.concat ~sep:"\n  " (List.rev (print_instrs (Some start) [])) in
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in

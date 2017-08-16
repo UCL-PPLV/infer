@@ -28,8 +28,8 @@ type rule_result =
       c_instr_node
   | RFail
 
-let mk_c_instr_node instrs = 
-  {instrs; fst_succ=None; snd_succ=None}
+let mk_c_instr_node ?(fst_succ=None) ?(snd_succ=None) instrs =  
+  {instrs; fst_succ; snd_succ}
 
 let find_all_pointsto sigma : points_to_type list = 
   List.filter_map ~f:(fun (exp, pv) ->
@@ -191,6 +191,32 @@ let write_rule gamma (given_pre: Prop.exposed Prop.t)
     let instrs, new_pre = mk_c_write pv exp2 given_pre in
     RSuccess ((gamma, new_pre, given_post), mk_c_instr_node instrs)
 
+(* Make a conditional expression
+   Returns - node before the branch
+   Args - cond_exp: the conditional expression 
+        - instrs_true: the first node of the true-branch instructions
+        - instrs_false: the first node of the false-branch instructions
+*)
+let mk_conditional (cond_exp: Exp.t) (* Likely BinOp *) 
+  (instrs_true: c_instr_node option) (instrs_false: c_instr_node option)
+  : c_instr_node = 
+  let prune_true_instr = Sil.Prune (cond_exp, Location.dummy, true, Sil.Ik_if) in 
+  let prune_true_node = Some (mk_c_instr_node [prune_true_instr] ~fst_succ:instrs_true) in 
+
+  let prune_false_instr = Sil.Prune (cond_exp, Location.dummy, true, Sil.Ik_if) in 
+  let prune_false_node = Some (mk_c_instr_node [prune_false_instr] ~fst_succ:instrs_false) in 
+
+  let branch_node = mk_c_instr_node [] ~fst_succ:prune_true_node ~snd_succ:prune_false_node in 
+  branch_node
+
+let mk_func_call_node (ret_opt: (Ident.t * Typ.t) option) (fun_name : string)
+  (params : (Exp.t * Typ.t) list) = 
+  let proc_name = Exp.Const (Const.Cfun (Typ.Procname.from_string_c_fun fun_name)) in 
+  let func_call_instr = Sil.Call (ret_opt, proc_name, params, Location.dummy, CallFlags.default) in
+
+  mk_c_instr_node [func_call_instr]
+ 
+
 (* let func_call_rule tenv proc_desc gamma 
   (given_pre : Prop.exposed Prop.t) (fun_pre : Prop.exposed Prop.t)
   (fun_post : Prop.exposed Prop.t) fun_params (): rule_result = 
@@ -202,6 +228,6 @@ let write_rule gamma (given_pre: Prop.exposed Prop.t)
     (Prop.normalize tenv given_pre) fun_pre with
   | ImplFail _ -> RFail
   | ImplOK (checks, post_sub1, post_sub2, frame, missing_pi, missing_sigma,
-            frame_fld, missing_fld, frame_typ, missing_typ) -> RFail *)
+            frame_fld, missing_fld, frame_typ, missing_typ) ->  *)
 
  
