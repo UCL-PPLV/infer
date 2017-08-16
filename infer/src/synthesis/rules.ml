@@ -8,6 +8,10 @@ type subst_type = Ident.t * Exp.t
 type ident_type = Pvar.t * Typ.t
 type points_to_type = Pvar.t * Exp.t
 
+type c_instr_node = { instrs: c_instr_type
+                    ; mutable fst_succ: c_instr_node option
+                    ; mutable snd_succ: c_instr_node option}
+
 type syn_spec =
   (* Gamma: available parameters and local variables *)
   ident_type list *
@@ -21,8 +25,11 @@ type rule_result =
       (* Subgoal spec *)
       syn_spec *
       (* List of commands to be appended to subgoals *)
-      c_instr_type
+      c_instr_node
   | RFail
+
+let mk_c_instr_node instrs = 
+  {instrs; fst_succ=None; snd_succ=None}
 
 let find_all_pointsto sigma : points_to_type list = 
   List.filter_map ~f:(fun (exp, pv) ->
@@ -48,7 +55,7 @@ let find_pointsto_cond (cond : points_to_type -> bool) sigma : points_to_type op
   | h :: _ -> Some h
   | _ -> None
 
-let find_ghost_pts = find_pointsto_cond (fun (i, e) ->
+let find_ghost_pts = find_pointsto_cond (fun (_, e) ->
     match e with
     | Exp.Var v when Ident.is_primed v -> true
     | _ -> false)
@@ -74,7 +81,8 @@ let mk_c_read (proc_name : Typ.Procname.t) (v : Ident.t) (rhs : Pvar.t) :
     ; Sil.Load (temp2, Exp.Var temp1, typ, Location.dummy)
     ; Sil.Store (Exp.Lvar lhs, typ, Exp.Var temp2, Location.dummy)
     ; Sil.Remove_temps ([temp1; temp2], Location.dummy)
-    ; Sil.Abstract (Location.dummy) ] in
+    ; Sil.Abstract (Location.dummy) ]
+  in
   (lhs, typ), instrs, subst
 
 (* Apply the read rule to a single ghost-pointing entry in the
@@ -100,7 +108,7 @@ let read_rule proc_name gamma
       let new_pre, new_post = (Prop.prop_sub subst given_pre,
                                Prop.prop_sub subst given_post) in
       let new_gamma = lhs_typ :: gamma in
-      RSuccess ((new_gamma, new_pre, new_post), instrs)
+      RSuccess ((new_gamma, new_pre, new_post), mk_c_instr_node instrs)
   | _ -> RFail
 
 let find_diff_pts ptsto_list1 ptsto_list2 = 
@@ -150,7 +158,7 @@ let mk_c_write (lhs : Pvar.t) (new_v : Exp.t)
     let temp2 = Ident.create_fresh Ident.knormal in
     let p_typ = Typ.mk (Typ.Tptr
       (Typ.mk (Typ.Tint(Typ.IInt)), Typ.Pk_pointer)) in
-    let typ = get_typ_from_ptr_exn p_typ in
+    let typ = get_typ_from_ptr_exn p_typ in 
     [ Sil.Load (temp1, Exp.Lvar lhs, p_typ, Location.dummy)
     ; Sil.Load (temp2, Exp.Var local, typ, Location.dummy)
     ; Sil.Store (Exp.Var temp1, typ, Exp.Var temp2, Location.dummy)
@@ -181,7 +189,19 @@ let write_rule gamma (given_pre: Prop.exposed Prop.t)
   | None -> RFail 
   | Some (pv, exp2) -> 
     let instrs, new_pre = mk_c_write pv exp2 given_pre in
-    RSuccess ((gamma, new_pre, given_post), instrs)
+    RSuccess ((gamma, new_pre, given_post), mk_c_instr_node instrs)
 
+(* let func_call_rule tenv proc_desc gamma 
+  (given_pre : Prop.exposed Prop.t) (fun_pre : Prop.exposed Prop.t)
+  (fun_post : Prop.exposed Prop.t) fun_params (): rule_result = 
+  let inst_params = List.map ~f:(
+    
+  ) fun_params in 
+  let proc_name = Procdesc.get_proc_name proc_desc in 
+  match Prover.check_implication_for_footprint proc_name tenv 
+    (Prop.normalize tenv given_pre) fun_pre with
+  | ImplFail _ -> RFail
+  | ImplOK (checks, post_sub1, post_sub2, frame, missing_pi, missing_sigma,
+            frame_fld, missing_fld, frame_typ, missing_typ) -> RFail *)
 
-
+ 

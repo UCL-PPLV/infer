@@ -29,41 +29,44 @@ let c_prog_of_sig ?(body="  /* ?? */") {Parsetree.ret_typ; id; params} =
   ret_typ ^ " " ^ id ^ "(" ^ params_str ^ ") { \n  " ^ body ^ "\n}\n" ^  
   "int main() { return 0; }\n"
 
-let pprint_output (all_instrs: Rules.c_instr_type) (procspec: Parsetree.procspec) = 
-  let rec print_instrs instrs = 
-    match instrs with 
-      (* read *)
-      | Sil.Load (_, Exp.Lvar pvar, _, _) ::
-        Sil.Load (_, _, _, _) ::
-        Sil.Store (Exp.Lvar local, typ, _, _) ::
-        Sil.Remove_temps _ ::
-        Sil.Abstract _ :: tl ->
-          let local_name = Pvar.get_simplified_name local in 
-          let pvar_name = Pvar.get_simplified_name pvar in 
-          let typ_name = Typ.to_string typ in 
-          let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in
-          stmt :: (print_instrs tl)
-      (* write ptr *)
-      | Sil.Load (_, Exp.Lvar pvar, _, _) ::
-        Sil.Load (_, Exp.Var local, _, _) ::
-        Sil.Store _ :: 
-        Sil.Remove_temps _ ::
-        Sil.Abstract _ :: tl -> 
-          let pvar_name = Pvar.get_simplified_name pvar in 
-          let local_name = Ident.to_string local in 
-          let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
-          stmt :: (print_instrs tl)
-      (* write const *)
-      | Sil.Load (_, Exp.Lvar pvar, _, _) ::
-        Sil.Store (_, _, Exp.Const const, _) ::
-        Sil.Remove_temps _ ::
-        Sil.Abstract _ :: tl ->
-          let pvar_name = Pvar.get_simplified_name pvar in
-          let const = Const.to_string const in
-          let stmt = F.sprintf "*%s = %s;" pvar_name const in 
-          stmt :: (print_instrs tl)
-      | _ -> []
+let pprint_output (start: Rules.c_instr_node) (procspec: Parsetree.procspec) = 
+  let rec print_instrs (node: Rules.c_instr_node option) stmts = 
+    match node with
+    | None -> stmts
+    | Some n -> 
+      match n.instrs with 
+        (* read *)
+        | [ Sil.Load (_, Exp.Lvar pvar, _, _) 
+          ; Sil.Load (_, _, _, _)
+          ; Sil.Store (Exp.Lvar local, typ, _, _)
+          ; Sil.Remove_temps _ 
+          ; Sil.Abstract _ ] ->
+            let local_name = Pvar.get_simplified_name local in 
+            let pvar_name = Pvar.get_simplified_name pvar in 
+            let typ_name = Typ.to_string typ in 
+            let stmt = F.sprintf "%s %s = *%s;" typ_name local_name pvar_name in
+            print_instrs n.fst_succ (stmt :: stmts)
+        (* write ptr *)
+        | [ Sil.Load (_, Exp.Lvar pvar, _, _)
+          ; Sil.Load (_, Exp.Var local, _, _)
+          ; Sil.Store _ 
+          ; Sil.Remove_temps _
+          ; Sil.Abstract _ ] -> 
+            let pvar_name = Pvar.get_simplified_name pvar in 
+            let local_name = Ident.to_string local in 
+            let stmt = F.sprintf "*%s = %s;" pvar_name local_name in 
+            print_instrs n.fst_succ (stmt :: stmts)
+        (* write const *)
+        | [ Sil.Load (_, Exp.Lvar pvar, _, _) 
+          ; Sil.Store (_, _, Exp.Const const, _) 
+          ; Sil.Remove_temps _ 
+          ; Sil.Abstract _ ] ->
+            let pvar_name = Pvar.get_simplified_name pvar in
+            let const = Const.to_string const in
+            let stmt = F.sprintf "*%s = %s;" pvar_name const in
+            print_instrs n.fst_succ (stmt :: stmts)
+        | _ -> print_instrs n.fst_succ (stmts)
   in
-  let statements_str = String.concat ~sep:"\n  " (print_instrs all_instrs)  in
+  let statements_str = String.concat ~sep:"\n  " (List.rev (print_instrs (Some start) [])) in
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
