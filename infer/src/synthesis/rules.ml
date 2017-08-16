@@ -209,25 +209,95 @@ let mk_conditional (cond_exp: Exp.t) (* Likely BinOp *)
   let branch_node = mk_c_instr_node [] ~fst_succ:prune_true_node ~snd_succ:prune_false_node in 
   branch_node
 
-let mk_func_call_node (ret_opt: (Ident.t * Typ.t) option) (fun_name : string)
+(* All combinations of taking n elements from ls - returns a list of lists *)
+let rec extract n ls =
+  if n <= 0 then [[]]
+  else match ls with
+  | [] -> []
+  | h :: tl ->
+    let with_h = List.map ~f:(fun l -> h :: l) (extract (n-1) tl) in
+    let without_h = extract n tl in
+    with_h @ without_h
+
+(* All permutations of a list - returns a list of lists *)
+let rec permutations = 
+  let ins_all_positions x l =
+    let rec perm_aux prev acc = function
+      | [] -> (prev @ [x]) :: acc |> List.rev
+      | hd::tl as l -> perm_aux (prev @ [hd]) ((prev @ [x] @ l) :: acc) tl
+    in
+    perm_aux [] [] l
+  in
+  function
+  | [] -> []
+  | x::[] -> [[x]] 
+  | x::xs -> 
+      List.fold_left ~init:[] ~f:(fun acc p -> acc @ ins_all_positions x p) (permutations xs)
+
+
+let mk_fun_call_node (ret_opt: (Ident.t * Typ.t) option) (fun_name : string)
   (params : (Exp.t * Typ.t) list) = 
   let proc_name = Exp.Const (Const.Cfun (Typ.Procname.from_string_c_fun fun_name)) in 
   let func_call_instr = Sil.Call (ret_opt, proc_name, params, Location.dummy, CallFlags.default) in
 
   mk_c_instr_node [func_call_instr]
- 
 
-(* let func_call_rule tenv proc_desc gamma 
-  (given_pre : Prop.exposed Prop.t) (fun_pre : Prop.exposed Prop.t)
-  (fun_post : Prop.exposed Prop.t) fun_params (): rule_result = 
-  let inst_params = List.map ~f:(
-    
-  ) fun_params in 
+let func_change_pre sub (given_pre: Prop.exposed Prop.t) (fun_pre: Prop.exposed Prop.t)
+  (fun_post: Prop.exposed Prop.t) = 
+  (* Use sub2 to substitute primed variables in fun_pre and fun_post *)
+  let fun_pre = Prop.prop_sub (Sil.subst_of_list (Sil.sub_to_list sub)) fun_pre in
+  let fun_post = Prop.prop_sub (Sil.subst_of_list (Sil.sub_to_list sub)) fun_post in 
+
+  (* Find program variables referenced by fun_post in given_pre and alter 
+  the value they point to to match fun_post *)
+  let new_pre_sigma = List.map ~f:(fun hpred -> 
+    let found_in_fun_pre = List.find ~f:(fun hpred_fpost ->
+      Exp.equal (Sil.hpred_get_lhs hpred) (Sil.hpred_get_lhs hpred_fpost)
+    ) fun_post.sigma in 
+    match found_in_fun_pre with 
+    | None -> hpred
+    | Some hpred_fpost -> 
+    hpred_fpost 
+  ) given_pre.sigma in 
+
+  (* Remove atoms from pre that are in fun_pre and add parts from fun_post *)
+  let new_pre_pi = 
+    List.filter_map ~f:(fun atom ->
+      if List.mem fun_pre.pi atom ~equal:Sil.equal_atom then None 
+      else Some atom
+    ) given_pre.pi @ 
+    fun_post.pi in
+
+  Prop.set ~sigma:new_pre_sigma ~pi:new_pre_pi given_pre 
+ 
+(* Incomplete: need to choose params properly *)
+let func_call_rule tenv proc_desc gamma (given_pre : Prop.exposed Prop.t) 
+  (given_post : Prop.exposed Prop.t) procspec (): rule_result = 
   let proc_name = Procdesc.get_proc_name proc_desc in 
+
+  let fun_pre, fun_post = make_spec procspec tenv proc_name in
+  let fun_params = procspec.Parsetree.proc.params in 
+  let ret_val = if String.equal procspec.Parsetree.proc.ret_typ "void" then None 
+                else Some (Ident.create_fresh Ident.knormal, Typ.mk (Typ.Tint(Typ.IInt))) in
+  let fun_name = procspec.Parsetree.proc.id in 
+
+  let n_params = List.length fun_params in 
+  let possible_params = List.concat (List.map ~f:permutations (extract n_params gamma)) in
+
+  (* TODO: Instantiate Pvars in function preposts with each of? the possible_params
+     At the moment it just takes the first possible param combination *)
+  let params' = List.hd_exn possible_params in 
+  let params = List.map ~f:(fun (pvar, typ) -> (Exp.Lvar pvar, typ)) params' in 
+
   match Prover.check_implication_for_footprint proc_name tenv 
     (Prop.normalize tenv given_pre) fun_pre with
-  | ImplFail _ -> RFail
-  | ImplOK (checks, post_sub1, post_sub2, frame, missing_pi, missing_sigma,
-            frame_fld, missing_fld, frame_typ, missing_typ) ->  *)
+  | ImplFail _ -> RFail (* Current pre |/- function pre *)
+  | ImplOK (_, _, sub2, _, _, _, _, _, _, _) -> 
+
+    let new_pre = func_change_pre sub2 given_pre fun_pre fun_post in 
+
+    (* placeholder *)
+    RSuccess ((gamma, new_pre, given_post), 
+              mk_fun_call_node ret_val fun_name params)
 
  
