@@ -8,12 +8,14 @@
 TESTS_DIR = ../../..
 
 ANALYZER = linters
-CLANG_OPTIONS = -x objective-c++ -std=c++11 -fobjc-arc -c
-INFER_OPTIONS = --no-filtering --debug-exceptions --project-root $(TESTS_DIR) --no-keep-going \
---enable-issue-type GLOBAL_VARIABLE_INITIALIZED_WITH_FUNCTION_OR_METHOD_CALL
-INFERPRINT_OPTIONS = --issues-tests 
+CLANG_OPTIONS = -x objective-c++ -std=c++11 -fobjc-arc -c 
+INFER_OPTIONS = --cxx --linters-def-file linters_example.al --project-root $(TESTS_DIR) --no-keep-going
+INFERPRINT_OPTIONS = --issues-tests
 
 SOURCES = \
-  $(wildcard */*.mm) \
+  $(wildcard *.m) \
+  $(wildcard */*.m) \
+	$(wildcard *.mm) \
+	$(wildcard *.c) \
 
 include $(TESTS_DIR)/clang.make
