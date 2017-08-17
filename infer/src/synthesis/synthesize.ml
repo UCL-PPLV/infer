@@ -77,7 +77,7 @@ let rec synthesize_with_rules depth gamma tenv proc_desc
          {x |-> a' * y |-> b'} |- {x |-> b' * y |-> a'} is a valid 
          entailment, since Infer automatically instatiates substitutions 
          for primed variables separately in pre/posts, for example 
-         a' = n$1, b' = n$2 in pre, b' = n$1, a' = n$1 in post.
+         a' = n$1, b' = n$2 in pre, b' = n$1, a' = n$2 in post.
          This leads to synthesis immediately succeeding with empty
          function body. *)
       (* End of synthesis, return empty instruction list *)

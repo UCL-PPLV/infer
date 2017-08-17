@@ -61,10 +61,14 @@ class SynthTestsSimple(unittest.TestCase):
     trim_d_result = re.sub(r'\s', '', desired_result)
     self.assertEqual(trim_result, trim_d_result)
 
-
 if __name__ == "__main__":
+  if sys.version_info[0] < 3:
+    sys.exit("Python 3 or a more recent version is required.")
+
   if len(sys.argv) != 2: 
     sys.exit("Usage: python synTests.py path/to/infer")
   
-  SynthTestsSimple.path_to_infer = sys.argv.pop()
+  SynthTestsSimple.path_to_infer = sys.argv[1]
+
+  sys.argv.pop() # Otherwise unittest thinks sys.argv is passed to it
   unittest.main()
