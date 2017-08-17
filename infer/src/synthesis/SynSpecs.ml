@@ -35,12 +35,20 @@ let make_spec (procspec: Parsetree.procspec) tenv proc_name  =
       in 
       match value with 
       | Parsetree.Int i -> 
-        let int_const_exp = Exp.Const (Const.Cint(IntLit.of_int i)) in
-        Some [(Prop.mk_ptsto tenv 
-          (Exp.Lvar pvar) 
-          (Sil.Eexp (int_const_exp, Sil.inst_none)) 
-          (Exp.Sizeof {typ=(Typ.mk (Typ.Tint (Typ.IInt))); nbytes=None;
-              dynamic_length=None; subtype=Subtype.exact}))]
+        let int_const_exp = Exp.Const (Const.Cint(IntLit.of_int i)) in 
+        Some [
+          (Prop.mk_ptsto tenv 
+            (Exp.Lvar pvar) 
+            (Sil.Eexp (Exp.Var pvar_ptsto, Sil.inst_none)) 
+            (Exp.Sizeof {typ=(Typ.mk (Typ.Tptr (Typ.mk (Typ.Tint(Typ.IInt)), 
+              Typ.Pk_pointer))); 
+                nbytes=None; dynamic_length=None; subtype=Subtype.exact}));
+          (Prop.mk_ptsto tenv 
+            (Exp.Var pvar_ptsto) 
+            (Sil.Eexp (int_const_exp, Sil.inst_none)) 
+            (Exp.Sizeof {typ=(Typ.mk (Typ.Tint (Typ.IInt))); nbytes=None;
+                dynamic_length=None; subtype=Subtype.exact}))
+        ]
       | Parsetree.Location name ->
         let found_known = List.find ~f:(fun (l, _) -> 
           String.equal l name) !known_vals in 

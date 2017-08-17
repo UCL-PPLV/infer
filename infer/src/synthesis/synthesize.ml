@@ -73,7 +73,7 @@ let rec synthesize_with_rules depth gamma tenv proc_desc
   end;
   let proc_name = Procdesc.get_proc_name proc_desc in
   match Prover.check_implication_for_footprint proc_name tenv (Prop.normalize tenv pre) post with
-  | ImplOK (_, _, sub2, _, _, _, _, _, _, _)
+  | ImplOK (_, _, sub2, _, [], _, _, _, _, _)
     when (Sil.equal_exp_subst sub2 Sil.exp_sub_empty) ->
       (* Synthesis success *)
       (* Why do we need empty substitutions? *)

@@ -128,26 +128,12 @@ let mk_c_write (lhs : Pvar.t) (new_v : Exp.t)
         Pvar.equal lhs pv
       ) (create_pvar_env_list given_pre.sigma))) in 
       List.map ~f:(fun hpred -> 
-        match new_v with 
-        | Exp.Var _ -> 
-          begin
-          if not (Exp.equal pvar_ptsto (Sil.hpred_get_lhs hpred)) then hpred 
-          else 
-            match hpred with 
-            | Sil.Hpointsto (lh_alias, Eexp (_, inst), typ) -> 
-              Sil.Hpointsto (lh_alias, Eexp (new_v, inst), typ)
-            | _ -> hpred 
-          end
-        | Exp.Const _ -> 
-          begin
-          if not (Exp.equal (Exp.Lvar lhs) (Sil.hpred_get_lhs hpred)) then hpred 
-          else
-            match hpred with 
-            | Sil.Hpointsto (lh, Eexp (_, inst), typ) -> 
-              Sil.Hpointsto (lh, Eexp (new_v, inst), typ)
-            | _ -> hpred
-          end
-        | _ -> hpred
+        if not (Exp.equal pvar_ptsto (Sil.hpred_get_lhs hpred)) then hpred 
+        else 
+          match hpred with 
+          | Sil.Hpointsto (lh_alias, Eexp (_, inst), typ) -> 
+            Sil.Hpointsto (lh_alias, Eexp (new_v, inst), typ)
+          | _ -> hpred 
       ) given_pre.sigma
     in 
     Prop.set ~sigma:new_sigma given_pre 

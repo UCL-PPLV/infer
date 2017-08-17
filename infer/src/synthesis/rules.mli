@@ -15,7 +15,8 @@ type rule_result =
   | RSuccess of syn_spec * c_instr_node
   | RFail
 
-val mk_c_instr_node : ?fst_succ:c_instr_node option -> ?snd_succ:c_instr_node option -> c_instr_type -> c_instr_node
+val mk_c_instr_node : ?fst_succ:c_instr_node option -> ?snd_succ:c_instr_node option 
+                      -> c_instr_type -> c_instr_node
 
 val read_rule : Typ.Procname.t -> ident_type list -> 
   Prop.exposed Prop.t ->

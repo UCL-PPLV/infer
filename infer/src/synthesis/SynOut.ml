@@ -73,3 +73,4 @@ let pprint_output (start: Rules.c_instr_node) (procspec: Parsetree.procspec) =
   let statements_str = String.concat ~sep:"\n  " (List.rev (print_instrs (Some start) [])) in
   let c_prog_str = c_prog_of_sig procspec.proc ~body:statements_str in
   c_prog_str
+
