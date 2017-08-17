@@ -36,15 +36,11 @@ let print_init_spec pvars tenv my_new_pre my_new_post =
 let analyse_and_proceed proc_name tenv my_new_pre my_new_post : bool =
   match Prover.check_implication_for_footprint proc_name tenv 
           (Prop.normalize tenv my_new_pre) my_new_post with
-  | ImplOK (checks, post_sub1, post_sub2, frame, missing_pi, missing_sigma,
+  | ImplOK (checks, post_sub1, post_sub2, frame, [], [],
             frame_fld, missing_fld, frame_typ, missing_typ) 
     when (Sil.equal_exp_subst post_sub2 Sil.exp_sub_empty) ->
       F.printf "\nPost: Frame: \n";
       Prop.pp_sigma Pp.text F.std_formatter frame;
-      F.printf "\nPost: missing pi: \n";
-      Prop.pp_pi Pp.text F.std_formatter missing_pi;
-      F.printf "\nPost: missing sigma: \n";
-      Prop.pp_sigma Pp.text F.std_formatter missing_sigma;
       F.printf "\n";
       false
   | ImplFail _ | ImplOK _ -> true
